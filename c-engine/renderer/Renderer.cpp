@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "Engine.h"
 #include "Utils.h"
 #include "logger/Logger.h"
 #include "Window.h"
@@ -29,7 +30,7 @@ utils::Entity cameraEntity;
 static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
 
-// ENGINE_SCREENSHOT=path — capture one frame to a JPEG (for automated runs)
+// ENGINE_SCREENSHOT=path — capture one frame to a JPEG and quit (for automated runs)
 static const char* screenshotPath = nullptr;
 static u8* screenshotBuffer = nullptr;
 static bool screenshotDone = false;
@@ -45,6 +46,9 @@ static void screenshotSave(void) {
 
     free(screenshotBuffer);
     screenshotBuffer = nullptr;
+
+    // automated run is done → shut the app down
+    engineStop();
 }
 
 bool rendererInit(const char* title, u32 width, u32 height) {
