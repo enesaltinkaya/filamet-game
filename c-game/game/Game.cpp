@@ -1,8 +1,12 @@
 #include "Game.h"
 #include "Utils.h"
+#include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "gltf/Gltf.h"
 #include "renderer/Renderer.h"
+#include "terrain/Terrain.h"
 
+#include <filament/Box.h>
+#include <gltfio/FilamentAsset.h>
 #include <filament/Engine.h>
 #include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
@@ -19,6 +23,8 @@ static filament::IndirectLight* ambientLight = nullptr;
 GameSystem::GameSystem() : System("Game") {}
 
 void GameSystem::added() {
+    // after the camera is framed below
+    engine::systemAdd(100, &engine::flyingCameraSystem);
     // prove the pak system works: read a file shipped in pak_0
     utils::String version = utils::dataManagerRead("version.txt");
     utils::stringTrim(&version);
@@ -26,8 +32,26 @@ void GameSystem::added() {
     utils::stringDestroy(&version);
 
     engine::gltf::gltfInit();
-    engine::gltf::gltfLoad("models/DamagedHelmet.glb");
-    engine::gltf::gltfFrameCamera();
+    engine::terrain::terrainInit("models/terrain/oghuzlands.json");
+    engine::gltf::gltfLoad("models/terrain/oghuzlands.glb");
+    engine::terrain::terrainApplyToAsset();
+
+    // frame the terrain: slightly off-center, looking across it
+    filament::Aabb box = engine::gltf::asset->getBoundingBox();
+    float3 center = (box.min + box.max) * 0.5f;
+
+    const char* cameraMode = getenv("ENGINE_CAMERA");
+    if (cameraMode && utils::strequals(cameraMode, "topdown")) {
+        // top-down map view (validation shots): up = -z keeps the frame stable
+        engine::renderer::camera->lookAt(center + float3{0.0f, 9000.0f, 0.01f}, center,
+                {0.0f, 0.0f, -1.0f});
+    } else if (cameraMode && utils::strequals(cameraMode, "close")) {
+        engine::renderer::camera->lookAt(center + float3{180.0f, 60.0f, 180.0f},
+                center + float3{0.0f, 0.0f, 60.0f}, {0.0f, 1.0f, 0.0f});
+    } else {
+        engine::renderer::camera->lookAt(center + float3{500.0f, 320.0f, 500.0f}, center,
+                {0.0f, 1.0f, 0.0f});
+    }
 
     sun = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::SUN)
@@ -48,7 +72,11 @@ void GameSystem::added() {
 }
 
 void GameSystem::removed() {
+    engine::systemRemove(&engine::flyingCameraSystem);
+    // destroy the glTF asset first: its renderables still reference the
+    // terrain material instance
     engine::gltf::gltfDestroy();
+    engine::terrain::terrainDestroy();
 
     engine::renderer::scene->remove(sun);
     engine::renderer::filamentEngine->destroy(sun);

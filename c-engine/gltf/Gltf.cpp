@@ -134,6 +134,29 @@ void gltfFrameCamera(void) {
     renderer::camera->lookAt(center + direction * distance, center, {0.0f, 1.0f, 0.0f});
 }
 
+size_t gltfEntitiesNamed(const char* prefix, utils::Entity* out, size_t cap) {
+    if (!asset || !names) {
+        return 0;
+    }
+
+    size_t found = 0;
+    const utils::Entity* entities = asset->getEntities();
+    for (size_t i = 0; i < asset->getEntityCount(); i++) {
+        utils::Entity e = entities[i];
+        if (!names->hasComponent(e)) {
+            continue;
+        }
+        const char* name = names->getName(names->getInstance(e));
+        if (name && utils::strStartsWith(name, prefix)) {
+            if (found < cap) {
+                out[found] = e;
+            }
+            found++;
+        }
+    }
+    return found;
+}
+
 void gltfDestroy(void) {
     if (asset) {
         renderer::scene->removeEntities(asset->getEntities(), asset->getEntityCount());

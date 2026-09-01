@@ -23,6 +23,7 @@ target_include_directories(c-engine PUBLIC
     ${filament_git}/libs/utils/include
     ${filament_git}/third_party/libsdl2/include
     ${filament_git}/third_party/robin-map/include  # tsl (NameComponentManager)
+    ${filament_git}/third_party/basisu/transcoder   # basisu_transcoder.h (ktx2 → BC7)
 
     # generated gltfio resources (materials/uberarchive.h)
     ${filament_root}/libs/gltfio
@@ -78,3 +79,18 @@ set(FILAMENT_LIBS
 )
 
 target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
+
+# ── terrain splat material (compiled with matc into the game data dir) ─────
+set(MATC ${filament_root}/tools/matc/matc)
+set(TERRAIN_MAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/terrain/terrain.mat)
+set(TERRAIN_MAT_OUT ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/terrain.filamat)
+add_custom_command(
+    OUTPUT ${TERRAIN_MAT_OUT}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
+    COMMAND ${MATC} -a vulkan -l 2 -o ${TERRAIN_MAT_OUT} ${TERRAIN_MAT_SRC}
+    DEPENDS ${TERRAIN_MAT_SRC}
+    COMMENT "matc terrain.mat"
+    VERBATIM
+)
+add_custom_target(terrain_mat DEPENDS ${TERRAIN_MAT_OUT})
+add_dependencies(c-engine terrain_mat)

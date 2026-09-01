@@ -25,7 +25,7 @@ void engineStart(void) {
     }
 
     utils::info("engine: starting");
-    renderer::rendererInit("filament-game", 1280, 720);
+    renderer::rendererInit("filament-game", 0, 0);
     ecsInit(gameSystem);
 
     while (engineRunning) {

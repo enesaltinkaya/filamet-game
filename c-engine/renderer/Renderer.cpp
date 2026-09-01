@@ -80,7 +80,7 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     viewportWidth = window.width;
     viewportHeight = window.height;
     view->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
-    camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 100.0, filament::Camera::Fov::VERTICAL);
+    camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 20000.0, filament::Camera::Fov::VERTICAL);
 
     utils::info("renderer: initialized");
 
@@ -97,7 +97,7 @@ void rendererDraw(void) {
         viewportWidth = window.width;
         viewportHeight = window.height;
         view->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
-        camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 100.0, filament::Camera::Fov::VERTICAL);
+        camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 20000.0, filament::Camera::Fov::VERTICAL);
     }
 
     if (renderer->beginFrame(swapChain)) {
