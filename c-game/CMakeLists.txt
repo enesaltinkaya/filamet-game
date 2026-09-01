@@ -1,0 +1,36 @@
+file(GLOB_RECURSE cSrc CONFIGURE_DEPENDS "*.cpp")
+add_executable(c-game ${cSrc})
+
+target_include_directories(c-game PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/game)
+
+# Linking c-engine transitively gives us:
+#   - c-engine include dir (c-engine/) + filament/entt includes and PCH
+#   - c-utils include dir and thirdparty dirs (via c-utils PUBLIC)
+#   - filament static libs (via c-engine PUBLIC)
+target_link_libraries(c-game PRIVATE
+    -Wl,--start-group
+    c-engine
+    c-utils
+
+    # c-utils deps
+    ${thirdparty}/libzip/git/${platform_dir}/lib/libzip.a
+    ${thirdparty}/bzip2/git/${platform_dir}/libbz2_static.a
+    ${thirdparty}/zlib/git/${platform_dir}/libzs.a
+    ${thirdparty}/zstd/git/${platform_dir}/lib/libzstd.a
+    ${thirdparty}/sqlite/git/${platform_dir}/libsqlite3.a
+    ${thirdparty}/jansson/git/${platform_dir}/lib/libjansson.a
+    ${thirdparty}/thpool/${platform_dir}/libthpool.a
+
+    # filament + entt windowing (paths from c-engine/CMakeLists.txt)
+    ${FILAMENT_LIBS}
+    -Wl,--end-group
+)
+
+if (WIN32)
+    target_link_libraries(c-game PRIVATE bcrypt hid)
+    target_link_libraries(c-game PRIVATE imm32 setupapi version winmm) # sdl2
+    target_link_libraries(c-game PRIVATE stdc++)
+    target_link_libraries(c-game PRIVATE -static pthread)
+elseif (LINUX)
+    target_link_libraries(c-game PRIVATE stdc++ pthread dl m)
+endif ()
