@@ -2,6 +2,8 @@
 #include "Utils.h"
 #include "logger/Logger.h"
 #include "Window.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/git/stb_image_write.h"
 #include <backend/PixelBufferDescriptor.h>
 #include <cstdio>
 #include <cstdlib>
@@ -27,57 +29,22 @@ utils::Entity cameraEntity;
 static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
 
-// ENGINE_SCREENSHOT=path — capture one frame to a BMP (for automated runs)
+// ENGINE_SCREENSHOT=path — capture one frame to a JPEG (for automated runs)
 static const char* screenshotPath = nullptr;
 static u8* screenshotBuffer = nullptr;
 static bool screenshotDone = false;
 static u32 screenshotFrame = 0;
 
 static void screenshotSave(void) {
-    FILE* file = fopen(screenshotPath, "wb");
-    if (!file) {
-        utils::warn("renderer: cannot open %s for screenshot", screenshotPath);
-        return;
+    if (!stbi_write_jpg(screenshotPath, (int)window.width, (int)window.height,
+                        4, screenshotBuffer, 90)) {
+        utils::warn("renderer: cannot save screenshot to %s", screenshotPath);
+    } else {
+        utils::info("renderer: screenshot saved to %s", screenshotPath);
     }
-
-    u32 width = window.width;
-    u32 height = window.height;
-    u32 stride = (width * 3 + 3) & ~3u;
-    u32 dataSize = stride * height;
-
-    u8 header[54] = {};
-    header[0] = 'B';
-    header[1] = 'M';
-    u32 fileSize = 54 + dataSize;
-    memcpy(&header[2], &fileSize, 4);
-    u32 dataOffset = 54;
-    memcpy(&header[10], &dataOffset, 4);
-    u32 dibSize = 40;
-    memcpy(&header[14], &dibSize, 4);
-    memcpy(&header[18], &width, 4);
-    memcpy(&header[22], &height, 4);
-    u16 planes = 1;
-    memcpy(&header[26], &planes, 2);
-    u16 bpp = 24;
-    memcpy(&header[28], &bpp, 2);
-    memcpy(&header[34], &dataSize, 4);
-
-    fwrite(header, 1, sizeof(header), file);
-    for (u32 y = 0; y < height; y++) {
-        for (u32 x = 0; x < width; x++) {
-            u8* px = &screenshotBuffer[((y * width) + x) * 4];
-            u8 bgr[3] = {px[2], px[1], px[0]};
-            fwrite(bgr, 1, 3, file);
-        }
-        for (u32 pad = width * 3; pad < stride; pad++) {
-            fputc(0, file);
-        }
-    }
-    fclose(file);
 
     free(screenshotBuffer);
     screenshotBuffer = nullptr;
-    utils::info("renderer: screenshot saved to %s", screenshotPath);
 }
 
 bool rendererInit(const char* title, u32 width, u32 height) {

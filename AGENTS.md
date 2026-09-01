@@ -1,0 +1,11 @@
+### File locations
+
+Everything related to project is either here /media/extra/Projects/c/filament-game or in thirdparty directory /home/enes/Projects/c/cpp-thirdparty.
+
+Dont use "find / ..."
+
+### Screenshot feature
+
+`ENGINE_SCREENSHOT=path` (env var) makes the engine capture one frame and save it as a JPEG (quality 90, via stb_image_write in c-engine/renderer/Renderer.cpp) a few frames after startup, for automated runs. One-shot — only the first capture is written.
+
+Example: `ENGINE_SCREENSHOT=/tmp/shot.jpg ./build/c-game/c-game` — save screenshots to `/tmp/` to keep the project folder uncluttered.
