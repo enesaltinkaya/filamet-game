@@ -4,9 +4,14 @@ Terrain asset pipeline: .blend → chunked GLB + splat/style KTX2 + manifest.
 
 Pipeline (standalone mode):
     blender → terrain-chunker (10x10) → gltfpack
-    painted splat UDIM tiles → UASTC KTX2 (transcoded to BC7 at runtime)
-    style detail textures → merged 2K albedo/normal KTX2 (UASTC)
+    painted splat UDIM tiles → UASTC KTX2 → baked to BC7 KTX2 (ktx2bc7)
+    style detail textures → merged 2K albedo/normal KTX2 (UASTC → BC7)
     manifest.json tying layers/chunks/styles together
+
+BC7 baking (scripts/ktx2bc7.c, driven by this script) transcodes the toktx
+UASTC output to raw BC7 blocks offline via libktx — the same basisu engine
+the game's loader uses — so terrainInit just uploads bytes (no runtime
+transcode). The game still accepts unbaked UASTC files as a fallback.
 
 Blender mode (run by this script via `blender --python`): exports the GLB and
 collects splatInfo extras (which node-group channel maps to which style
@@ -36,6 +41,7 @@ TERRAIN_CHUNKER = Path("/home/enes/Projects/c/game-001-cpp/tools/terrain-chunker
 GLTFPACK       = Path("/home/enes/Projects/c/cpp-thirdparty/meshoptimizer/git/build-linux/gltfpack")
 TOKTX          = Path("/home/enes/Sdks/ktx-4.4.2/bin/toktx")
 TOKTX_LIB_PATH = "/home/enes/Sdks/ktx-4.4.2/lib"
+KTX_ROOT       = TOKTX.parent.parent          # SDK include/ + lib/ for ktx2bc7
 TEXTURE_ROOT   = Path("/home/enes/Projects/assets/textures")
 
 CHUNK_GRID     = 10        # chunk grid == UDIM grid (1 chunk : 1 tile per group)
@@ -49,6 +55,8 @@ PAK_DIR        = REPO_ROOT / "c-game" / "data" / "pak_1"
 OUT_MODEL_DIR  = PAK_DIR / "models" / "terrain"
 OUT_TEX_DIR    = PAK_DIR / "textures" / "terrain" / "oghuzlands"
 TMP_DIR        = THIS_SCRIPT.parent / ".tmp"
+BAKER_SRC      = THIS_SCRIPT.parent / "ktx2bc7.c"
+BAKER          = TMP_DIR / "ktx2bc7"
 
 # glTF uv.Y vs Blender image V: resolved once by probeUvFlip() — if the
 # exporter leaves V unchanged, tile PNGs are flipped vertically at build time
@@ -159,6 +167,32 @@ def run(*args, **kwargs):
         print(f"Command failed: {' '.join(str(a) for a in args)}", file=sys.stderr)
         sys.exit(1)
     return result
+
+
+def ensureBaker():
+    """Compile ktx2bc7 (UASTC → BC7 baker) if missing or stale."""
+    if BAKER.exists() and BAKER.stat().st_mtime >= BAKER_SRC.stat().st_mtime:
+        return
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    run("gcc", "-O2", BAKER_SRC,
+        f"-I{KTX_ROOT / 'include'}", f"-L{KTX_ROOT / 'lib'}", "-lktx",
+        f"-Wl,-rpath,{KTX_ROOT / 'lib'}", "-o", BAKER)
+    print("ktx2bc7: built")
+
+
+def bakeBc7(path: Path):
+    """Transcode a UASTC KTX2 in place to raw BC7 blocks. No-op if the file
+    is already baked (vkFormat BC7_UNORM_BLOCK=145 / BC7_SRGB_BLOCK=146)."""
+    with open(path, "rb") as f:
+        f.seek(12)
+        vkFormat = int.from_bytes(f.read(4), "little")
+    if vkFormat in (145, 146):
+        return
+
+    ensureBaker()
+    baked = path.with_suffix(".ktx2.bc7")
+    run(BAKER, path, baked)
+    os.replace(baked, path)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -353,6 +387,9 @@ def packStyle(sourcePath: Path, outDir: Path):
     run(TOKTX, *base, "--assign_oetf", "linear", "--assign_primaries", "none",
         outDir / "normal.ktx2", normalPng, env=toktxEnv)
 
+    bakeBc7(outDir / "albedo.ktx2")
+    bakeBc7(outDir / "normal.ktx2")
+
     albedoPng.unlink()
     normalPng.unlink()
 
@@ -415,6 +452,7 @@ def convertSplatTiles(splatInfo: dict):
                     "--encode", "uastc", "--zcmp", "19",
                     "--assign_oetf", "linear", "--assign_primaries", "none",
                     dst, png, env=toktxEnv)
+            bakeBc7(dst)
 
             tiles.append({
                 "udim": udim,
