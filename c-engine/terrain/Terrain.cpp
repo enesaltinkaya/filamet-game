@@ -30,6 +30,8 @@ static MaterialInstance* materialInstance = nullptr;
 static Texture* splatTiles = nullptr;
 static Texture* styleAlbedo = nullptr;
 static Texture* styleNormal = nullptr;
+static Texture* defaultAlbedo = nullptr;
+static Texture* defaultNormal = nullptr;
 
 static constexpr int kMaxGroups = 3;
 static constexpr int kMaxTiles = 100;
@@ -71,6 +73,12 @@ static uint32_t rd32(const uint8_t* p) {
 
 static uint64_t rd64(const uint8_t* p) {
     return (uint64_t)rd32(p) | (uint64_t)rd32(p + 4) << 32;
+}
+
+// jsonGetDouble returns 0 for a missing key; fall back to the engine default
+static double jsonGetDoubleOr(json_t* root, const char* key, double fallback) {
+    json_t* node = json_object_get(root, key);
+    return json_is_number(node) ? json_number_value(node) : fallback;
 }
 
 static void loadLayer(void* userData) {
@@ -370,7 +378,23 @@ bool terrainInit(const char* manifestPath) {
     splatTiles = loadKtx2Array(splatFiles, Texture::InternalFormat::RGBA_BPTC_UNORM);
     styleAlbedo = loadKtx2Array(albedoFiles, Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM);
     styleNormal = loadKtx2Array(normalFiles, Texture::InternalFormat::RGBA_BPTC_UNORM);
-    if (!splatTiles || !styleAlbedo || !styleNormal) {
+
+    // engine default fallback styles (pak_0_engine): unpainted terrain gets
+    // sand/grass/snow/cliff procedurally — the layer order here fixes the
+    // indices the shader's fallback blend samples
+    const std::vector<std::string> defaultAlbedoFiles = {
+        "images/default_terrain_textures/sand_default/albedo.ktx2",
+        "images/default_terrain_textures/grass_default/albedo.ktx2",
+        "images/default_terrain_textures/snow_default/albedo.ktx2",
+        "images/default_terrain_textures/cliff_side_default/albedo.ktx2",
+    };
+    std::vector<std::string> defaultNormalFiles;
+    for (const std::string& albedo : defaultAlbedoFiles) {
+        defaultNormalFiles.push_back(albedo.substr(0, albedo.rfind('/')) + "/normal.ktx2");
+    }
+    defaultAlbedo = loadKtx2Array(defaultAlbedoFiles, Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM);
+    defaultNormal = loadKtx2Array(defaultNormalFiles, Texture::InternalFormat::RGBA_BPTC_UNORM);
+    if (!splatTiles || !styleAlbedo || !styleNormal || !defaultAlbedo || !defaultNormal) {
         terrainDestroy();
         json_decref(root);
         return false;
@@ -385,17 +409,24 @@ bool terrainInit(const char* manifestPath) {
     materialInstance->setParameter("splatTiles", splatTiles, splatSampler);
     materialInstance->setParameter("styleAlbedo", styleAlbedo, styleSampler);
     materialInstance->setParameter("styleNormal", styleNormal, styleSampler);
+    materialInstance->setParameter("defaultAlbedo", defaultAlbedo, styleSampler);
+    materialInstance->setParameter("defaultNormal", defaultNormal, styleSampler);
     materialInstance->setParameter("tileLayer0", tileLayer[0], (size_t)kMaxTiles);
     materialInstance->setParameter("tileLayer1", tileLayer[1], (size_t)kMaxTiles);
     materialInstance->setParameter("tileLayer2", tileLayer[2], (size_t)kMaxTiles);
     materialInstance->setParameter("styleRemap", styleRemap, (size_t)12);
-    materialInstance->setParameter("defaultStyle", (int)jsonGetInt(root, "defaultStyle"));
+    materialInstance->setParameter("sandHeight", (float)jsonGetDoubleOr(root, "sandHeight", 20.0));
+    materialInstance->setParameter("sandFade", (float)jsonGetDoubleOr(root, "sandFade", 15.0));
+    materialInstance->setParameter("snowHeight", (float)jsonGetDoubleOr(root, "snowHeight", 800.0));
+    materialInstance->setParameter("snowFade", (float)jsonGetDoubleOr(root, "snowFade", 120.0));
+    materialInstance->setParameter("cliffSlope", (float)jsonGetDoubleOr(root, "cliffSlope", 0.45));
+    materialInstance->setParameter("cliffFade", (float)jsonGetDoubleOr(root, "cliffFade", 0.12));
     materialInstance->setParameter("styleTiling", (float)jsonGetDouble(root, "styleTiling"));
 
     json_decref(root);
 
-    utils::info("terrain: ready — %zu splat layers, %zu styles (%.0f ms)", splatFiles.size(),
-            styleCount, (utils::nanos() - startNanos) / 1000000.0);
+    utils::info("terrain: ready — %zu splat layers, %zu styles + 4 defaults (%.0f ms)",
+            splatFiles.size(), styleCount, (utils::nanos() - startNanos) / 1000000.0);
     return true;
 }
 
@@ -448,6 +479,14 @@ void terrainDestroy(void) {
     if (styleNormal) {
         engine->destroy(styleNormal);
         styleNormal = nullptr;
+    }
+    if (defaultAlbedo) {
+        engine->destroy(defaultAlbedo);
+        defaultAlbedo = nullptr;
+    }
+    if (defaultNormal) {
+        engine->destroy(defaultNormal);
+        defaultNormal = nullptr;
     }
 }
 }  // namespace engine::terrain

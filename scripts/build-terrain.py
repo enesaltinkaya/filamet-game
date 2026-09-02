@@ -522,7 +522,15 @@ def buildModel():
     run(TERRAIN_CHUNKER, glb, chunked, CHUNK_GRID, CHUNK_GRID)
 
     print("──────── gltfpack")
-    run(GLTFPACK, "-vpf", "-vn", "16", "-vt", "16", "-cc", "-kn", "-kv", "-ke",
+    # -vtf keeps texcoords float: integer texcoord quantization (-vt) clamps
+    # to [0,1], destroying the 0..10 UDIM range, and drops the payload
+    # entirely when no material references TEXCOORD_0 (chunker writes none).
+    # No -cc: meshopt stream compression would apply its EXPONENTIAL filter
+    # to the float POSITION/TEXCOORD streams, and filament bundles meshopt
+    # 0.18 while this gltfpack is built from 1.0 — the exp format changed
+    # between the two, so filament's decoder silently mangles the values
+    # (UV V collapsed from [-9,1] to [-1,1]).
+    run(GLTFPACK, "-vpf", "-vn", "16", "-vtf", "-kn", "-kv", "-ke",
         "-i", chunked, "-o", packed)
     glb.unlink()
     chunked.unlink()
@@ -569,7 +577,12 @@ def pipelineMain():
         "chunkGrid": CHUNK_GRID,
         "udimGrid": UDIM_GRID,
         "styleTiling": 0.5,
-        "defaultStyle": 0,
+        "sandHeight": 30,
+        "sandFade": 20,
+        "snowHeight": 900,
+        "snowFade": 150,
+        "cliffSlope": 0.32,
+        "cliffFade": 0.12,
         "groups": [
             {
                 "name": g["name"],

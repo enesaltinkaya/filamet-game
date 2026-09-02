@@ -14,6 +14,14 @@ material {
             name : styleNormal
         },
         {
+            type : sampler2dArray,
+            name : defaultAlbedo
+        },
+        {
+            type : sampler2dArray,
+            name : defaultNormal
+        },
+        {
             type : int[100],
             name : tileLayer0
         },
@@ -30,8 +38,28 @@ material {
             name : styleRemap
         },
         {
-            type : int,
-            name : defaultStyle
+            type : float,
+            name : sandHeight
+        },
+        {
+            type : float,
+            name : sandFade
+        },
+        {
+            type : float,
+            name : snowHeight
+        },
+        {
+            type : float,
+            name : snowFade
+        },
+        {
+            type : float,
+            name : cliffSlope
+        },
+        {
+            type : float,
+            name : cliffFade
         },
         {
             type : float,
@@ -51,6 +79,9 @@ fragment {
     // UDIM tile lookup: uv0 spans 0..10 over a 10x10 tile grid. Empty tiles
     // never became array layers, so each group carries its own tile->layer
     // table (-1 = absent, weights treated as zero).
+    // Splat images are painted in Blender, which initializes them opaque
+    // black (0,0,0,255): the alpha style is painted by ERASING alpha, so the
+    // alpha weight is 1.0 - a (r/g/b are direct weights).
 
     void accumulate(vec4 weights, int group, vec2 suv,
             inout float wsum, inout vec3 albedo, inout float rough,
@@ -75,17 +106,40 @@ fragment {
         }
     }
 
+    // engine default fallback styles (pak_0_engine, layer order fixed by
+    // Terrain.cpp): sand 0, grass 1, snow 2, cliff 3
+    void accumulateDefault(float w, float layer, vec2 suv,
+            inout float wsum, inout vec3 albedo, inout float rough,
+            inout float ao, inout vec2 nAcc) {
+        if (w <= 0.002) {
+            return;
+        }
+        vec3 uv = vec3(suv, layer);
+        vec4 a = texture(materialParams_defaultAlbedo, uv);
+        vec4 n = texture(materialParams_defaultNormal, uv);
+        albedo += w * a.rgb;
+        rough  += w * a.a;
+        ao     += w * n.z;
+        nAcc   += w * (n.xy * 2.0 - 1.0);
+        wsum   += w;
+    }
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        // Blender's glTF exporter writes V = 1 - V_blender globally. With UDIM
-        // UVs spanning [0,10], exported V runs [-9,1]: floor(v) = -tileRow and
-        // the in-tile V is already GPU (top-row-first) correct.
-        // (scripts/build-terrain.py probes this and refuses other modes.)
-        vec2 uv10 = clamp(getUV0(), vec2(0.0, -9.0), vec2(9.999999, 0.999999));
+        // Blender's glTF exporter writes V = 1 - V_blender (probed by
+        // scripts/build-terrain.py), so the file's V runs [-9,1] — but
+        // filament's vertex stage flips V again for the glTF convention
+        // (uv0_frag = vec2(u, 1 - v)), handing the fragment shader Blender's
+        // original orientation: U,V ∈ [0,10).
+        vec2 uv10 = clamp(getUV0(), vec2(0.0), vec2(9.999999));
         vec2 tileCoord = floor(uv10);
         vec2 tileUV = uv10 - tileCoord;
-        int tile = int(tileCoord.x) + 10 * int(-tileCoord.y);
+        // tileUV.y is Blender-oriented (0 = tile bottom, from the double V
+        // flip above), while the KTX2 tile's V=0 is the image's top row —
+        // flip to sample tiles right side up
+        tileUV.y = 1.0 - tileUV.y;
+        int tile = int(tileCoord.x) + 10 * int(tileCoord.y);
 
         vec4 w0 = vec4(0.0);
         vec4 w1 = vec4(0.0);
@@ -94,17 +148,24 @@ fragment {
         int layer0 = materialParams.tileLayer0[tile];
         if (layer0 >= 0) {
             w0 = texture(materialParams_splatTiles, vec3(tileUV, float(layer0)));
+            w0.a = 1.0 - w0.a;
         }
         int layer1 = materialParams.tileLayer1[tile];
         if (layer1 >= 0) {
             w1 = texture(materialParams_splatTiles, vec3(tileUV, float(layer1)));
+            w1.a = 1.0 - w1.a;
         }
         int layer2 = materialParams.tileLayer2[tile];
         if (layer2 >= 0) {
             w2 = texture(materialParams_splatTiles, vec3(tileUV, float(layer2)));
+            w2.a = 1.0 - w2.a;
         }
 
-        vec2 suv = getWorldPosition().xz * materialParams.styleTiling;
+        // filament renders camera-relative (getWorldPosition() = world -
+        // camera), so detail tiling and the height-based default blend must
+        // use the absolute user world position
+        vec3 worldPos = getUserWorldPosition();
+        vec2 suv = worldPos.xz * materialParams.styleTiling;
 
         float wsum = 0.0;
         vec3 albedo = vec3(0.0);
@@ -117,14 +178,25 @@ fragment {
         accumulate(w2, 2, suv, wsum, albedo, rough, ao, nAcc);
 
         if (wsum < 0.004) {
-            // unpainted area: fall back to the default style at full weight
-            vec4 a = texture(materialParams_styleAlbedo, vec3(suv, float(materialParams.defaultStyle)));
-            vec4 n = texture(materialParams_styleNormal, vec3(suv, float(materialParams.defaultStyle)));
-            albedo = a.rgb;
-            rough = a.a;
-            ao = n.z;
-            nAcc = n.xy * 2.0 - 1.0;
-            wsum = 1.0;
+            // unpainted area: procedural defaults from the engine pak — sand
+            // near sea level, snow high up, cliff on steep slopes, grass
+            // everywhere else (cliff overrides the others)
+            float slope = 1.0 - normalize(getWorldGeometricNormalVector()).y;
+            float y = worldPos.y;
+
+            float snowW  = smoothstep(materialParams.snowHeight - materialParams.snowFade,
+                    materialParams.snowHeight, y);
+            float sandW  = 1.0 - smoothstep(materialParams.sandHeight,
+                    materialParams.sandHeight + materialParams.sandFade, y);
+            float grassW = (1.0 - snowW) * (1.0 - sandW);
+            float cliffW = smoothstep(materialParams.cliffSlope,
+                    materialParams.cliffSlope + materialParams.cliffFade, slope);
+
+            float open = 1.0 - cliffW;
+            accumulateDefault(sandW * open, 0.0, suv, wsum, albedo, rough, ao, nAcc);
+            accumulateDefault(grassW * open, 1.0, suv, wsum, albedo, rough, ao, nAcc);
+            accumulateDefault(snowW * open, 2.0, suv, wsum, albedo, rough, ao, nAcc);
+            accumulateDefault(cliffW, 3.0, suv, wsum, albedo, rough, ao, nAcc);
         }
 
         float inv = 1.0 / max(wsum, 1e-4);

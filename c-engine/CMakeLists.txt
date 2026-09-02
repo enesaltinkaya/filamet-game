@@ -80,6 +80,10 @@ set(FILAMENT_LIBS
 
 target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 
+# ── renderdoc in-app api (debug captures, LD_PRELOAD librenderdoc.so) ───────
+target_include_directories(c-engine PUBLIC /home/enes/Apps/renderdoc/renderdoc/api/app)
+target_link_libraries(c-engine PUBLIC ${CMAKE_DL_LIBS})
+
 # ── terrain splat material (compiled with matc into the game data dir) ─────
 set(MATC ${filament_root}/tools/matc/matc)
 set(TERRAIN_MAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/terrain/terrain.mat)

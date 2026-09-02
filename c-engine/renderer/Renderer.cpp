@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "Engine.h"
+#include "RenderDoc.h"
 #include "Utils.h"
 #include "logger/Logger.h"
 #include "Window.h"
@@ -35,6 +36,10 @@ static const char* screenshotPath = nullptr;
 static u8* screenshotBuffer = nullptr;
 static bool screenshotDone = false;
 static u32 screenshotFrame = 0;
+
+// ENGINE_RENDERDOC_CAPTURE=1 + LD_PRELOAD librenderdoc.so — capture one frame
+// for inspection (ENGINE_RENDERDOC_CAPTURE_FRAMES, default 30)
+static u32 renderDocCaptureFrame = 0;
 
 static void screenshotSave(void) {
     if (!stbi_write_jpg(screenshotPath, (int)window.width, (int)window.height,
@@ -92,10 +97,23 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     if (screenshotEnv && screenshotEnv[0] != '\0') {
         screenshotPath = screenshotEnv;
     }
+
+#ifndef NDEBUG
+    if (getenv("ENGINE_RENDERDOC_CAPTURE")) {
+        const char* framesEnv = getenv("ENGINE_RENDERDOC_CAPTURE_FRAMES");
+        renderDocCaptureFrame = framesEnv && framesEnv[0] != '\0' ? (u32)atoi(framesEnv) : 30;
+    }
+#endif
     return true;
 }
 
 void rendererDraw(void) {
+#ifndef NDEBUG
+    if (renderDocCaptureFrame && --renderDocCaptureFrame == 0) {
+        renderDocCaptureNow();
+    }
+#endif
+
     // window resized → update viewport + projection
     if (window.width != viewportWidth || window.height != viewportHeight) {
         viewportWidth = window.width;

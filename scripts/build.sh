@@ -20,3 +20,7 @@ mkdir -p "$SCRIPTS_TMP"
 
 cd "$ROOT/c-game"
 . "$SCRIPTS/data.sh"
+
+# engine pak (pak_0_engine: fonts, images, sound) ships next to the game paks
+cd "$ROOT/c-engine"
+. "$SCRIPTS/data.sh"
