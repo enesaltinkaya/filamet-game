@@ -21,7 +21,8 @@ target_include_directories(c-engine PUBLIC
     ${filament_git}/libs/gltfio/include
     ${filament_git}/libs/math/include
     ${filament_git}/libs/utils/include
-    ${filament_git}/third_party/libsdl2/include
+    # SDL3 (our own prebuilt, cpp-thirdparty/sdl) — headers live under include/SDL3
+    ${thirdparty}/sdl/git/include/SDL3
     ${filament_git}/third_party/robin-map/include  # tsl (NameComponentManager)
     ${filament_git}/third_party/basisu/transcoder   # basisu_transcoder.h (ktx2 → BC7)
 
@@ -29,9 +30,9 @@ target_include_directories(c-engine PUBLIC
     ${filament_root}/libs/gltfio
 )
 
-# the bundled SDL headers select their platform config (X11 video etc.) from
-# these defines; must match how libsdl2.a was built (filament's build defines
-# them project-wide, we only need them where SDL is included)
+# filament's public headers (BlueVK.h, WebGPUPlatform.h) gate their Linux
+# X11/XCB/Xlib paths on these defines; must match how the prebuilt filament
+# libs were compiled
 target_compile_definitions(c-engine PUBLIC
     FILAMENT_SUPPORTS_X11=1
     FILAMENT_SUPPORTS_XCB=1
@@ -73,8 +74,8 @@ set(FILAMENT_LIBS
     ${filament_root}/third_party/libz/tnt/libz.a
     ${filament_root}/third_party/zstd/tnt/libzstd.a
 
-    # windowing (the SDL2 copy filament itself is built against)
-    ${filament_root}/third_party/libsdl2/tnt/libsdl2.a
+    # windowing (SDL3 dlopens X11/ALSA at runtime — no extra system libs needed)
+    ${thirdparty}/sdl/git/${platform_dir}/libSDL3.a
     PARENT_SCOPE
 )
 

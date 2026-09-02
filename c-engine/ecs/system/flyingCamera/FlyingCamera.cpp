@@ -55,7 +55,7 @@ static void setFlying(char on) {
         windowSetRelativeMouseMode(1);
         // drop any delta accumulated before the mode switch, and the poll
         // of this frame which already ran
-        int dx, dy;
+        float dx, dy;
         SDL_GetRelativeMouseState(&dx, &dy);
         input.mouseDx = 0.0f;
         input.mouseDy = 0.0f;

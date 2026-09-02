@@ -3,7 +3,6 @@
 #include "Utils.h"
 #include "logger/Logger.h"
 #include <SDL.h>
-#include <SDL_syswm.h>
 
 namespace engine {
 Window window = {};
@@ -12,7 +11,7 @@ Input input = {};
 static char relativeMouse = 0;
 
 bool windowCreate(const char* title, u32 width, u32 height) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {  // SDL3: events are implicit in SDL_INIT_VIDEO
         utils::error("window: SDL_Init failed (%s)", SDL_GetError());
         return false;
     }
@@ -21,15 +20,16 @@ bool windowCreate(const char* title, u32 width, u32 height) {
     if (width == 0 || height == 0) {
         width  = 1280;
         height = 720;
-        SDL_DisplayMode mode = {};
-        if (SDL_GetDesktopDisplayMode(0, &mode) == 0 && mode.w > 0 && mode.h > 0) {
-            width  = (u32)(mode.w * 0.75f);
+        SDL_Rect bounds = {};
+        if (SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &bounds) && bounds.w > 0 && bounds.h > 0) {
+            width  = (u32)(bounds.w * 0.75f);
             height = (u32)(width / 1.77f);
         }
     }
 
-    window.handle = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, (int)width, (int)height,
-                                     SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    // SDL3: no position params (window is centered), shown by default, no ALLOW_HIGHDPI (always on)
+    window.handle = SDL_CreateWindow(title, (int)width, (int)height,
+                                     SDL_WINDOW_RESIZABLE);
     if (!window.handle) {
         utils::error("window: SDL_CreateWindow failed (%s)", SDL_GetError());
         SDL_Quit();
@@ -56,22 +56,21 @@ void* windowNativeHandle(void) {
         return nullptr;
     }
 
-    SDL_SysWMinfo wmi;
-    SDL_VERSION(&wmi.version);
-    if (!SDL_GetWindowWMInfo(window.handle, &wmi)) {
-        utils::error("window: SDL_GetWindowWMInfo failed (%s)", SDL_GetError());
-        return nullptr;
-    }
-
-    if (wmi.subsystem == SDL_SYSWM_X11) {
-        return (void*)(uintptr_t)wmi.info.x11.window;
-    }
+    // SDL3: the old SDL_SysWMinfo is gone — the window's platform handle is
+    // exposed as a window property instead
+    SDL_PropertiesID props = SDL_GetWindowProperties(window.handle);
 #ifdef _WIN32
-    if (wmi.subsystem == SDL_SYSWM_WINDOWS) {
-        return wmi.info.win.window;
+    void* hwnd = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    if (hwnd) {
+        return hwnd;
+    }
+#else
+    Sint64 xwindow = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+    if (xwindow != 0) {
+        return (void*)(uintptr_t)xwindow;
     }
 #endif
-    utils::error("window: unsupported window subsystem");
+    utils::error("window: no native window handle available");
     return nullptr;
 }
 
@@ -86,31 +85,27 @@ void windowPollEvents(void) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
-            case SDL_QUIT:
+            case SDL_EVENT_QUIT:
                 engineStop();
                 break;
-            case SDL_KEYDOWN:
-                input.pressed = (i32)event.key.keysym.scancode;
+            case SDL_EVENT_KEY_DOWN:
+                input.pressed = (i32)event.key.scancode;
                 // Alt+E exits the game
-                if (event.key.keysym.scancode == SDL_SCANCODE_E &&
-                    (SDL_GetModState() & KMOD_ALT)) {
+                if (event.key.scancode == SDL_SCANCODE_E &&
+                    (SDL_GetModState() & SDL_KMOD_ALT)) {
                     engineStop();
                 }
                 break;
-            case SDL_KEYUP:
-                input.released = (i32)event.key.keysym.scancode;
+            case SDL_EVENT_KEY_UP:
+                input.released = (i32)event.key.scancode;
                 break;
-            case SDL_MOUSEWHEEL:
-                input.scrollY += (float)event.wheel.y;
+            case SDL_EVENT_MOUSE_WHEEL:
+                input.scrollY += event.wheel.y;  // float in SDL3
                 break;
-            case SDL_WINDOWEVENT:
-                switch (event.window.event) {
-                    case SDL_WINDOWEVENT_RESIZED:
-                    case SDL_WINDOWEVENT_SIZE_CHANGED:
-                        window.width = (u32)event.window.data1;
-                        window.height = (u32)event.window.data2;
-                        break;
-                }
+            case SDL_EVENT_WINDOW_RESIZED:
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                window.width = (u32)event.window.data1;
+                window.height = (u32)event.window.data2;
                 break;
         }
     }
@@ -118,14 +113,15 @@ void windowPollEvents(void) {
     // relative mouse delta: read it as a whole here (not from motion events —
     // the warp-to-center on entering relative mode emits one bogus event)
     if (relativeMouse) {
-        int rx, ry;
+        float rx, ry;
         SDL_GetRelativeMouseState(&rx, &ry);
-        input.mouseDx += (float)rx;
-        input.mouseDy += (float)ry;
+        input.mouseDx += rx;
+        input.mouseDy += ry;
     }
 
     // held key state (covers keys held before the window gained focus, etc.)
-    const Uint8* keys = SDL_GetKeyboardState(nullptr);
+    int numkeys = 0;
+    const bool* keys = SDL_GetKeyboardState(&numkeys);  // bool in SDL3
     memcpy(input.keys, keys, sizeof input.keys);
     input.ctrl  = keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL];
     input.shift = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
@@ -136,16 +132,20 @@ void windowSetRelativeMouseMode(char on) {
     if (relativeMouse == on) return;
     relativeMouse = on;
     if (window.handle) {
-        SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE);
-        SDL_ShowCursor(on ? SDL_DISABLE : SDL_ENABLE);
+        SDL_SetWindowRelativeMouseMode(window.handle, on);
+        if (on) {
+            SDL_HideCursor();
+        } else {
+            SDL_ShowCursor();
+        }
     }
 }
 
 void windowHideCursor(void) {
-    if (window.handle) SDL_ShowCursor(SDL_DISABLE);
+    if (window.handle) SDL_HideCursor();
 }
 
 void windowShowCursor(void) {
-    if (window.handle) SDL_ShowCursor(SDL_ENABLE);
+    if (window.handle) SDL_ShowCursor();
 }
 }  // namespace engine

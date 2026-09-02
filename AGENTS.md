@@ -4,8 +4,15 @@ Everything related to project is either here /media/extra/Projects/c/filament-ga
 
 Dont use "find / ..."
 
+use `./scripts/run.sh` (or its variants) to launch the game.
+`scripts/run.sh` runs clear under set -e and it fails when TERM env variable is unset.
+
 ### Screenshot feature
 
 `ENGINE_SCREENSHOT=path` (env var) makes the engine capture one frame and save it as a JPEG (quality 90, via stb_image_write in c-engine/renderer/Renderer.cpp) a few frames after startup, for automated runs. One-shot — only the first capture is written.
 
 Example: `ENGINE_SCREENSHOT=/tmp/shot.jpg ./build/c-game/c-game` — save screenshots to `/tmp/` to keep the project folder uncluttered.
+
+### Old engine
+
+We will porting /home/enes/Projects/c/game-001-cpp to this new engine.

@@ -28,7 +28,7 @@ target_link_libraries(c-game PRIVATE
 
 if (WIN32)
     target_link_libraries(c-game PRIVATE bcrypt hid)
-    target_link_libraries(c-game PRIVATE imm32 setupapi version winmm) # sdl2
+    target_link_libraries(c-game PRIVATE imm32 setupapi version winmm) # sdl3
     target_link_libraries(c-game PRIVATE stdc++)
     target_link_libraries(c-game PRIVATE -static pthread)
 elseif (LINUX)
