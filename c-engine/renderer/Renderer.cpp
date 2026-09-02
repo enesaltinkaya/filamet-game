@@ -61,9 +61,9 @@ bool rendererInit(const char* title, u32 width, u32 height) {
         return false;
     }
 
-    filamentEngine = filament::Engine::create();
+    filamentEngine = filament::Engine::create(filament::Engine::Backend::VULKAN);
     if (!filamentEngine) {
-        utils::error("renderer: filament::Engine::create failed");
+        utils::error("renderer: filament::Engine::create failed (Vulkan)");
         windowDestroy();
         return false;
     }
