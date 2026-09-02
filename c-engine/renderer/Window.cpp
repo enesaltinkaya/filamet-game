@@ -11,7 +11,8 @@ Input input = {};
 static char relativeMouse = 0;
 
 bool windowCreate(const char* title, u32 width, u32 height) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {  // SDL3: events are implicit in SDL_INIT_VIDEO
+    // SDL3: SDL_Init returns bool (true = success), the SDL2 '!= 0' check is inverted
+    if (!SDL_Init(SDL_INIT_VIDEO)) {  // SDL3: events are implicit in SDL_INIT_VIDEO
         utils::error("window: SDL_Init failed (%s)", SDL_GetError());
         return false;
     }
