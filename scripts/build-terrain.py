@@ -530,6 +530,12 @@ def buildModel():
     # 0.18 while this gltfpack is built from 1.0 — the exp format changed
     # between the two, so filament's decoder silently mangles the values
     # (UV V collapsed from [-9,1] to [-1,1]).
+    # -kn/-kv/-ke are KEEP flags, not compression (proven by A/B run):
+    # -kn keeps the 100 named terrain_chunk nodes (gltfEntitiesNamed depends
+    # on them; without it gltfpack collapses everything into ONE unnamed
+    # node), -kv keeps TANGENT/TEXCOORD_0 (the 0..10 UDIM UVs drive the
+    # terrain splat), -ke keeps node extras (rigidBodyShape). The glb is
+    # plain JSON already — no meshopt string/buffer compression is used.
     run(GLTFPACK, "-vpf", "-vn", "16", "-vtf", "-kn", "-kv", "-ke",
         "-i", chunked, "-o", packed)
     glb.unlink()

@@ -12,20 +12,21 @@ Deliverables: game runs on Diligent for linux (native) and win32 (mingw cross),
 
 Filament touchpoints (everything else is engine-agnostic):
 
-| File | Filament use |
-|---|---|
-| `c-engine/renderer/Renderer.cpp/.h` | Engine/swapchain/renderer/scene/views/camera lifecycle, resize, screenshot readPixels, clear color |
-| `c-engine/pch.h` | filament public headers |
-| `c-engine/gltf/Gltf.cpp/.h` | gltfio: AssetLoader, ubershader MaterialProvider, ResourceLoader (stb/ktx2 texture providers), Animator, bounding box, entity names, ubershader archive |
-| `c-engine/terrain/Terrain.cpp/.h` + `terrain.mat` | filamat splat shader (matc-compiled to `.filamat`), MaterialInstance, 2D-array BC7 texture upload (KTX2/UASTC → BC7 via basisu) |
-| `c-engine/gui/GuiManager.cpp` | filagui `ImGuiHelper` (ImGui rendered into a 2nd Filament view) |
-| `c-engine/ecs/.../FlyingCamera.cpp` | filament::math vec math, camera lookAt |
-| `scripts/build-terrain.py` | gltfpack `-kn -kv -ke` (meshopt string compression → gltfio decoder), manifest `material` field points at `terrain.filamat` |
-| `c-game/game/Game.cpp` | LightManager sun, IndirectLight ambient, Aabb bounds |
-| `c-game/game/mainMenu/MainMenuGui.cpp`, `credits/CreditsGui.cpp` | filament Texture upload (PNG), texture refs |
-| `c-engine/CMakeLists.txt`, `c-game/CMakeLists.txt` | ~25 filament static libs, matc build step, FILAMENT_* defines |
+| File                                                             | Filament use                                                                                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `c-engine/renderer/Renderer.cpp/.h`                              | Engine/swapchain/renderer/scene/views/camera lifecycle, resize, screenshot readPixels, clear color                                                      |
+| `c-engine/pch.h`                                                 | filament public headers                                                                                                                                 |
+| `c-engine/gltf/Gltf.cpp/.h`                                      | gltfio: AssetLoader, ubershader MaterialProvider, ResourceLoader (stb/ktx2 texture providers), Animator, bounding box, entity names, ubershader archive |
+| `c-engine/terrain/Terrain.cpp/.h` + `terrain.mat`                | filamat splat shader (matc-compiled to `.filamat`), MaterialInstance, 2D-array BC7 texture upload (KTX2/UASTC → BC7 via basisu)                         |
+| `c-engine/gui/GuiManager.cpp`                                    | filagui `ImGuiHelper` (ImGui rendered into a 2nd Filament view)                                                                                         |
+| `c-engine/ecs/.../FlyingCamera.cpp`                              | filament::math vec math, camera lookAt                                                                                                                  |
+| `scripts/build-terrain.py`                                       | gltfpack `-kn -kv -ke` (meshopt string compression → gltfio decoder), manifest `material` field points at `terrain.filamat`                             |
+| `c-game/game/Game.cpp`                                           | LightManager sun, IndirectLight ambient, Aabb bounds                                                                                                    |
+| `c-game/game/mainMenu/MainMenuGui.cpp`, `credits/CreditsGui.cpp` | filament Texture upload (PNG), texture refs                                                                                                             |
+| `c-engine/CMakeLists.txt`, `c-game/CMakeLists.txt`               | ~25 filament static libs, matc build step, FILAMENT\_\* defines                                                                                         |
 
 Diligent side is already prepared in `/home/enes/Projects/c/cpp-thirdparty/diligent`:
+
 - `build.sh` (linux + mingw-win cross, Vulkan-only, static-only overlay, mingw-lib shims).
 - Prebuilt static libs in `git/build-linux` and `git/build-win`: DiligentCore,
   GraphicsEngine(Vk), glslang, SPIRV-Cross, SPIRV-Tools, volk, xxhash, DiligentTools
@@ -181,7 +182,7 @@ work, menu→world transition hides the UI pass, ESC back-to-menu still works.
 ## Phase 5 — Cutover & cleanup (half–1 day)
 
 - `c-engine/CMakeLists.txt` / `c-game/CMakeLists.txt`: remove all filament include
-  dirs, defines (FILAMENT_SUPPORTS_*, GLTFIO_DRACO_SUPPORTED), FILAMENT_LIBS,
+  dirs, defines (FILAMENT*SUPPORTS*\*, GLTFIO_DRACO_SUPPORTED), FILAMENT_LIBS,
   filagui, matc step (replaced in Phase 3); add Diligent include dirs + libs for
   both platforms (path layout differs: `build-linux` vs `build-win` + `mingw-lib`).
 - Win32 cross: link the mingw-built Diligent libs; verify no new system DLL
