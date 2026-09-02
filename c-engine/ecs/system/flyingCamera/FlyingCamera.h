@@ -21,4 +21,5 @@ public:
 };
 
 extern FlyingCameraSystem flyingCameraSystem;
+bool flyingCameraFlying(void);  // true while the mouse is captured (flying)
 }  // namespace engine

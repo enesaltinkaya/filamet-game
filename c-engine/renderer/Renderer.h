@@ -18,6 +18,7 @@ extern filament::SwapChain* swapChain;
 extern filament::Renderer* renderer;
 extern filament::Scene* scene;
 extern filament::View* view;
+extern filament::View* uiView;  // dedicated 2D overlay view the GUI (filagui) renders into
 extern filament::Camera* camera;
 extern utils::Entity cameraEntity;
 

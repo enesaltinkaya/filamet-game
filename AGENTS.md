@@ -15,4 +15,4 @@ Example: `ENGINE_SCREENSHOT=/tmp/shot.jpg ./build/c-game/c-game` — save screen
 
 ### Old engine
 
-We will porting /home/enes/Projects/c/game-001-cpp to this new engine.
+We will porting our old engine /home/enes/Projects/c/game-001-cpp to this new engine.

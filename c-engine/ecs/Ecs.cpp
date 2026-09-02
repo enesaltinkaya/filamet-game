@@ -67,4 +67,55 @@ void ecsPostUpdate(void) {
         system->cpuElapsedLastFrame = system->cpuElapsed;
     }
 }
+
+// ── Deferred (next-frame) system changes ─────────────────────────────────────
+// A system may request an add/remove from within its own callback (e.g. a GUI
+// button that transitions state). Applying that inline would mutate ecs.systems
+// while the phase loop is iterating it, so we queue it and apply at the top of
+// the next frame, outside any loop.
+static std::vector<System*> deferredAdds;
+static std::vector<int>     deferredAddOrder;
+static std::vector<System*> deferredRemoves;
+
+static bool deferredAddPending(System* s) {
+    for (System* x : deferredAdds) if (x == s) return true;
+    return false;
+}
+
+void ecsSystemAddDeferred(int order, System* system) {
+    // cancel a pending remove for the same system, then queue the add
+    for (size_t i = 0; i < deferredRemoves.size(); i++) {
+        if (deferredRemoves[i] == system) {
+            deferredRemoves.erase(deferredRemoves.begin() + i);
+            break;
+        }
+    }
+    if (!deferredAddPending(system)) {
+        deferredAdds.push_back(system);
+        deferredAddOrder.push_back(order);
+    }
+}
+
+void ecsSystemRemoveDeferred(System* system) {
+    // cancel a pending add for the same system, then queue the remove
+    for (size_t i = 0; i < deferredAdds.size(); i++) {
+        if (deferredAdds[i] == system) {
+            deferredAdds.erase(deferredAdds.begin() + i);
+            deferredAddOrder.erase(deferredAddOrder.begin() + i);
+            break;
+        }
+    }
+    for (System* x : deferredRemoves) if (x == system) return;
+    deferredRemoves.push_back(system);
+}
+
+void ecsApplyDeferred(void) {
+    for (System* s : deferredRemoves) systemRemove(s);
+    deferredRemoves.clear();
+    for (size_t i = 0; i < deferredAdds.size(); i++) {
+        systemAdd(deferredAddOrder[i], deferredAdds[i]);
+    }
+    deferredAdds.clear();
+    deferredAddOrder.clear();
+}
 }  // namespace engine

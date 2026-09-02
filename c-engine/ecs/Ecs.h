@@ -38,4 +38,11 @@ void ecsPostUpdate(void);
 
 void systemAdd(int order, System* system);  // insert by priority, calls system->added()
 void systemRemove(System* system);          // calls system->removed(), erases
+
+// Deferred (next-frame) system changes: queue mutations to apply outside the
+// per-frame iteration loops, so a system can request an add/remove from within
+// its own update/draw callback without corrupting the in-flight loop.
+void ecsSystemAddDeferred(int order, System* system);
+void ecsSystemRemoveDeferred(System* system);
+void ecsApplyDeferred(void);                // call once per frame, before ecsPreUpdate
 }  // namespace engine

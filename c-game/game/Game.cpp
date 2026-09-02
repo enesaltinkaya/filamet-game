@@ -1,9 +1,16 @@
 #include "Game.h"
 #include "Utils.h"
+#include "Engine.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
+#include "gui/GuiManager.h"
 #include "gltf/Gltf.h"
 #include "renderer/Renderer.h"
+#include "renderer/Window.h"
 #include "terrain/Terrain.h"
+#include "gameState/GameState.h"
+#include "mainMenu/MainMenuGui.h"
+
+#include <SDL.h>
 
 #include <filament/Box.h>
 #include <gltfio/FilamentAsset.h>
@@ -19,17 +26,27 @@ namespace game {
 
     static utils::Entity sun;
     static filament::IndirectLight* ambientLight = nullptr;
+    static bool worldLoaded = false;
 
     GameSystem::GameSystem() : System("Game") {}
 
     void GameSystem::added() {
-        // after the camera is framed below
-        engine::systemAdd(100, &engine::flyingCameraSystem);
+        // World (terrain etc.) is loaded on ENTER WORLD, not here — the menu
+        // boots fast over the clear background.
         // prove the pak system works: read a file shipped in pak_0
         utils::String version = utils::dataManagerRead("version.txt");
         utils::stringTrim(&version);
         utils::info("game: added — pak version: %s", version.data);
         utils::stringDestroy(&version);
+
+        // GUI: bring up the main menu (ImGui via filagui)
+        gameStateSet(STATE_MAIN_MENU);
+        engine::gui::guiInit();
+        engine::gui::guiAdd(&mainMenuGui);
+    }
+
+    void GameSystem::loadWorld() {
+        if (worldLoaded) return;
 
         engine::gltf::gltfInit();
         engine::terrain::terrainInit("models/terrain/oghuzlands.json");
@@ -72,22 +89,39 @@ namespace game {
                                 .intensity(30000.0f)
                                 .build(*engine::renderer::filamentEngine);
         engine::renderer::scene->setIndirectLight(ambientLight);
+
+        worldLoaded = true;
+        utils::info("game: world loaded");
+    }
+
+    void GameSystem::preUpdate() {
+        // In the world and not flying: ESC returns to the main menu
+        if (gameStateCurrent() == STATE_PLAYING && !engine::flyingCameraFlying() &&
+            engine::input.pressed == SDL_SCANCODE_ESCAPE) {
+            utils::info("game: back to main menu");
+            gameStateSet(STATE_MAIN_MENU);
+            engine::ecsSystemRemoveDeferred(&engine::flyingCameraSystem);
+            engine::gui::guiAdd(&mainMenuGui);
+        }
     }
 
     void GameSystem::removed() {
         engine::systemRemove(&engine::flyingCameraSystem);
-        // destroy the glTF asset first: its renderables still reference the
-        // terrain material instance
-        engine::gltf::gltfDestroy();
-        engine::terrain::terrainDestroy();
+        if (worldLoaded) {
+            // destroy the glTF asset first: its renderables still reference
+            // the terrain material instance
+            engine::gltf::gltfDestroy();
+            engine::terrain::terrainDestroy();
 
-        engine::renderer::scene->remove(sun);
-        engine::renderer::filamentEngine->destroy(sun);
-        utils::EntityManager::get().destroy(sun);
+            engine::renderer::scene->remove(sun);
+            engine::renderer::filamentEngine->destroy(sun);
+            utils::EntityManager::get().destroy(sun);
 
-        engine::renderer::scene->setIndirectLight(nullptr);
-        engine::renderer::filamentEngine->destroy(ambientLight);
-        ambientLight = nullptr;
+            engine::renderer::scene->setIndirectLight(nullptr);
+            engine::renderer::filamentEngine->destroy(ambientLight);
+            ambientLight = nullptr;
+            worldLoaded = false;
+        }
         utils::info("game: removed");
     }
 

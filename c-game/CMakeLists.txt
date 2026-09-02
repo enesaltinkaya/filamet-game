@@ -21,6 +21,11 @@ target_link_libraries(c-game PRIVATE
     ${thirdparty}/jansson/git/${platform_dir}/lib/libjansson.a
     ${thirdparty}/thpool/${platform_dir}/libthpool.a
 
+    # GUI (imgui rendered through filament via filagui; yoga for flexbox layout)
+    ${thirdparty}/imgui/git/${platform_dir}/libimgui.a
+    ${thirdparty}/filament/git/${platform_dir}/libs/filagui/libfilagui.a
+    ${thirdparty}/yoga/git/${platform_dir}/yoga/libyogacore.a
+
     # filament + entt windowing (paths from c-engine/CMakeLists.txt)
     ${FILAMENT_LIBS}
     -Wl,--end-group

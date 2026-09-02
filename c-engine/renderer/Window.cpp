@@ -82,6 +82,10 @@ void windowPollEvents(void) {
     input.mouseDx = 0.0f;
     input.mouseDy = 0.0f;
     input.scrollY = 0.0f;
+    input.mousePressed = -1;
+    input.mouseReleased = -1;
+    input.text[0] = 0;
+    int textLen = 0;
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -100,6 +104,32 @@ void windowPollEvents(void) {
             case SDL_EVENT_KEY_UP:
                 input.released = (i32)event.key.scancode;
                 break;
+            case SDL_EVENT_MOUSE_MOTION:
+                input.mouseX = event.motion.x;
+                input.mouseY = event.motion.y;
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            case SDL_EVENT_MOUSE_BUTTON_UP: {
+                int b = (event.button.button == SDL_BUTTON_LEFT) ? 0 :
+                        (event.button.button == SDL_BUTTON_RIGHT) ? 1 :
+                        (event.button.button == SDL_BUTTON_MIDDLE) ? 2 : -1;
+                if (b >= 0) {
+                    if (event.button.down) input.mousePressed = b;
+                    else input.mouseReleased = b;
+                    input.mouseX = event.button.x;
+                    input.mouseY = event.button.y;
+                }
+                break;
+            }
+            case SDL_EVENT_TEXT_INPUT: {
+                int n = (int)SDL_strlen(event.text.text);
+                if (textLen + n < (int)sizeof input.text - 1) {
+                    memcpy(input.text + textLen, event.text.text, n);
+                    textLen += n;
+                    input.text[textLen] = 0;
+                }
+                break;
+            }
             case SDL_EVENT_MOUSE_WHEEL:
                 input.scrollY += event.wheel.y;  // float in SDL3
                 break;
@@ -109,6 +139,18 @@ void windowPollEvents(void) {
                 window.height = (u32)event.window.data2;
                 break;
         }
+    }
+
+    // absolute cursor position + held buttons (covers state from before focus,
+    // and keeps it consistent even without a motion event this frame)
+    if (window.handle) {
+        float mx = 0.0f, my = 0.0f;
+        SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mx, &my);
+        input.mouseX = mx;
+        input.mouseY = my;
+        input.mouseLeft   = (buttons & SDL_BUTTON_LMASK) ? 1 : 0;
+        input.mouseRight  = (buttons & SDL_BUTTON_RMASK) ? 1 : 0;
+        input.mouseMiddle = (buttons & SDL_BUTTON_MMASK) ? 1 : 0;
     }
 
     // relative mouse delta: read it as a whole here (not from motion events —

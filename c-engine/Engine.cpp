@@ -33,6 +33,7 @@ void engineStart(void) {
 
         windowPollEvents();
 
+        ecsApplyDeferred();  // apply system add/remove queued last frame (e.g. GUI transitions)
         ecsPreUpdate();
         ecsUpdate();
         ecsPostUpdate();

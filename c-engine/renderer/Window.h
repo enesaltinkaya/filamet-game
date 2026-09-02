@@ -14,6 +14,12 @@ struct Input {
     float mouseDx = 0.0f;  // relative mouse delta accumulated this frame
     float mouseDy = 0.0f;
     float scrollY = 0.0f;
+
+    // absolute mouse + buttons + text (drives the GUI / ImGui)
+    float mouseX = 0.0f, mouseY = 0.0f;      // absolute cursor position (pixels)
+    char mouseLeft = 0, mouseRight = 0, mouseMiddle = 0;  // held button state
+    i32 mousePressed = -1, mouseReleased = -1;            // button idx (0/1/2) this frame
+    char text[256] = {};                                   // UTF-8 text input this frame
 };
 
 struct Window {

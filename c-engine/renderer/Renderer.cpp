@@ -4,6 +4,7 @@
 #include "Utils.h"
 #include "logger/Logger.h"
 #include "Window.h"
+#include "gui/GuiManager.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/git/stb_image_write.h"
 #include <backend/PixelBufferDescriptor.h>
@@ -25,6 +26,7 @@ filament::SwapChain* swapChain;
 filament::Renderer* renderer;
 filament::Scene* scene;
 filament::View* view;
+filament::View* uiView;
 filament::Camera* camera;
 utils::Entity cameraEntity;
 
@@ -73,6 +75,7 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     renderer = filamentEngine->createRenderer();
     scene = filamentEngine->createScene();
     view = filamentEngine->createView();
+    uiView = filamentEngine->createView();
 
     cameraEntity = utils::EntityManager::get().create();
     camera = filamentEngine->createCamera(cameraEntity);
@@ -89,6 +92,7 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     viewportWidth = window.width;
     viewportHeight = window.height;
     view->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
+    uiView->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
     camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 20000.0, filament::Camera::Fov::VERTICAL);
 
     utils::info("renderer: initialized");
@@ -119,11 +123,15 @@ void rendererDraw(void) {
         viewportWidth = window.width;
         viewportHeight = window.height;
         view->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
+        uiView->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
         camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 20000.0, filament::Camera::Fov::VERTICAL);
     }
 
     if (renderer->beginFrame(swapChain)) {
-        renderer->render(view);
+        renderer->render(view);          // 3D scene
+        if (gui::guiIsActive()) {
+            renderer->render(uiView);    // 2D GUI overlay (translucent, on top)
+        }
 
         // capture after a few frames so shaders/textures are warm; the callback
         // fires a few frames later, once the readback completes
@@ -148,6 +156,7 @@ void rendererDestroy(void) {
         enginePtr->destroyCameraComponent(cameraEntity);
         utils::EntityManager::get().destroy(cameraEntity);
         enginePtr->destroy(view);
+        enginePtr->destroy(uiView);
         enginePtr->destroy(scene);
         enginePtr->destroy(renderer);
         enginePtr->destroy(swapChain);

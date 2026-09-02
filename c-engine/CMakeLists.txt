@@ -9,6 +9,10 @@ target_include_directories(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # ── entt (header only) ──────────────────────────────────────────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/entt/git/single_include)
 
+# ── imgui + filagui (GUI, prebuilt — see c-game link line) ────────────────────
+target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git)
+target_include_directories(c-engine PUBLIC ${thirdparty}/filament/git/libs/filagui/include)
+
 # ── filament public headers ─────────────────────────────────────────────────
 set(filament_git ${thirdparty}/filament/git)
 set(filament_root ${filament_git}/${platform_dir})
