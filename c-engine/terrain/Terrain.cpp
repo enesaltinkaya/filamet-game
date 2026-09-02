@@ -1,5 +1,6 @@
 #include "Terrain.h"
 
+#include "TerrainInternal.h"
 #include "Utils.h"
 #include "datamanager/DataManager.h"
 #include "gltf/Gltf.h"
@@ -9,12 +10,6 @@
 #include "thread/Thread.h"
 
 #include <basisu_transcoder.h>
-#include <filament/Engine.h>
-#include <filament/Material.h>
-#include <filament/MaterialInstance.h>
-#include <filament/RenderableManager.h>
-#include <filament/Texture.h>
-#include <filament/TextureSampler.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -23,44 +18,20 @@
 #include <vector>
 
 namespace engine::terrain {
-using namespace filament;
 
-static Material* material = nullptr;
-static MaterialInstance* materialInstance = nullptr;
-static Texture* splatTiles = nullptr;
-static Texture* styleAlbedo = nullptr;
-static Texture* styleNormal = nullptr;
-static Texture* defaultAlbedo = nullptr;
-static Texture* defaultNormal = nullptr;
-
-static constexpr int kMaxGroups = 3;
-static constexpr int kMaxTiles = 100;
-
-static void bufferFree(void* buf, size_t, void*) {
-    free(buf);
-}
-
-// ── KTX2 layers of a single 2D array texture ────────────────────────────────
+// ── KTX2 → BC7 decode (backend-agnostic) ───────────────────────────────────
 // Each file contributes one layer; all files must share dimensions and level
 // count (tiles are 1024x1024, styles are 2048x2048 — uniform per array).
 // Two payload kinds, picked per file by vkFormat:
 //   baked BC7 (VK_FORMAT_BC7_*_BLOCK, produced offline by scripts/ktx2bc7.c)
-//     → level bytes are already BC7 blocks, copied and uploaded as-is
+//     → level bytes are already BC7 blocks, copied as-is
 //   UASTC (build-terrain.py toktx output) → transcoded to BC7 here
 // UASTC transcoding a layer takes tens of milliseconds of pure CPU (real BC7
 // encoding per 4x4 block), so layers run in parallel on the default thread
-// pool; filament uploads stay on the main thread (its API is not thread-safe
-// by contract here).
-struct LevelData {
-    uint8_t* blocks;  // malloc'd BC7 blocks, handed to filament via bufferFree
-    size_t byteCount;
-    uint32_t width;
-    uint32_t height;
-};
-
+// pool; GPU uploads stay on the main thread.
 struct LayerJob {
     const std::string* file;
-    std::vector<LevelData> levels;
+    std::vector<TerrainLevelBlocks> levels;
     uint32_t vkFormat = 0;
 };
 
@@ -73,12 +44,6 @@ static uint32_t rd32(const uint8_t* p) {
 
 static uint64_t rd64(const uint8_t* p) {
     return (uint64_t)rd32(p) | (uint64_t)rd32(p + 4) << 32;
-}
-
-// jsonGetDouble returns 0 for a missing key; fall back to the engine default
-static double jsonGetDoubleOr(json_t* root, const char* key, double fallback) {
-    json_t* node = json_object_get(root, key);
-    return json_is_number(node) ? json_number_value(node) : fallback;
 }
 
 static void loadLayer(void* userData) {
@@ -136,11 +101,9 @@ static void loadLayer(void* userData) {
             job->levels[level] = {blocks, byteCount, std::max(1u, width >> level),
                     std::max(1u, height >> level)};
         }
-        for (const LevelData& level : job->levels) {
+        for (const TerrainLevelBlocks& level : job->levels) {
             if (!level.blocks) {
-                for (const LevelData& l : job->levels) {
-                    free(l.blocks);
-                }
+                for (const TerrainLevelBlocks& l : job->levels) free(l.blocks);
                 job->levels.clear();
                 job->vkFormat = 0;
                 break;
@@ -183,11 +146,9 @@ static void loadLayer(void* userData) {
     }
 
     // partial failure: release what transcoded, report the job as failed
-    for (const LevelData& level : job->levels) {
+    for (const TerrainLevelBlocks& level : job->levels) {
         if (!level.blocks) {
-            for (const LevelData& l : job->levels) {
-                free(l.blocks);
-            }
+            for (const TerrainLevelBlocks& l : job->levels) free(l.blocks);
             job->levels.clear();
             break;
         }
@@ -195,21 +156,18 @@ static void loadLayer(void* userData) {
     utils::stringDestroy(&data);
 }
 
-static Texture* loadKtx2Array(const std::vector<std::string>& files, Texture::InternalFormat format) {
-    Engine& engine = *renderer::filamentEngine;
+void freeDecodedArray(TerrainDecodedArray& array) {
+    for (std::vector<TerrainLevelBlocks>& layer : array.layers) {
+        for (const TerrainLevelBlocks& level : layer) free(level.blocks);
+    }
+    array.layers.clear();
+}
 
+// decodes all files (parallel); false if any layer failed or dimensions differ
+static bool decodeArray(const std::vector<std::string>& files, bool srgb, TerrainDecodedArray& out) {
     if (files.empty()) {
-        return nullptr;
+        return false;
     }
-    if (!Texture::isTextureFormatSupported(engine, format)) {
-        utils::warn("terrain: BC7 not supported by backend");
-        return nullptr;
-    }
-
-    const Texture::CompressedType compressedType =
-            format == Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM
-            ? Texture::CompressedType::SRGB_ALPHA_BPTC_UNORM
-            : Texture::CompressedType::RGBA_BPTC_UNORM;
 
     // basisu lookup tables must exist before any transcode; gltfInit() happens
     // to do this via its Ktx2Provider, but the init is idempotent anyway
@@ -231,56 +189,45 @@ static Texture* loadKtx2Array(const std::vector<std::string>& files, Texture::In
                 jobs[layer].levels[0].height != jobs[0].levels[0].height) {
             utils::warn("terrain: %s failed or differs from array", files[layer].c_str());
             for (LayerJob& job : jobs) {
-                for (const LevelData& level : job.levels) {
-                    free(level.blocks);
-                }
+                for (const TerrainLevelBlocks& level : job.levels) free(level.blocks);
             }
-            return nullptr;
+            return false;
         }
     }
 
-    // baked BC7 files must match the requested filament format (sRGB albedo
-    // vs linear splat/normal) — catches a baked-with-wrong-flag pipeline bug
+    // baked BC7 files must match the requested sRGB-ness (sRGB albedo vs
+    // linear splat/normal) — catches a baked-with-wrong-flag pipeline bug
     // (UASTC payloads carry no BC7 vkFormat, so they are exempt)
-    const bool wantSrgb = format == Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM;
     const bool baked = jobs[0].vkFormat == kVkFormatBC7Unorm || jobs[0].vkFormat == kVkFormatBC7Srgb;
-    if (baked && (jobs[0].vkFormat == kVkFormatBC7Srgb) != wantSrgb) {
+    if (baked && (jobs[0].vkFormat == kVkFormatBC7Srgb) != srgb) {
         utils::warn("terrain: baked vkFormat %u does not match %s request", jobs[0].vkFormat,
-                wantSrgb ? "sRGB" : "linear");
+                srgb ? "sRGB" : "linear");
         for (LayerJob& job : jobs) {
-            for (const LevelData& level : job.levels) {
-                free(level.blocks);
-            }
+            for (const TerrainLevelBlocks& level : job.levels) free(level.blocks);
         }
-        return nullptr;
+        return false;
     }
 
-    Texture* texture = Texture::Builder()
-                               .width(jobs[0].levels[0].width)
-                               .height(jobs[0].levels[0].height)
-                               .levels((uint32_t)jobs[0].levels.size())
-                               .depth((uint32_t)jobs.size())
-                               .sampler(Texture::Sampler::SAMPLER_2D_ARRAY)
-                               .format(format)
-                               .build(engine);
-
+    out.srgb = srgb;
+    out.layers.resize(jobs.size());
     for (size_t layer = 0; layer < jobs.size(); layer++) {
-        for (size_t level = 0; level < jobs[layer].levels.size(); level++) {
-            const LevelData& l = jobs[layer].levels[level];
-            Texture::PixelBufferDescriptor descriptor(l.blocks, l.byteCount, compressedType,
-                    l.byteCount, bufferFree);
-            texture->setImage(engine, (uint32_t)level, 0, 0, (uint32_t)layer, l.width, l.height, 1,
-                    std::move(descriptor));
-        }
+        out.layers[layer] = std::move(jobs[layer].levels);
+        jobs[layer].levels.clear();
     }
-
-    return texture;
+    return true;
 }
 
-// ── manifest → material + texture arrays ────────────────────────────────────
+// jsonGetDouble returns 0 for a missing key; fall back to the engine default
+static double jsonGetDoubleOr(json_t* root, const char* key, double fallback) {
+    json_t* node = json_object_get(root, key);
+    return json_is_number(node) ? json_number_value(node) : fallback;
+}
+
+// ── manifest → decoded arrays → backend ────────────────────────────────────
 bool terrainInit(const char* manifestPath) {
-    Engine& engine = *renderer::filamentEngine;
     const double startNanos = utils::nanos();
+
+    const bool diligent = renderer::rendererBackend() == renderer::Backend::Diligent;
 
     utils::String manifestData = utils::dataManagerRead(manifestPath);
     if (!manifestData.data) {
@@ -295,34 +242,23 @@ bool terrainInit(const char* manifestPath) {
         return false;
     }
 
-    // material
+    // backend material: filament loads .filamat from the pak, diligent compiles
+    // its embedded HLSL splat shader
     const char* materialPath = jsonGetString(root, "material");
-    utils::String materialData = utils::dataManagerRead(materialPath);
-    if (!materialData.data) {
-        utils::warn("terrain: cannot read material %s", materialPath);
-        json_decref(root);
-        return false;
-    }
-    material = Material::Builder()
-                       .package((const void*)materialData.data, materialData.size)
-                       .build(engine);
-    utils::stringDestroy(&materialData);
-    if (!material) {
-        utils::warn("terrain: material build failed");
+    if (!(diligent ? terrainStartDiligent() : terrainStartFilament(materialPath))) {
         json_decref(root);
         return false;
     }
 
     // splat tile tables: group -> tile index -> layer (-1 = empty)
-    int tileLayer[kMaxGroups][kMaxTiles];
-    for (int g = 0; g < kMaxGroups; g++) {
-        for (int t = 0; t < kMaxTiles; t++) {
-            tileLayer[g][t] = -1;
+    TerrainParams params;
+    for (int g = 0; g < TerrainParams::kMaxGroups; g++) {
+        for (int t = 0; t < TerrainParams::kMaxTiles; t++) {
+            params.tileLayer[g][t] = -1;
         }
     }
-    int styleRemap[12];
     for (int i = 0; i < 12; i++) {
-        styleRemap[i] = -1;
+        params.styleRemap[i] = -1;
     }
 
     const int udimGrid = jsonGetInt(root, "udimGrid");
@@ -330,8 +266,8 @@ bool terrainInit(const char* manifestPath) {
     json_t* groups = jsonGetArray(root, "groups");
     std::vector<std::string> splatFiles;
     size_t groupCount = json_array_size(groups);
-    if (groupCount > kMaxGroups) {
-        groupCount = kMaxGroups;
+    if (groupCount > (size_t)TerrainParams::kMaxGroups) {
+        groupCount = (size_t)TerrainParams::kMaxGroups;
     }
 
     for (size_t g = 0; g < groupCount; g++) {
@@ -348,7 +284,7 @@ bool terrainInit(const char* manifestPath) {
             if (u < 0 || v < 0 || u >= udimGrid || v >= udimGrid) {
                 continue;
             }
-            tileLayer[g][u + udimGrid * v] = layer;
+            params.tileLayer[g][u + udimGrid * v] = layer;
 
             const char* file = jsonGetString(tile, "file");
             if ((size_t)layer >= splatFiles.size()) {
@@ -359,7 +295,7 @@ bool terrainInit(const char* manifestPath) {
 
         json_t* channels = jsonGetArray(group, "channels");
         for (int c = 0; c < 4 && (size_t)c < json_array_size(channels); c++) {
-            styleRemap[g * 4 + c] = (int)json_integer_value(json_array_get(channels, c));
+            params.styleRemap[g * 4 + c] = (int)json_integer_value(json_array_get(channels, c));
         }
     }
 
@@ -374,11 +310,6 @@ bool terrainInit(const char* manifestPath) {
         normalFiles.push_back(jsonGetString(style, "normal"));
     }
 
-    // build the three arrays (splat weights linear, albedo sRGB, normals linear)
-    splatTiles = loadKtx2Array(splatFiles, Texture::InternalFormat::RGBA_BPTC_UNORM);
-    styleAlbedo = loadKtx2Array(albedoFiles, Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM);
-    styleNormal = loadKtx2Array(normalFiles, Texture::InternalFormat::RGBA_BPTC_UNORM);
-
     // engine default fallback styles (pak_0_engine): unpainted terrain gets
     // sand/grass/snow/cliff procedurally — the layer order here fixes the
     // indices the shader's fallback blend samples
@@ -392,101 +323,76 @@ bool terrainInit(const char* manifestPath) {
     for (const std::string& albedo : defaultAlbedoFiles) {
         defaultNormalFiles.push_back(albedo.substr(0, albedo.rfind('/')) + "/normal.ktx2");
     }
-    defaultAlbedo = loadKtx2Array(defaultAlbedoFiles, Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM);
-    defaultNormal = loadKtx2Array(defaultNormalFiles, Texture::InternalFormat::RGBA_BPTC_UNORM);
-    if (!splatTiles || !styleAlbedo || !styleNormal || !defaultAlbedo || !defaultNormal) {
+
+    params.sandHeight = (float)jsonGetDoubleOr(root, "sandHeight", params.sandHeight);
+    params.sandFade = (float)jsonGetDoubleOr(root, "sandFade", params.sandFade);
+    params.snowHeight = (float)jsonGetDoubleOr(root, "snowHeight", params.snowHeight);
+    params.snowFade = (float)jsonGetDoubleOr(root, "snowFade", params.snowFade);
+    params.cliffSlope = (float)jsonGetDoubleOr(root, "cliffSlope", params.cliffSlope);
+    params.cliffFade = (float)jsonGetDoubleOr(root, "cliffFade", params.cliffFade);
+    params.styleTiling = (float)jsonGetDouble(root, "styleTiling");
+
+    struct Pending {
+        TerrainArrayKind kind;
+        std::vector<std::string> files;
+        bool srgb;
+    };
+    const Pending pending[5] = {
+        {TerrainArrayKind::SplatTiles, splatFiles, false},
+        {TerrainArrayKind::StyleAlbedo, albedoFiles, true},
+        {TerrainArrayKind::StyleNormal, normalFiles, false},
+        {TerrainArrayKind::DefaultAlbedo, defaultAlbedoFiles, true},
+        {TerrainArrayKind::DefaultNormal, defaultNormalFiles, false},
+    };
+
+    bool ok = true;
+    size_t splatLayerCount = 0;
+    for (const Pending& p : pending) {
+        TerrainDecodedArray decoded;
+        if (!decodeArray(p.files, p.srgb, decoded)) {
+            ok = false;
+            break;
+        }
+        if (p.kind == TerrainArrayKind::SplatTiles) {
+            splatLayerCount = decoded.layers.size();
+        }
+        if (!(diligent ? terrainArrayDiligent(p.kind, decoded)
+                       : terrainArrayFilament(p.kind, decoded))) {
+            freeDecodedArray(decoded);  // backend did not take ownership
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok) {
+        ok = diligent ? terrainFinishDiligent(params) : terrainFinishFilament(params);
+    }
+
+    if (!ok) {
         terrainDestroy();
         json_decref(root);
         return false;
     }
 
-    materialInstance = material->createInstance();
-    // splat tiles: clamp at layer edges; styles: repeat for world-space tiling
-    TextureSampler splatSampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
-            TextureSampler::MagFilter::LINEAR, TextureSampler::WrapMode::CLAMP_TO_EDGE);
-    TextureSampler styleSampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
-            TextureSampler::MagFilter::LINEAR, TextureSampler::WrapMode::REPEAT);
-    materialInstance->setParameter("splatTiles", splatTiles, splatSampler);
-    materialInstance->setParameter("styleAlbedo", styleAlbedo, styleSampler);
-    materialInstance->setParameter("styleNormal", styleNormal, styleSampler);
-    materialInstance->setParameter("defaultAlbedo", defaultAlbedo, styleSampler);
-    materialInstance->setParameter("defaultNormal", defaultNormal, styleSampler);
-    materialInstance->setParameter("tileLayer0", tileLayer[0], (size_t)kMaxTiles);
-    materialInstance->setParameter("tileLayer1", tileLayer[1], (size_t)kMaxTiles);
-    materialInstance->setParameter("tileLayer2", tileLayer[2], (size_t)kMaxTiles);
-    materialInstance->setParameter("styleRemap", styleRemap, (size_t)12);
-    materialInstance->setParameter("sandHeight", (float)jsonGetDoubleOr(root, "sandHeight", 20.0));
-    materialInstance->setParameter("sandFade", (float)jsonGetDoubleOr(root, "sandFade", 15.0));
-    materialInstance->setParameter("snowHeight", (float)jsonGetDoubleOr(root, "snowHeight", 800.0));
-    materialInstance->setParameter("snowFade", (float)jsonGetDoubleOr(root, "snowFade", 120.0));
-    materialInstance->setParameter("cliffSlope", (float)jsonGetDoubleOr(root, "cliffSlope", 0.45));
-    materialInstance->setParameter("cliffFade", (float)jsonGetDoubleOr(root, "cliffFade", 0.12));
-    materialInstance->setParameter("styleTiling", (float)jsonGetDouble(root, "styleTiling"));
-
     json_decref(root);
-
     utils::info("terrain: ready — %zu splat layers, %zu styles + 4 defaults (%.0f ms)",
-            splatFiles.size(), styleCount, (utils::nanos() - startNanos) / 1000000.0);
+            splatLayerCount, styleCount, (utils::nanos() - startNanos) / 1000000.0);
     return true;
 }
 
 void terrainApplyToAsset(void) {
-    if (!materialInstance || !gltf::asset) {
-        return;
+    if (renderer::rendererBackend() == renderer::Backend::Diligent) {
+        terrainApplyDiligent();
+    } else {
+        terrainApplyFilament();
     }
-
-    Engine& engine = *renderer::filamentEngine;
-    RenderableManager& rm = engine.getRenderableManager();
-
-    utils::Entity chunks[kMaxTiles];
-    size_t found = gltf::gltfEntitiesNamed("terrain_chunk_", chunks, kMaxTiles);
-
-    size_t applied = 0;
-    for (size_t i = 0; i < found && i < kMaxTiles; i++) {
-        auto instance = rm.getInstance(chunks[i]);
-        if (!instance) {
-            continue;
-        }
-        size_t primitives = rm.getPrimitiveCount(instance);
-        for (size_t p = 0; p < primitives; p++) {
-            rm.setMaterialInstanceAt(instance, p, materialInstance);
-        }
-        applied++;
-    }
-
-    utils::info("terrain: material applied to %zu/%zu chunks", applied, found);
 }
 
 void terrainDestroy(void) {
-    Engine* engine = renderer::filamentEngine;
-
-    if (materialInstance) {
-        engine->destroy(materialInstance);
-        materialInstance = nullptr;
-    }
-    if (material) {
-        engine->destroy(material);
-        material = nullptr;
-    }
-    if (splatTiles) {
-        engine->destroy(splatTiles);
-        splatTiles = nullptr;
-    }
-    if (styleAlbedo) {
-        engine->destroy(styleAlbedo);
-        styleAlbedo = nullptr;
-    }
-    if (styleNormal) {
-        engine->destroy(styleNormal);
-        styleNormal = nullptr;
-    }
-    if (defaultAlbedo) {
-        engine->destroy(defaultAlbedo);
-        defaultAlbedo = nullptr;
-    }
-    if (defaultNormal) {
-        engine->destroy(defaultNormal);
-        defaultNormal = nullptr;
+    if (renderer::rendererBackend() == renderer::Backend::Diligent) {
+        terrainDestroyDiligent();
+    } else {
+        terrainDestroyFilament();
     }
 }
 }  // namespace engine::terrain

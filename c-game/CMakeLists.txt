@@ -26,8 +26,10 @@ target_link_libraries(c-game PRIVATE
     ${thirdparty}/filament/git/${platform_dir}/libs/filagui/libfilagui.a
     ${thirdparty}/yoga/git/${platform_dir}/yoga/libyogacore.a
 
-    # filament + entt windowing (paths from c-engine/CMakeLists.txt)
+    # filament + diligent (both render paths ship in one binary; the active
+    # one is picked at startup) + entt windowing (paths from c-engine/CMakeLists.txt)
     ${FILAMENT_LIBS}
+    ${DILIGENT_LIBS}
     -Wl,--end-group
 )
 

@@ -48,6 +48,9 @@ void settingsInit(void) {
      * 3=high (4096/3/160m).  shadowsDisabled above is the legacy on/off key,
      * kept in sync by the settings GUI and read once for migration. */
     templates.push_back((Template{"shadowQuality", "int", 2.}));
+    /* Render backend: 0 = filament (default), 1 = diligent. Overridden by the
+     * ENGINE_RENDERER env var at startup. */
+    templates.push_back((Template{"rendererBackend", "int", 0.}));
     templates.push_back((Template{"ssrDisabled", "boolean", 0.}));
     templates.push_back((Template{"aoDisabled", "boolean", 0.}));
     /* Screen-space GI (plans/ssgi.md, phases 1-4 validated): on by

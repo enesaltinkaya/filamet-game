@@ -1,41 +1,28 @@
 #include "Renderer.h"
+
+#include "RenderBackend.h"
 #include "Engine.h"
 #include "RenderDoc.h"
 #include "Utils.h"
 #include "logger/Logger.h"
-#include "Window.h"
-#include "gui/GuiManager.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb/git/stb_image_write.h"
-#include <backend/PixelBufferDescriptor.h>
+#include "renderer/Window.h"
+#include "settings/Settings.h"
+
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <filament/Camera.h>
-#include <filament/Engine.h>
-#include <filament/Renderer.h>
-#include <filament/Scene.h>
-#include <filament/SwapChain.h>
-#include <filament/View.h>
-#include <filament/Viewport.h>
-#include <utils/EntityManager.h>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/git/stb_image_write.h"
 
 namespace engine::renderer {
-filament::Engine* filamentEngine;
-filament::SwapChain* swapChain;
-filament::Renderer* renderer;
-filament::Scene* scene;
-filament::View* view;
-filament::View* uiView;
-filament::Camera* camera;
-utils::Entity cameraEntity;
 
+static Backend backend = Backend::Filament;
+static RenderBackend* activeBackend = nullptr;
 static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
 
-// ENGINE_SCREENSHOT=path — capture one frame to a JPEG and quit (for automated runs)
+// ── screenshot (ENGINE_SCREENSHOT=path: capture one frame, quit) ────────────
 static const char* screenshotPath = nullptr;
-static u8* screenshotBuffer = nullptr;
 static bool screenshotDone = false;
 static u32 screenshotFrame = 0;
 
@@ -43,19 +30,47 @@ static u32 screenshotFrame = 0;
 // for inspection (ENGINE_RENDERDOC_CAPTURE_FRAMES, default 30)
 static u32 renderDocCaptureFrame = 0;
 
-static void screenshotSave(void) {
-    if (!stbi_write_jpg(screenshotPath, (int)window.width, (int)window.height,
-                        4, screenshotBuffer, 90)) {
+Backend rendererBackend(void) {
+    return backend;
+}
+
+const char* rendererBackendName(void) {
+    return backend == Backend::Diligent ? "diligent" : "filament";
+}
+
+bool rendererScreenshotShouldCapture(void) {
+    if (!screenshotPath || screenshotDone) {
+        return false;
+    }
+    if (screenshotFrame++ < 3) {
+        return false;  // let shaders/textures warm up first
+    }
+    screenshotDone = true;
+    return true;
+}
+
+void rendererScreenshotDeliver(u8* buffer) {
+    if (!stbi_write_jpg(screenshotPath, (int)window.width, (int)window.height, 4, buffer, 90)) {
         utils::warn("renderer: cannot save screenshot to %s", screenshotPath);
     } else {
         utils::info("renderer: screenshot saved to %s", screenshotPath);
     }
-
-    free(screenshotBuffer);
-    screenshotBuffer = nullptr;
+    free(buffer);
 
     // automated run is done → shut the app down
     engineStop();
+}
+
+static Backend selectBackend(void) {
+    const char* env = getenv("ENGINE_RENDERER");
+    if (env && env[0] != '\0') {
+        if (utils::strequals(env, "diligent")) return Backend::Diligent;
+        if (utils::strequals(env, "filament")) return Backend::Filament;
+        utils::warn("renderer: unknown ENGINE_RENDERER '%s' (filament|diligent)", env);
+    }
+    // persisted setting (0 = filament, 1 = diligent); settings templates carry
+    // the default, so a missing key reads as filament
+    return utils::settingsGetInt("rendererBackend") == 1 ? Backend::Diligent : Backend::Filament;
 }
 
 bool rendererInit(const char* title, u32 width, u32 height) {
@@ -63,39 +78,15 @@ bool rendererInit(const char* title, u32 width, u32 height) {
         return false;
     }
 
-    filamentEngine = filament::Engine::create(filament::Engine::Backend::VULKAN);
-    if (!filamentEngine) {
-        utils::error("renderer: filament::Engine::create failed (Vulkan)");
+    backend = selectBackend();
+    activeBackend = backend == Backend::Diligent ? diligentBackendCreate() : filamentBackendCreate();
+    if (!activeBackend->init()) {
+        delete activeBackend;
+        activeBackend = nullptr;
         windowDestroy();
         return false;
     }
-    utils::info("renderer: filament engine created");
-
-    swapChain = filamentEngine->createSwapChain(windowNativeHandle());
-    renderer = filamentEngine->createRenderer();
-    scene = filamentEngine->createScene();
-    view = filamentEngine->createView();
-    uiView = filamentEngine->createView();
-
-    cameraEntity = utils::EntityManager::get().create();
-    camera = filamentEngine->createCamera(cameraEntity);
-    camera->lookAt({0.0, 0.0, 5.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
-
-    view->setScene(scene);
-    view->setCamera(camera);
-
-    renderer->setClearOptions({
-        .clearColor = {0.02, 0.04, 0.09, 1.0},
-        .clear = true,
-    });
-
-    viewportWidth = window.width;
-    viewportHeight = window.height;
-    view->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
-    uiView->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
-    camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 20000.0, filament::Camera::Fov::VERTICAL);
-
-    utils::info("renderer: initialized");
+    utils::info("renderer: initialized (%s backend)", rendererBackendName());
 
     const char* screenshotEnv = getenv("ENGINE_SCREENSHOT");
     if (screenshotEnv && screenshotEnv[0] != '\0') {
@@ -112,58 +103,56 @@ bool rendererInit(const char* title, u32 width, u32 height) {
 }
 
 void rendererDraw(void) {
+    if (!activeBackend) {
+        return;
+    }
+
 #ifndef NDEBUG
     if (renderDocCaptureFrame && --renderDocCaptureFrame == 0) {
         renderDocCaptureNow();
     }
 #endif
 
-    // window resized → update viewport + projection
     if (window.width != viewportWidth || window.height != viewportHeight) {
         viewportWidth = window.width;
         viewportHeight = window.height;
-        view->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
-        uiView->setViewport({0, 0, (uint32_t)viewportWidth, (uint32_t)viewportHeight});
-        camera->setProjection(60.0, (double)viewportWidth / (double)viewportHeight, 0.1, 20000.0, filament::Camera::Fov::VERTICAL);
+        activeBackend->resize(window.width, window.height);
     }
 
-    if (renderer->beginFrame(swapChain)) {
-        renderer->render(view);          // 3D scene
-        if (gui::guiIsActive()) {
-            renderer->render(uiView);    // 2D GUI overlay (translucent, on top)
-        }
-
-        // capture after a few frames so shaders/textures are warm; the callback
-        // fires a few frames later, once the readback completes
-        if (screenshotPath && !screenshotDone && screenshotFrame++ >= 3) {
-            screenshotBuffer = (u8*)malloc((size_t)window.width * window.height * 4);
-            renderer->readPixels(0, 0, window.width, window.height,
-                    filament::backend::PixelBufferDescriptor(screenshotBuffer, (size_t)window.width * window.height * 4,
-                            filament::backend::PixelDataFormat::RGBA, filament::backend::PixelDataType::UBYTE,
-                            [](void*, size_t, void*) { screenshotSave(); }));
-            screenshotDone = true;
-        }
-
-        renderer->endFrame();
-    }
+    activeBackend->draw();
 }
 
 void rendererDestroy(void) {
     utils::info("renderer: destroying");
-
-    filament::Engine* enginePtr = filamentEngine;
-    if (enginePtr) {
-        enginePtr->destroyCameraComponent(cameraEntity);
-        utils::EntityManager::get().destroy(cameraEntity);
-        enginePtr->destroy(view);
-        enginePtr->destroy(uiView);
-        enginePtr->destroy(scene);
-        enginePtr->destroy(renderer);
-        enginePtr->destroy(swapChain);
-        filament::Engine::destroy(&enginePtr);
-        filamentEngine = nullptr;
+    if (activeBackend) {
+        activeBackend->destroy();
+        delete activeBackend;
+        activeBackend = nullptr;
     }
-
     windowDestroy();
+}
+
+void rendererCameraLookAt(const f32 eye[3], const f32 center[3], const f32 up[3]) {
+    if (activeBackend) {
+        activeBackend->cameraLookAt(eye, center, up);
+    }
+}
+
+void rendererCameraGet(f32 pos[3], f32 forward[3]) {
+    if (activeBackend) {
+        activeBackend->cameraGet(pos, forward);
+    }
+}
+
+void rendererSetSun(const f32 direction[3], const f32 color[3], f32 intensity) {
+    if (activeBackend) {
+        activeBackend->setSun(direction, color, intensity);
+    }
+}
+
+void rendererSetAmbient(const f32 color[3], f32 intensity) {
+    if (activeBackend) {
+        activeBackend->setAmbient(color, intensity);
+    }
 }
 }  // namespace engine::renderer

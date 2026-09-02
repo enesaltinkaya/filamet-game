@@ -11,7 +11,10 @@ void ecsInit(System* gameSystem) {
 
 void ecsDestroy(void) {
     utils::info("ecs: destroying");
-    for (System* system : ecs.systems) {
+    // snapshot: a system's removed() may remove others (Game removes the
+    // flying camera), which would erase from ecs.systems mid-iteration
+    std::vector<System*> all = ecs.systems;
+    for (System* system : all) {
         system->removed();
     }
     ecs.systems.clear();

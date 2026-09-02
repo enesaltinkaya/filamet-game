@@ -1,20 +1,18 @@
 #include "gui/GuiManager.h"
-#include "renderer/Renderer.h"
-#include "renderer/Window.h"
-#include "ecs/Ecs.h"
+
 #include "Utils.h"
 #include "datamanager/DataManager.h"
+#include "ecs/Ecs.h"
+#include "gui/GuiBackend.h"
 #include "logger/Logger.h"
-
-#include <imgui.h>
-#include <filagui/ImGuiHelper.h>
+#include "renderer/Renderer.h"
+#include "renderer/Window.h"
 
 #include <SDL.h>
 
 namespace engine::gui {
 int guiPriority = 10000;  // highest: drive the ImGui frame after all other systems
 
-static filagui::ImGuiHelper* helper = nullptr;
 static ImGuiContext* ctx = nullptr;
 static char guiActive = 0;
 static float curScale = 1.0f;
@@ -75,15 +73,21 @@ static void feedInput(ImGuiIO& io) {
     if (input.text[0]) io.AddInputCharactersUTF8(input.text);
 }
 
+static std::vector<Gui*> activeGuis;
+
+static void drawActiveGuis(void) {
+    for (Gui* g : activeGuis) g->draw();
+}
+
 class GuiManagerSystem : public System {
 public:
     GuiManagerSystem() : System("gui") {}
 
     void removed() override {
-        if (helper) {
-            delete helper;  // also destroys the ImGui context
-            helper = nullptr;
-        }
+        // the backend owns the ImGui context teardown
+        renderer::rendererBackend() == renderer::Backend::Diligent
+                ? guiBackendDestroyDiligent()
+                : guiBackendDestroyFilament();
         ctx = nullptr;
         fontBody = nullptr;
         fontTitle = nullptr;
@@ -92,23 +96,22 @@ public:
     }
 
     void postUpdate() override {
-        if (!helper) {
+        if (!ctx) {
             guiActive = 0;
             return;
         }
 
         // Active guis = the Gui systems currently in the ecs (fresh each frame,
         // so it always reflects the deferred add/remove applied this frame).
-        std::vector<Gui*> guis;
+        activeGuis.clear();
         for (System* s : ecs.systems) {
-            if (Gui* g = dynamic_cast<Gui*>(s)) guis.push_back(g);
+            if (Gui* g = dynamic_cast<Gui*>(s)) activeGuis.push_back(g);
         }
-        guiActive = !guis.empty() ? 1 : 0;
+        guiActive = !activeGuis.empty() ? 1 : 0;
         if (!guiActive) return;
 
         ImGui::SetCurrentContext(ctx);
         ImGuiIO& io = ImGui::GetIO();
-        helper->setDisplaySize((int)window.width, (int)window.height, 1.0f, 1.0f, false);
 
         // Scale UI with the framebuffer resolution (1x at 720p). GUI layout code
         // uses guiScale() for positions/sizes; this scales the glyph rendering.
@@ -119,18 +122,21 @@ public:
 
         feedInput(io);
 
-        // NewFrame + emit every gui's widgets + Render + build the Filament
-        // renderables. The renderer submits the UI view afterward.
-        helper->render((float)utils::timer.dt, [&](filament::Engine*, filament::View*) {
-            for (Gui* g : guis) g->draw();
-        });
+        // NewFrame + emit every gui's widgets + Render; the renderer submits
+        // the UI pass afterward (filagui view / imgui vulkan pass)
+        renderer::rendererBackend() == renderer::Backend::Diligent
+                ? guiBackendFrameDiligent((float)utils::timer.dt, window.width, window.height,
+                          drawActiveGuis)
+                : guiBackendFrameFilament((float)utils::timer.dt, window.width, window.height,
+                          drawActiveGuis);
     }
 };
 
 static GuiManagerSystem guiManager;
 
 void guiInit(void) {
-    utils::info("gui: initializing ImGui/filagui backend");
+    const bool diligent = renderer::rendererBackend() == renderer::Backend::Diligent;
+    utils::info("gui: initializing ImGui backend (%s)", diligent ? "vulkan" : "filagui");
 
     ctx = ImGui::CreateContext();
     fontBody = loadPakFont("fonts/montserratLight.ttf", 18.0f);
@@ -143,9 +149,7 @@ void guiInit(void) {
     // instances instead of the raw VF.
     fontMenu = loadPakFont("fonts/montserratBlack.ttf", 18.0f);
 
-    // Empty font path: the helper builds its glyph atlas from the fonts we
-    // already added above (it skips its own AddFontFromFileTTF).
-    helper = new filagui::ImGuiHelper(renderer::filamentEngine, renderer::uiView, utils::Path(), ctx);
+    diligent ? guiBackendInitDiligent() : guiBackendInitFilament();
 
     systemAdd(guiPriority, &guiManager);
 }
@@ -169,5 +173,19 @@ void guiRemove(Gui* gui) {
 
 bool guiIsActive(void) {
     return guiActive != 0;
+}
+
+ImTextureID guiTextureCreate(u32 width, u32 height, u8* rgbaPixels) {
+    return renderer::rendererBackend() == renderer::Backend::Diligent
+            ? guiTextureCreateDiligent(width, height, rgbaPixels)
+            : guiTextureCreateFilament(width, height, rgbaPixels);
+}
+
+void guiTextureDestroy(ImTextureID texture) {
+    if (renderer::rendererBackend() == renderer::Backend::Diligent) {
+        guiTextureDestroyDiligent(texture);
+    } else {
+        guiTextureDestroyFilament(texture);
+    }
 }
 }  // namespace engine::gui

@@ -9,9 +9,6 @@
 
 #include <imgui.h>
 
-#include <filament/Engine.h>
-#include <filament/Texture.h>
-
 #include "renderer/Renderer.h"
 #include <string.h>
 
@@ -33,10 +30,10 @@ static void exitGame(void) {
     engine::engineStop();
 }
 
-// ── pak PNG → Filament texture ────────────────────────────────────────────
-// ImGui/filagui draws images by casting ImDrawCmd::GetTexID() to a
-// filament::Texture*, so we upload the PNG (CPU pixels, stb) straight to a
-// Filament texture and pass its pointer as the ImTextureID. The .ktx2
+// ── pak PNG → UI texture ──────────────────────────────────────────────────
+// The active backend uploads the pixels (stb-decoded PNG) and hands back an
+// ImTextureID: filament renders it through filagui (a filament::Texture*),
+// diligent through imgui_impl_vulkan (a VkDescriptorSet). The .ktx2
 // originals stay the GPU-side assets; the PNGs are the CPU-friendly twins
 // for the UI (a second Basis transcoder copy can't coexist in the process:
 // the engine's copy is already used by the terrain/gltf ktx2 paths).
@@ -59,22 +56,7 @@ static ImTextureID pngToImGuiTexture(const char* pakPath) {
         utils::error("mainMenu: failed to decode '%s'", pakPath);
         return ImTextureID_Invalid;
     }
-    // The Vulkan backend uploads the image on the engine loop thread, so the
-    // descriptor owns the pixels and frees them only after the driver has
-    // consumed them (freeing right after setImage() was a use-after-free).
-    filament::Texture::PixelBufferDescriptor pb =
-            filament::Texture::PixelBufferDescriptor::make(px, (size_t)w * h * 4,
-                    filament::Texture::Format::RGBA, filament::Texture::Type::UBYTE,
-                    [](void* b, size_t) { stbi_image_free(b); });
-    filament::Texture* tex = filament::Texture::Builder()
-            .width((uint32_t)w)
-            .height((uint32_t)h)
-            .levels(1)
-            .format(filament::Texture::InternalFormat::RGBA8)
-            .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            .build(*engine::renderer::filamentEngine);
-    tex->setImage(*engine::renderer::filamentEngine, 0, std::move(pb));
-    return ImTextureID((size_t)tex);
+    return engine::gui::guiTextureCreate((u32)w, (u32)h, px);
 }
 
 static ImTextureID logoTex = ImTextureID_Invalid;

@@ -12,20 +12,10 @@
 
 #include <SDL.h>
 
-#include <filament/Box.h>
-#include <gltfio/FilamentAsset.h>
-#include <filament/Engine.h>
-#include <filament/IndirectLight.h>
-#include <filament/LightManager.h>
-#include <filament/Scene.h>
-#include <math/vec3.h>
-#include <utils/EntityManager.h>
+#include <cmath>
 
 namespace game {
-    using namespace filament::math;
 
-    static utils::Entity sun;
-    static filament::IndirectLight* ambientLight = nullptr;
     static bool worldLoaded = false;
 
     GameSystem::GameSystem() : System("Game") {}
@@ -39,7 +29,7 @@ namespace game {
         utils::info("game: added — pak version: %s", version.data);
         utils::stringDestroy(&version);
 
-        // GUI: bring up the main menu (ImGui via filagui)
+        // GUI: bring up the main menu (ImGui via the active backend)
         gameStateSet(STATE_MAIN_MENU);
         engine::gui::guiInit();
         engine::gui::guiAdd(&mainMenuGui);
@@ -54,41 +44,37 @@ namespace game {
         engine::terrain::terrainApplyToAsset();
 
         // frame the terrain: slightly off-center, looking across it
-        filament::Aabb box = engine::gltf::asset->getBoundingBox();
-        float3 center      = (box.min + box.max) * 0.5f;
+        f32 min[3];
+        f32 max[3];
+        engine::gltf::gltfBoundingBox(min, max);
+        f32 center[3] = {(min[0] + max[0]) * 0.5f,
+                         (min[1] + max[1]) * 0.5f,
+                         (min[2] + max[2]) * 0.5f};
 
         const char* cameraMode = getenv("ENGINE_CAMERA");
         if (cameraMode && utils::strequals(cameraMode, "topdown")) {
             // top-down map view (validation shots): up = -z keeps the frame stable
-            engine::renderer::camera->lookAt(center + float3{0.0f, 9000.0f, 0.01f},
-                                             center,
-                                             {0.0f, 0.0f, -1.0f});
+            f32 eye[3] = {center[0], center[1] + 9000.0f, center[2] + 0.01f};
+            f32 up[3]  = {0.0f, 0.0f, -1.0f};
+            engine::renderer::rendererCameraLookAt(eye, center, up);
         } else if (cameraMode && utils::strequals(cameraMode, "close")) {
-            engine::renderer::camera->lookAt(center + float3{180.0f, 60.0f, 180.0f},
-                                             center + float3{0.0f, 0.0f, 60.0f},
-                                             {0.0f, 1.0f, 0.0f});
+            f32 eye[3]    = {center[0] + 180.0f, center[1] + 60.0f, center[2] + 180.0f};
+            f32 lookAt[3] = {center[0], center[1], center[2] + 60.0f};
+            f32 up[3]     = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
         } else {
-            engine::renderer::camera->lookAt(center + float3{300.0f, -90.0f, 1700.0f},
-                                             center,
-                                             {0.0f, 1.0f, 0.0f});
+            f32 eye[3] = {center[0] + 500.0f, center[1] + 1590.0f, center[2] + 2700.0f};
+            f32 up[3]  = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(eye, center, up);
         }
 
-        sun = utils::EntityManager::get().create();
-        filament::LightManager::Builder(filament::LightManager::Type::SUN)
-            .color({1.0f, 0.97f, 0.92f})
-            .intensity(110000.0f)
-            .direction(normalize(float3{-0.6f, -1.0f, -0.5f}))
-            .build(*engine::renderer::filamentEngine, sun);
-        engine::renderer::scene->addEntity(sun);
+        // sun (directional) + constant ambient, backend-agnostic
+        f32 sunDirection[3] = {-0.6f, -1.0f, -0.5f};
+        f32 sunColor[3]     = {1.0f, 0.97f, 0.92f};
+        engine::renderer::rendererSetSun(sunDirection, sunColor, 110000.0f);
 
-        // constant ambient (SH band 0) — no cubemap needed
-        float3 ambient[9] = {};
-        ambient[0]        = {0.32f, 0.35f, 0.38f};
-        ambientLight      = filament::IndirectLight::Builder()
-                                .irradiance(3, ambient)
-                                .intensity(30000.0f)
-                                .build(*engine::renderer::filamentEngine);
-        engine::renderer::scene->setIndirectLight(ambientLight);
+        f32 ambient[3] = {0.32f, 0.35f, 0.38f};
+        engine::renderer::rendererSetAmbient(ambient, 30000.0f);
 
         worldLoaded = true;
         utils::info("game: world loaded");
@@ -109,17 +95,12 @@ namespace game {
         engine::systemRemove(&engine::flyingCameraSystem);
         if (worldLoaded) {
             // destroy the glTF asset first: its renderables still reference
-            // the terrain material instance
+            // the terrain material
             engine::gltf::gltfDestroy();
             engine::terrain::terrainDestroy();
 
-            engine::renderer::scene->remove(sun);
-            engine::renderer::filamentEngine->destroy(sun);
-            utils::EntityManager::get().destroy(sun);
-
-            engine::renderer::scene->setIndirectLight(nullptr);
-            engine::renderer::filamentEngine->destroy(ambientLight);
-            ambientLight = nullptr;
+            // the renderer owns the sun/ambient now; they stay set for the
+            // next world load and affect nothing while no geometry is drawn
             worldLoaded = false;
         }
         utils::info("game: removed");
