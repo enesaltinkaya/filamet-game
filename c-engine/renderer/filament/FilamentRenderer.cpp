@@ -2,6 +2,7 @@
 
 #include "Engine.h"
 #include "Utils.h"
+#include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gui/Gui.h"
 #include "gui/GuiManager.h"
 #include "logger/Logger.h"
@@ -88,6 +89,10 @@ public:
     }
 
     void draw() override {
+        // heightmap terrain: sync streaming tiles + budgeted GPU uploads
+        // (main thread, before the frame renders)
+        heightmapTerrainRenderUpdate();
+
         if (renderer->beginFrame(swapChain)) {
             renderer->render(view);  // 3D scene
             if (gui::guiIsActive()) {
@@ -121,6 +126,10 @@ public:
     }
 
     void destroy() override {
+        // terrain GPU state first (its scene entities, buffers and textures
+        // all live in the engine about to be torn down)
+        heightmapTerrainRenderDestroy();
+
         filament::Engine* enginePtr = engine;
         if (enginePtr) {
             enginePtr->destroyCameraComponent(cameraEntity);

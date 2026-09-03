@@ -1988,6 +1988,30 @@ static bool azgaarWorldLoadMap(AzgaarWorld* world, const char* path) {
     }
     json_decref(grid);
 
+    // TEMP DIAG: biome id histogram + table (uniform-tint investigation).
+    if (getenv("ENGINE_AZGAAR_DIAG")) {
+        u32 hist[16] = {};
+        for (u32 i = 0u; i < world->cellCount; i++) {
+            if (world->cells[i].biome < 16u) hist[world->cells[i].biome]++;
+        }
+        utils::info("DIAG biome histogram: %s", [](const u32* h) -> const char* {
+            static char buf[512];
+            int p          = 0;
+            for (u32 i = 0; i < 16; i++) p += snprintf(buf + p, sizeof(buf) - p, "%u:%u ", i, h[i]);
+            return buf;
+        }(hist));
+        for (u32 i = 0; i < world->biomeCount; i++) {
+            const AzgaarBiome* b = &world->biomes[i];
+            utils::info("DIAG biome %u %s (%.0f,%.0f,%.0f)", b->id, b->name, b->color[0] * 255.0f,
+                        b->color[1] * 255.0f, b->color[2] * 255.0f);
+        }
+        for (u32 i = 0; i < world->cellCount && i < 8; i++) {
+            const AzgaarCell* c = &world->cells[i];
+            utils::info("DIAG cell %u pos=(%.0f,%.0f) h=%.0f t=%.1f p=%d biome=%u", i, c->x, c->y, c->height,
+                        c->temp, (int)c->prec, c->biome);
+        }
+    }
+
     // Build the spatial hash of cell sites first — the Voronoi builder uses
     // it to find each cell's neighbours for half-plane intersection.
     buildCellGrid(world);

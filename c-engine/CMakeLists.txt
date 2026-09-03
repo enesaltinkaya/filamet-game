@@ -35,6 +35,7 @@ target_include_directories(c-engine PUBLIC
     ${filament_git}/libs/filabridge/include
     ${filament_git}/libs/filaflat/include
     ${filament_git}/libs/gltfio/include
+    ${filament_git}/libs/ktxreader/include
     ${filament_git}/libs/math/include
     ${filament_git}/libs/utils/include
     # SDL3 (our own prebuilt, cpp-thirdparty/sdl) — headers live under include/SDL3
@@ -183,4 +184,28 @@ set_source_files_properties(
 # ── renderdoc in-app api (debug captures, LD_PRELOAD librenderdoc.so) ───────
 target_include_directories(c-engine PUBLIC /home/enes/Apps/renderdoc/renderdoc/api/app)
 target_link_libraries(c-engine PUBLIC ${CMAKE_DL_LIBS})
+
+# ── heightmap terrain material (compiled with matc into the game data dir) ─
+# The .filamat is committed (the pak pipeline ships it to pak_1); this step
+# keeps it in sync with terrain.mat whenever it changes. Regeneration needs
+# the prebuilt matc (build-linux/tools/matc); on platforms without it the
+# committed blob is used as-is — re-generate on a machine that has it when
+# the .mat changes.
+set(MATC ${filament_root}/tools/matc/matc)
+set(HEIGHTMAP_TERRAIN_MAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/renderer/filament/materials/terrain.mat)
+set(HEIGHTMAP_TERRAIN_MAT_OUT ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain.filamat)
+if (EXISTS ${MATC})
+    add_custom_command(
+        OUTPUT ${HEIGHTMAP_TERRAIN_MAT_OUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
+        COMMAND ${MATC} -a vulkan -l 2 -o ${HEIGHTMAP_TERRAIN_MAT_OUT} ${HEIGHTMAP_TERRAIN_MAT_SRC}
+        DEPENDS ${HEIGHTMAP_TERRAIN_MAT_SRC} ${MATC}
+        COMMENT "matc heightmap terrain.mat"
+        VERBATIM
+    )
+    add_custom_target(heightmap_terrain_mat DEPENDS ${HEIGHTMAP_TERRAIN_MAT_OUT})
+    add_dependencies(c-engine heightmap_terrain_mat)
+else ()
+    message(WARNING "matc not found at ${MATC}; using the committed heightmap_terrain.filamat")
+endif ()
 

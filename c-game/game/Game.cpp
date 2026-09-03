@@ -3,6 +3,7 @@
 #include "Engine.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "ecs/system/heightmap/HeightmapTerrain.h"
+#include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gui/GuiManager.h"
 #include "gltf/Gltf.h"
 #include "renderer/Renderer.h"
@@ -119,6 +120,107 @@ namespace game {
         return true;
     }
 
+    // env-overridable blend thresholds (same pattern as the old engine's
+    // ENGINE_AZGAAR_SNOW_LO/HI, ENGINE_AZGAAR_BEACH_H, CLIMATE_DISABLED).
+    static f32 azgaarEnvFloat(const char* name, f32 fallback) {
+        const char* v = getenv(name);
+        if (!v || !*v) return fallback;
+        return (f32)atof(v);
+    }
+
+    // Validation probe: ENGINE_AZGAAR_DUMP_TEXTURES=/path dumps the packed
+    // per-world textures (exactly what the terrain pass uploads) as PPMs.
+    static void dumpPpm(const char* path, const u8* px, u32 w, u32 h, bool rgb) {
+        if (!px || !w || !h) return;
+        FILE* f = fopen(path, "wb");
+        if (!f) {
+            utils::warn("game: dump texture failed: %s", path);
+            return;
+        }
+        fprintf(f, "P6\n%u %u\n255\n", w, h);
+        for (u32 i = 0; i < (u32)w * (u32)h; i++) {
+            if (rgb) {
+                fputc(px[(size_t)i * 4u + 0u], f);
+                fputc(px[(size_t)i * 4u + 1u], f);
+                fputc(px[(size_t)i * 4u + 2u], f);
+            } else {
+                // single-channel dump: R,G,B,A written as 4 consecutive ppm
+                // frames is overkill — write channel 0 (R) only; callers that
+                // want another channel should dump a dedicated buffer
+                fputc(px[(size_t)i * 4u], f);
+            }
+        }
+        fclose(f);
+        utils::info("game: dumped %s (%ux%u)", path, w, h);
+    }
+
+    static void dumpWorldLook(const engine::HeightmapTerrainLook& look) {
+        const char* dir = getenv("ENGINE_AZGAAR_DUMP_TEXTURES");
+        if (!dir || !dir[0]) return;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/biome_color.ppm", dir);
+        dumpPpm(path, look.biomeColorPixels, look.biomeColorW, look.biomeColorH, true);
+        snprintf(path, sizeof(path), "%s/climate_temp.ppm", dir);   // R = temp + 64
+        dumpPpm(path, look.climatePixels, look.climateW, look.climateH, false);
+    }
+
+        // Build the terrain pass' per-world look from the loaded Azgaar world
+    // (packed biome-colour + climate textures, map bounds, thresholds) and
+    // register it with the active render backend.
+    static void terrainRegisterWorldLook(const AzgaarWorld* world) {
+        engine::HeightmapTerrainLook look = {};
+
+        u32 w = 0, h = 0;
+        std::vector<u8> biomePixels = azgaarWorldPackBiomeColorTexture(world, &w, &h);
+        if (!biomePixels.empty()) {
+            look.biomeColorPixels = biomePixels.data();
+            look.biomeColorW = w;
+            look.biomeColorH = h;
+        }
+        w = 0;
+        h = 0;
+        std::vector<u8> climatePixels = azgaarWorldPackClimateTexture(world, &w, &h);
+        if (!climatePixels.empty()) {
+            look.climatePixels = climatePixels.data();
+            look.climateW = w;
+            look.climateH = h;
+        }
+        look.climateEnabled = look.biomeColorPixels != nullptr && look.climatePixels != nullptr;
+
+        // Map bounds in world metres (azgaarMapToWorld centres the map at
+        // the world origin).
+        const f32 halfW = (f32)world->widthPx * 0.5f * (f32)world->metersPerPixel;
+        const f32 halfH = (f32)world->heightPx * 0.5f * (f32)world->metersPerPixel;
+        look.mapMinX = -halfW;
+        look.mapMinZ = -halfH;
+        look.mapMaxX = halfW;
+        look.mapMaxZ = halfH;
+        look.maxLandHeightM = world->maxLandHeightM;
+
+        look.snowLoC = azgaarEnvFloat("ENGINE_AZGAAR_SNOW_LO", -1.0f);
+        look.snowHiC = azgaarEnvFloat("ENGINE_AZGAAR_SNOW_HI", 3.0f);
+        look.beachHeightM = azgaarEnvFloat("ENGINE_AZGAAR_BEACH_H", 2.5f);
+        if (getenv("ENGINE_AZGAAR_CLIMATE_DISABLED")) {
+            look.snowLoC = look.snowHiC = look.beachHeightM = 0.0f;
+            look.climateEnabled = false;
+        }
+
+        dumpWorldLook(look);
+        engine::heightmapTerrainRenderRegisterLook(&look);
+
+        // ENGINE_TERRAIN_DEBUG=<off|ramp|biome>: validation views (ramp =
+        // periodic hue per 256 m of height, biome = raw biome-colour
+        // texture through the map-space UV).
+        const char* dbg = getenv("ENGINE_TERRAIN_DEBUG");
+        u32 debugMode = 0;
+        if (dbg && utils::strequals(dbg, "ramp")) {
+            debugMode = 1;
+        } else if (dbg && utils::strequals(dbg, "biome")) {
+            debugMode = 2;
+        }
+        engine::heightmapTerrainRenderSetDebugView(debugMode);
+    }
+
     GameSystem::GameSystem() : System("Game") {}
 
     void GameSystem::added() {
@@ -161,6 +263,10 @@ namespace game {
             engine::heightmapTerrainInit(&s_terrain, &src->vtable,
                                          HEIGHTMAP_TILE_SIZE_M, HEIGHTMAP_WINDOW_SIZE);
             engine::heightmapTerrainSetActive(&s_terrain);
+
+            // Terrain render pass: per-world look (biome/climate textures +
+            // bounds + thresholds), registered before any tile renders.
+            terrainRegisterWorldLook(loadingAzgaarGetWorld());
         }
 
         // TODO(azgaar): frame the camera from the world bounds instead of this center.
@@ -201,10 +307,12 @@ namespace game {
             gameStateSet(STATE_MAIN_MENU);
             engine::ecsSystemRemoveDeferred(&engine::flyingCameraSystem);
             engine::ecsSystemRemoveDeferred(&engine::heightmapTerrainSystem);
-            // Drop the terrain's tile data while the menu is up (world and
-            // source stay retained; re-entering the world re-inits the
-            // terrain). The settlement plateau grid is cleared only at world
-            // release — it is valid as long as the world is.
+            // Drop the terrain's tile data + render look while the menu is
+            // up (world and source stay retained; re-entering the world
+            // re-inits the terrain and re-registers the look). The
+            // settlement plateau grid is cleared only at world release — it
+            // is valid as long as the world is.
+            engine::heightmapTerrainRenderReleaseLook();
             engine::heightmapTerrainDestroyData(&s_terrain);
             engine::heightmapTerrainSetActive(nullptr);
             engine::gui::guiAdd(&mainMenuGui);
@@ -217,6 +325,7 @@ namespace game {
         if (worldLoaded) {
             // Terrain before world: heightAt dereferences the world, and the
             // plateau grid indexes into world->settlements.
+            engine::heightmapTerrainRenderReleaseLook();
             engine::heightmapTerrainDestroyData(&s_terrain);
             engine::heightmapTerrainSetActive(nullptr);
             azgaarSettlementsPlateauClear();
