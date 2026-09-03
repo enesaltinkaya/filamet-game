@@ -70,7 +70,7 @@ Port the adapter: FMG macro height + seeded (FNV-1a of map name) 2-octave
 value-noise detail band + settlement plateau blend. Keep the seabed detail
 fade (-10 m → 0).
 
-### 5. Filament terrain render pass
+### 5. Filament terrain render pass ✅ (done)
 
 - Per READY tile: generate 256² lattice corners (world pos + border-aware
   normal) on the CPU, upload VBO + shared 255-segment IBO.
@@ -82,6 +82,32 @@ fade (-10 m → 0).
 - **Acceptance:** `ENGINE_SCREENSHOT` shows streaming terrain following the
   camera; borders watertight (no seams); height ramp debug view matches CPU
   grid.
+
+**Acceptance report (2026-09-03, Chilerel 80×80 km, RX 7900 XTX / radv):**
+
+- Look: faithful port of the old engine's `heightmap_terrain.frag` (same
+  grass tiling, biome tint, dry-turf noise, beach/wet-sand band, slope+
+  altitude cliff triplanar, climate snow line, micro-band normal pass).
+  Same KTX2 assets on both engines.
+  ![land look](../docs/azgaar-terrain/terrain-land-look.jpg) — highest land
+  point (grass/dry-turf at 583 m); default camera:
+  ![default](../docs/azgaar-terrain/terrain-default.jpg)
+- Follow/evict: 400 m/s dolly over 33 s — window slid 6 tiles (12 km),
+  45 re-uploads, builder stayed ahead (steady `ready=20 queued=5`), surface
+  continuous the whole run (`ENGINE_CAMERA_DOLLY` +
+  `ENGINE_SCREENSHOT_FRAME`).
+- Seams: top-down height-ramp shot over the peak — no straight-line
+  discontinuities at tile borders:
+  ![seam ramp](../docs/azgaar-terrain/terrain-seam-ramp.jpg)
+- CPU cost (one-shot log, avg of 1000 frames after 120-frame warmup,
+  5×5 window): static 0.000 ms (system) + 0.005 ms (render pass);
+  continuous 400 m/s travel 0.000 + 0.450 ms — under the 1.5 ms budget in
+  both cases.
+- Memory, steady state: CPU 31.2 MB (25 resident grids) + GPU 45.2 MB
+  (25 VBOs + shared IBO) = 76.5 MB for the resident window — under the
+  150 MB budget; flat while evicting/re-uploading (no leak).
+- Hard-won pitfalls recorded in `docs/lessons.md` (setBufferAt no-copy,
+  tiling-texture sampling, photometric emissive).
 
 ### 6. Diligent terrain render pass
 

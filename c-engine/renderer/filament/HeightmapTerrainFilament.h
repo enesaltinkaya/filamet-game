@@ -15,5 +15,6 @@ void heightmapTerrainFilamentUpdate(void);
 void heightmapTerrainFilamentRegisterLook(const HeightmapTerrainLook* look);
 void heightmapTerrainFilamentReleaseLook(void);
 void heightmapTerrainFilamentSetDebugView(u32 mode);
+void heightmapTerrainFilamentStats(HeightmapTerrainRenderStats* out);
 void heightmapTerrainFilamentDestroy(void);
 }  // namespace engine

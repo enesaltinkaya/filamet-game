@@ -60,6 +60,19 @@ void heightmapTerrainRenderSetDebugView(u32 mode);
 // active HeightmapTerrain exists.
 void heightmapTerrainRenderUpdate(void);
 
+// Steady-state stats of the render pass (phase-5 acceptance; valid once the
+// pass has been running past its warmup):
+//   renderAvgMs = per-frame cost of the render half, averaged over 1000
+//                 frames after a 120-frame warmup
+//   gpuTiles /  gpuBytes = resident per-tile VBOs + the shared lattice IBO
+// Zeroed before the warmup completes or when no backend implements them.
+struct HeightmapTerrainRenderStats {
+    double renderAvgMs;
+    u32    gpuTiles;
+    size_t gpuBytes;
+};
+HeightmapTerrainRenderStats heightmapTerrainRenderStats(void);
+
 // Destroy all terrain GPU state (backend teardown).
 void heightmapTerrainRenderDestroy(void);
 }  // namespace engine

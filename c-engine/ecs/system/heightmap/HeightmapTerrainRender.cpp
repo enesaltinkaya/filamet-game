@@ -31,6 +31,15 @@ void heightmapTerrainRenderUpdate(void) {
     }
 }
 
+HeightmapTerrainRenderStats heightmapTerrainRenderStats(void) {
+    HeightmapTerrainRenderStats stats = {};
+    if (renderer::rendererBackend() == renderer::Backend::Filament) {
+        heightmapTerrainFilamentStats(&stats);
+    }
+    // phase 6 (plans/azgaar-terrain.md): diligent half
+    return stats;
+}
+
 void heightmapTerrainRenderDestroy(void) {
     if (renderer::rendererBackend() == renderer::Backend::Filament) {
         heightmapTerrainFilamentDestroy();

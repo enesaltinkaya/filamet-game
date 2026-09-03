@@ -100,10 +100,21 @@ float                debugView = 0.0f;
 
 // ── Texture helpers ────────────────────────────────────────────────────────
 
-filament::TextureSampler const samplerLinearRepeat = {
-        filament::TextureSampler::MinFilter::LINEAR,
-        filament::TextureSampler::MagFilter::LINEAR,
-        filament::TextureSampler::WrapMode::REPEAT};
+// World-tiling terrain textures (grass/cliff/snow/sand). These are minified
+// by orders of magnitude with distance — the grass albedo repeats every 3.4 m
+// and is seen from kilometres away — so they MUST be mip-mapped and
+// anisotropic; the KTX2 assets ship 11 levels for exactly this. With a plain
+// LINEAR minifier the albedo aliases into high-frequency straw speckle (and
+// its normal map into shading noise). Mirrors the old engine's SAMPLER_LINEAR
+// (linear min/mag + mipmap LINEAR + anisotropy 16 + repeat).
+const filament::TextureSampler makeTilingSampler() {
+    filament::TextureSampler sampler{
+            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+            filament::TextureSampler::MagFilter::LINEAR,
+            filament::TextureSampler::WrapMode::REPEAT};
+    sampler.setAnisotropy(16.0f);
+    return sampler;
+}
 
 filament::TextureSampler const samplerLinearClamp = {
         filament::TextureSampler::MinFilter::LINEAR,
@@ -215,7 +226,7 @@ void initPass(void) {
     for (const DefaultTexture& dt : kDefaultTextures) {
         filament::Texture* tex = loadKtx2(dt.path, dt.srgb);
         if (tex) {
-            materialInstance->setParameter(dt.param, tex, samplerLinearRepeat);
+            materialInstance->setParameter(dt.param, tex, makeTilingSampler());
         } else {
             utils::warn("heightmapTerrain: no default texture for %s (fallback white)", dt.param);
         }
@@ -394,8 +405,15 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
             cornerScratch.data());
 
     // Interleaved VBO layout: float3 pos @ 0, float4 tangent-frame @ 12 (stride 28).
-    static std::vector<float> vboScratch;
-    vboScratch.resize((size_t)cornerCount * 7u);
+    //
+    // The storage is per upload (heap, freed by the BufferDescriptor callback):
+    // setBufferAt does NOT copy, it hands the pointer to the driver, which
+    // reads it when the command executes. A shared scratch buffer would be
+    // overwritten by the next tile of this frame (kUploadsPerFrame > 1) before
+    // that, giving every tile in the batch the last tile's corners. Same rule
+    // as the shared IBO below.
+    const size_t vboFloatCount = (size_t)cornerCount * 7u;
+    float* vboData = new float[vboFloatCount];
     for (u32 i = 0; i < cornerCount; i++) {
         const HeightmapLatticeCorner& c = cornerScratch[i];
         // Same TBN construction as the fragment's buildTerrainTBN (the
@@ -413,7 +431,7 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
         filament::math::quatf q =
                 filament::math::mat3f::packTangentFrame(tbn, sizeof(float));
 
-        float* dst = &vboScratch[(size_t)i * 7u];
+        float* dst = &vboData[(size_t)i * 7u];
         dst[0] = c.pos[0];
         dst[1] = c.pos[1];
         dst[2] = c.pos[2];
@@ -433,10 +451,12 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
                                      .build(*engine);
     if (!vbo) {
         utils::warn("heightmapTerrain: VBO creation failed tile(%d,%d)", v->tileX, v->tileZ);
+        delete[] vboData;  // no BufferDescriptor took ownership
         return false;
     }
-    vbo->setBufferAt(*engine, 0, filament::VertexBuffer::BufferDescriptor(vboScratch.data(),
-            vboScratch.size() * sizeof(float), nullptr));
+    vbo->setBufferAt(*engine, 0, filament::VertexBuffer::BufferDescriptor(vboData,
+            vboFloatCount * sizeof(float),
+            [](void* data, size_t, void*) { delete[] (float*)data; }));
 
     utils::Entity entity = utils::EntityManager::get().create();
     // Object space == world space (identity transform); conservative Y range
@@ -468,7 +488,33 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
 
 // ── Frame entry: cache maintenance + budgeted uploads ─────────────────────
 
+// Per-frame cost tracking for the phase-5 acceptance log (reported through
+// heightmapTerrainFilamentStats + HeightmapTerrainSystem::update). Skip a
+// 120-frame warmup (initial tile ramp + builder settle), then hold the
+// average over the next 1000 frames.
+constexpr u32 kStatWarmupFrames = 120;
+constexpr u32 kStatFrames       = 1000;
+u64   statFrame   = 0;
+double statSum    = 0.0;
+u32   statCount   = 0;
+double statAvgMs  = 0.0;
+
+static void updateImplWork(void);
+
 void updateImpl(void) {
+    double t0 = utils::elapsedBegin();
+    updateImplWork();
+    double ms = utils::elapsedEnd(t0);
+
+    ++statFrame;
+    if (statFrame > kStatWarmupFrames && statCount < kStatFrames) {
+        statSum += ms;
+        statCount++;
+        statAvgMs = statSum / (double)statCount;
+    }
+}
+
+static void updateImplWork(void) {
     initPass();
     if (!materialInstance || !latticeIbo) return;
 
@@ -617,6 +663,21 @@ void heightmapTerrainFilamentReleaseLook(void) {
 
 void heightmapTerrainFilamentSetDebugView(u32 mode) {
     setDebugViewImpl(mode);
+}
+
+void heightmapTerrainFilamentStats(HeightmapTerrainRenderStats* out) {
+    if (!out) return;
+    out->renderAvgMs = (statCount > 0) ? statAvgMs : 0.0;
+    u32    tiles = 0;
+    size_t bytes = 0;
+    for (const GpuTile& t : gpuTiles) {
+        if (!t.inUse) continue;
+        tiles++;
+        bytes += (size_t)heightmapLatticeCornerCount() * 7u * sizeof(float);
+    }
+    bytes += (size_t)latticeIdxCount * sizeof(u32);
+    out->gpuTiles = tiles;
+    out->gpuBytes = bytes;
 }
 
 void heightmapTerrainFilamentDestroy(void) {

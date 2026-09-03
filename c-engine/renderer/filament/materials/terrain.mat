@@ -378,33 +378,38 @@ fragment {
             N                 = safeNormalize(N + microN * (MICRO_NOISE_STRENGTH * grazingGain), N);
         }
 
-        // `material.normal` is in the per-vertex tangent frame (prepare
-        // material multiplies it by the tangent frame to get the shading
-        // normal); the look above was built in world space, so convert.
-        material.normal = normalize(transpose(getWorldTangentFrame()) * N);
-
-        prepareMaterial(material);
-        material.baseColor = vec4(baseColor, 1.0);
-        material.roughness = roughness;
-
-        // Debug views (see the debugView parameter doc):
+        // ── Debug views (see the debugView parameter doc) ────────────────
         //   1 = height ramp — periodic hue cycle, one full cycle per 256 m
         //       (validates the lattice heights against the CPU grid).
         //   2 = raw biome-colour texture (validates mapBounds UV mapping +
         //       per-world texture registration).
-        // Emissive so they read independent of the sun; base colour is
-        // zeroed so only the debug colour reaches the output.
-        if (materialParams.debugView > 0.5) {
-            vec3 dbg = vec3(1.0);
+        // Drawn as a flat matte surface (no normal maps, roughness 1) rather
+        // than emissive: Filament's emissive is photometric (nits, scaled by
+        // the camera exposure exactly like the lights), so a 0..1 debug value
+        // is invisible next to a ~1e5-nit sun and would need the game's light
+        // intensities to be reproduced here. A 100% diffuse surface keeps the
+        // colours readable for any lighting and still shows the geometry.
+        bool dbgOn    = materialParams.debugView > 0.5;
+        vec3 dbgColor = vec3(1.0);
+        if (dbgOn) {
             if (materialParams.debugView < 1.5) {
-                float h   = worldPos.y;
-                dbg       = 0.5 + 0.5 * cos(6.2831853 * (h * (1.0 / 256.0) + vec3(0.0, 0.33, 0.67)));
+                float h = worldPos.y;
+                dbgColor = 0.5 + 0.5 * cos(6.2831853 * (h * (1.0 / 256.0) + vec3(0.0, 0.33, 0.67)));
             } else if (mapUVValid) {
-                dbg = texture(materialParams_biomeColor, mapUV).rgb;
+                dbgColor = texture(materialParams_biomeColor, mapUV).rgb;
             }
-            material.emissive = vec4(dbg, 1.0);
-            material.baseColor = vec4(0.0);
-            material.roughness = 1.0;
         }
+
+        // `material.normal` is in the per-vertex tangent frame (prepareMaterial
+        // multiplies it by the tangent frame to get the shading normal); the
+        // look above was built in world space, so convert. prepareMaterial()
+        // consumes material.normal, so it must be the last thing written
+        // before the call.
+        material.normal = dbgOn ? vec3(0.0, 0.0, 1.0)
+                                : normalize(transpose(getWorldTangentFrame()) * N);
+
+        prepareMaterial(material);
+        material.baseColor = vec4(dbgOn ? dbgColor : baseColor, 1.0);
+        material.roughness = dbgOn ? 1.0 : roughness;
     }
 }

@@ -1,4 +1,5 @@
 #include "ecs/system/heightmap/HeightmapTerrain.h"
+#include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "thread/Thread.h"
 #include "renderer/Renderer.h"
 
@@ -175,6 +176,23 @@ bool heightmapTerrainCopyPhysicsTile(HeightmapTerrain* ht,
     }
     utils::threadUnlock(&heightmapLock);
     return copied;
+}
+
+size_t heightmapTerrainResidentBytes(const HeightmapTerrain* ht, u32* outReady) {
+    if (!ht || !ht->initialized) return 0;
+
+    utils::threadLock(&heightmapLock);
+    size_t bytes = 0;
+    u32    ready = 0;
+    for (HeightmapTile* tile : ht->tiles) {
+        if (tile->state != HEIGHTMAP_TILE_READY) continue;
+        ready++;
+        bytes += tile->heights.size() * sizeof(float);
+        bytes += tile->physicsHeights.size() * sizeof(float);
+    }
+    utils::threadUnlock(&heightmapLock);
+    if (outReady) *outReady = ready;
+    return bytes;
 }
 
 static HeightmapTile* heightmapTerrainFindTile(HeightmapTerrain* ht, i32 tileX, i32 tileZ) {
@@ -747,6 +765,36 @@ void HeightmapTerrainSystem::update() {
     renderer::rendererCameraGet(pos, fwd);
 
     heightmapTerrainUpdateWindow(ht, pos[0], pos[2]);
+
+    // One-shot phase-5 acceptance log (plans/azgaar-terrain.md): steady-state
+    // CPU cost of the terrain work (this system + the render pass, averaged
+    // over 1000 frames after a 120-frame warmup) and the steady-state
+    // CPU/GPU footprint of the resident window.
+    {
+        static constexpr u32 kWarmup = 120;
+        static constexpr u32 kFrames = 1000;
+        static u32   frames = 0;
+        static double sumMs = 0.0;
+        static bool  logged = false;
+
+        frames++;
+        if (frames > kWarmup && frames <= kWarmup + kFrames) {
+            sumMs += cpuElapsed; // last frame's measured cost
+        }
+        if (!logged && frames == kWarmup + kFrames) {
+            logged = true;
+            HeightmapTerrainRenderStats rs    = heightmapTerrainRenderStats();
+            u32                         cpuReadyTiles = 0;
+            size_t                      cpuBytes = heightmapTerrainResidentBytes(ht, &cpuReadyTiles);
+            size_t                      total    = cpuBytes + rs.gpuBytes;
+            utils::info("heightmapTerrain: phase5 cost: system %.3f ms/frame + render pass %.3f ms/frame (avg of %u frames after %u warmup)",
+                    sumMs / kFrames, rs.renderAvgMs, kFrames, kWarmup);
+            utils::info("heightmapTerrain: phase5 memory: cpu %.1f MB (%u tiles) + gpu %.1f MB (%u VBOs + IBO) = %.1f MB resident window",
+                    (double)cpuBytes / (1024.0 * 1024.0), cpuReadyTiles,
+                    (double)rs.gpuBytes / (1024.0 * 1024.0), rs.gpuTiles,
+                    (double)total / (1024.0 * 1024.0));
+        }
+    }
 }
 
 HeightmapTerrainSystem heightmapTerrainSystem;

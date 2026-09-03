@@ -221,6 +221,62 @@ namespace game {
         engine::heightmapTerrainRenderSetDebugView(debugMode);
     }
 
+    // Highest land point of the world in world metres (the map-space height
+    // grid scanned for the tallest texel, mapped back through
+    // azgaarMapToWorld/azgaarHeightToMeters). Returns false when the grid is
+    // unavailable. Used to frame validation shots on land.
+    static bool worldHighestLandPoint(const AzgaarWorld* world, f32 out[3]) {
+        if (!world || world->heightGrid.empty() || !world->heightGridWidth ||
+            !world->heightGridHeight) {
+            return false;
+        }
+        size_t best = 0;
+        for (size_t i = 1; i < world->heightGrid.size(); i++) {
+            if (world->heightGrid[i] > world->heightGrid[best]) best = i;
+        }
+        const u32 gx = (u32)(best % world->heightGridWidth);
+        const u32 gy = (u32)(best / world->heightGridWidth);
+        // Texel centres: grid texel gx covers map px (gx + 0.5) / xScale.
+        const f32 xPx = ((f32)gx + 0.5f) * (f32)world->widthPx / (f32)world->heightGridWidth;
+        const f32 yPx = ((f32)gy + 0.5f) * (f32)world->heightPx / (f32)world->heightGridHeight;
+        azgaarMapToWorld(world, xPx, yPx, &out[0], &out[2]);
+        out[1] = azgaarHeightToMeters(world, world->heightGrid[best]);
+        return true;
+    }
+
+    // Automated validation hook: ENGINE_CAMERA_DOLLY="vx,vy,vz" pans the camera
+    // at that velocity (m/s) while the world is up. Combined with
+    // ENGINE_SCREENSHOT_FRAME it screenshots a camera that has actually moved,
+    // so a headless run exercises the terrain pass' follow/evict/re-upload path.
+    static void updateCameraDolly() {
+        static f32 vel[3] = {};
+        static bool parsed = false;
+        if (!parsed) {
+            parsed = true;
+            const char* v = getenv("ENGINE_CAMERA_DOLLY");
+            if (v && v[0]) {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "%s", v);
+                for (char* c = buf; *c; c++) {
+                    if (*c == ',') *c = ' ';
+                }
+                sscanf(buf, "%f %f %f", &vel[0], &vel[1], &vel[2]);
+                utils::info("game: camera dolly (%.1f, %.1f, %.1f) m/s", vel[0], vel[1], vel[2]);
+            }
+        }
+        if (vel[0] == 0.0f && vel[1] == 0.0f && vel[2] == 0.0f) return;
+        if (engine::flyingCameraFlying()) return;  // the player owns the camera
+
+        f32 pos[3], fwd[3];
+        engine::renderer::rendererCameraGet(pos, fwd);
+        const f32 step = (f32)utils::timer.dt;
+        const f32 eye[3] = {pos[0] + vel[0] * step, pos[1] + vel[1] * step,
+                pos[2] + vel[2] * step};
+        const f32 target[3] = {eye[0] + fwd[0], eye[1] + fwd[1], eye[2] + fwd[2]};
+        const f32 up[3] = {0.0f, 1.0f, 0.0f};
+        engine::renderer::rendererCameraLookAt(eye, target, up);
+    }
+
     GameSystem::GameSystem() : System("Game") {}
 
     void GameSystem::added() {
@@ -283,6 +339,34 @@ namespace game {
             f32 lookAt[3] = {center[0], center[1], center[2] + 60.0f};
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
+        } else if (cameraMode && utils::strequals(cameraMode, "land")) {
+            // Validation shots: frame the highest land point — the only place
+            // where every altitude band of the look shows (beach, turf, cliff
+            // rock, snow line). The map centre the default camera looks at can
+            // well be open sea, which says nothing about the look.
+            f32 peak[3] = {center[0], 0.0f, center[2]};
+            if (!worldHighestLandPoint(loadingAzgaarGetWorld(), peak)) {
+                peak[0] = center[0];
+                peak[2] = center[2];
+            }
+            utils::info("game: camera framing highest land point (%.0f, %.0f, %.0f)", peak[0],
+                        peak[1], peak[2]);
+            f32 eye[3] = {peak[0] + 2600.0f, peak[1] + 900.0f, peak[2] + 2600.0f};
+            f32 up[3]  = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(eye, peak, up);
+        } else if (cameraMode && utils::strequals(cameraMode, "landtop")) {
+            // Top-down over the same highest land point: with
+            // ENGINE_TERRAIN_DEBUG=ramp this is the seam check — tile borders
+            // are straight axis-aligned lines, so any height discontinuity
+            // between neighbouring tiles shows up as a straight colour step.
+            f32 peak[3] = {center[0], 0.0f, center[2]};
+            if (!worldHighestLandPoint(loadingAzgaarGetWorld(), peak)) {
+                peak[0] = center[0];
+                peak[2] = center[2];
+            }
+            f32 eye[3] = {peak[0], peak[1] + 5000.0f, peak[2] + 0.01f};
+            f32 up[3]  = {0.0f, 0.0f, -1.0f};
+            engine::renderer::rendererCameraLookAt(eye, peak, up);
         } else {
             f32 eye[3] = {center[0] + 500.0f, center[1] + 1590.0f, center[2] + 2700.0f};
             f32 up[3]  = {0.0f, 1.0f, 0.0f};
@@ -341,6 +425,7 @@ namespace game {
 
     void GameSystem::update() {
         engine::gltf::gltfUpdate(utils::nanos() / BILLION);
+        updateCameraDolly();
 
         // One-shot acceptance probe, fired once its tiles are up.
         if (!s_acceptanceRan && worldLoaded && s_terrain.initialized && s_terrain.tilesReady > 0)

@@ -174,6 +174,12 @@ bool heightmapTerrainCopyPhysicsTile(HeightmapTerrain* ht,
                                      i32 tileZ,
                                      float* outHeights);
 
+// Lock-safe steady-state footprint of the resident tiles (allocated CPU
+// grid bytes of the READY tiles; EMPTY tiles contribute nothing). outReady
+// (optional) receives the READY tile count. Validation / acceptance use
+// (phase 5 of plans/azgaar-terrain.md).
+size_t heightmapTerrainResidentBytes(const HeightmapTerrain* ht, u32* outReady = nullptr);
+
 // Bilinear sample of a regular height grid spanning [0, dim-1] in both axes
 // (endpoints included; coordinates are clamped to the grid). Shared by the
 // physics-grid generation, heightmapTerrainSample and off-thread consumers
