@@ -91,7 +91,7 @@ HLSL mirror of phase 5 (pre-compiled at build time per
 ### 7. Props / vegetation
 
 Port `AzgaarProps` scatter (biome `icons` × repetition weight × `iconsDensity`,
-Delaunay jitter, samples the *physics* grid for ground height — never the
+Delaunay jitter, samples the _physics_ grid for ground height — never the
 finer CPU grid) + billboard render pass, both backends.
 
 ### 8. Water, rivers, roads, settlements

@@ -1,0 +1,7 @@
+[
+  {"id": 1, "desc": "Port AzgaarHeightmapSource.{h,cpp} into c-game/game/azgaar/", "status": "done", "result": "Near-verbatim port, detail octaves 128/64m amp 1.2/0.8, build clean (verifier PASS)"},
+  {"id": 2, "desc": "Source lifetime in LoadingAzgaar + accessor", "status": "done", "result": "File-static s_source, init after azgaarWorldLoad seeded from mapName, accessor returns nullptr when not loaded"},
+  {"id": 3, "desc": "Wire terrain in Game::loadWorld + teardown ordering", "status": "done", "result": "heightmapTerrainInit+setActive replace TODO; teardown destroyData+setActive(nullptr)+plateauClear before releaseWorld; verified live: 25 tiles resident, tiles READY, clean shutdown (verifier PASS)"},
+  {"id": 4, "desc": "Minimal AzgaarSettlements plateau grid", "status": "done", "result": "Bucket grid + D8 query + kill switch; cleared only at world release (matches old engine)"},
+  {"id": 5, "desc": "Acceptance log: heightAt twice at fixed points bit-identical; heightmapTerrainSample diff vs heightAt < ~1m; shared border column bit-identical between adjacent READY tiles", "status": "done", "result": "One-shot probe in Game::update, gated until probe tiles + adjacent READY pair ready; runtime 'heightmap acceptance: PASS' reproduced by manager in headless run (diffs <=0.0001 m, border bit-identical, cross-run determinism)"}
+]

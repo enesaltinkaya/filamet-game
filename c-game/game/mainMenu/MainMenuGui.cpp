@@ -4,6 +4,7 @@
 #include "gameState/GameState.h"
 #include "credits/CreditsGui.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
+#include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "Engine.h"
 #include "Utils.h"
 
@@ -22,6 +23,8 @@ static void enterWorld(void) {
     gameSystem.loadWorld();  // blocks a moment on first entry only
     gameStateSet(STATE_PLAYING);
     engine::ecsSystemAddDeferred(100, &engine::flyingCameraSystem);
+    // no-op until a world sets an active HeightmapTerrain (phase 4)
+    engine::ecsSystemAddDeferred(100, &engine::heightmapTerrainSystem);
     engine::gui::guiRemove(&mainMenuGui);
 }
 
