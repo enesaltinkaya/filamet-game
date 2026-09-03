@@ -226,6 +226,12 @@ namespace game {
             debugMode = 11;
         } else if (probe && utils::strequals(probe, "clip")) {
             debugMode = 12;
+        } else if (probe && utils::strequals(probe, "vt")) {
+            debugMode = 13;
+        } else if (probe && utils::strequals(probe, "wpos")) {
+            debugMode = 17;
+        } else if (probe && utils::strequals(probe, "vspace")) {
+            debugMode = 18;
         }
         engine::heightmapTerrainRenderSetDebugView(debugMode);
     }

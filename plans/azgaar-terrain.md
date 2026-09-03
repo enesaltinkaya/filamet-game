@@ -109,16 +109,18 @@ fade (-10 m → 0).
 - Hard-won pitfalls recorded in `docs/lessons.md` (setBufferAt no-copy,
   tiling-texture sampling, photometric emissive).
 
-### 6. Diligent terrain render pass
+### 6. Diligent terrain render pass ⏸ (deferred — Diligent backend ignored for now)
 
 HLSL mirror of phase 5 (pre-compiled at build time per
 `plans/diligent-migration.md`). Same CPU lattice, same surface invariant.
+Revisit only if we return to the Diligent backend.
 
 ### 7. Props / vegetation
 
 Port `AzgaarProps` scatter (biome `icons` × repetition weight × `iconsDensity`,
 Delaunay jitter, samples the _physics_ grid for ground height — never the
-finer CPU grid) + billboard render pass, both backends.
+finer CPU grid) + billboard render pass (Filament path only; Diligent
+deferred with phase 6).
 
 ### 8. Water, rivers, roads, settlements
 
@@ -138,6 +140,8 @@ not needed for the terrain cut.
 
 ## Out of scope (for now)
 
+Diligent backend for all azgaar terrain work (decision: Diligent is ignored
+for the time being; Filament path only),
 Per-ring LOD ladder (needs per-ring CPU corner sets, not VS math),
 TAA/HiZ/motion-vector pipeline on the Filament path (scene-wide, separate
 workstream), `AzgaarWeather`.

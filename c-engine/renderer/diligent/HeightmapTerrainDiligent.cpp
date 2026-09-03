@@ -816,6 +816,16 @@ void fillFrameAttribs(void) {
     // Directional sun right after the frame attribs (same as the glTF fill).
     HLSL::PBRLightAttribs* light =
             reinterpret_cast<HLSL::PBRLightAttribs*>(static_cast<HLSL::PBRFrameAttribs*>(mapped) + 1);
+    if (getenv("ENGINE_TERRAIN_DUMP_CB")) {
+        const float4x4& mv = frame->Camera.mView;
+        utils::info("terrainCB: view %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+                mv._11, mv._12, mv._13, mv._14, mv._21, mv._22, mv._23, mv._24,
+                mv._31, mv._32, mv._33, mv._34, mv._41, mv._42, mv._43, mv._44);
+        const float4x4& pj = frame->Camera.mProj;
+        utils::info("terrainCB: proj %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+                pj._11, pj._12, pj._13, pj._14, pj._21, pj._22, pj._23, pj._24,
+                pj._31, pj._32, pj._33, pj._34, pj._41, pj._42, pj._43, pj._44);
+    }
     const f32* sunDir = engine::renderer::diligent::diligentSunDirection();
     const f32* sunColor = engine::renderer::diligent::diligentSunColor();
     f32 sunIntensity = engine::renderer::diligent::diligentSunIntensity();
