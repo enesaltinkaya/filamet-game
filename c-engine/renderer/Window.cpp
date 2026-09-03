@@ -4,11 +4,30 @@
 #include "logger/Logger.h"
 #include <SDL.h>
 
+#include <cstdlib>
+
 namespace engine {
 Window window = {};
 Input input = {};
 
 static char relativeMouse = 0;
+
+// automated runs (screenshot / renderdoc capture): create the window hidden so
+// nothing ever appears on screen — rendering still works, the swapchain just
+// presents to an unmapped window. Same gating as rendererInit in Renderer.cpp
+// (renderdoc is debug-only there).
+static bool automatedHiddenRun(void) {
+    const char* screenshot = getenv("ENGINE_SCREENSHOT");
+    if (screenshot && screenshot[0] != '\0') {
+        return true;
+    }
+#ifndef NDEBUG
+    if (getenv("ENGINE_RENDERDOC_CAPTURE")) {
+        return true;
+    }
+#endif
+    return false;
+}
 
 bool windowCreate(const char* title, u32 width, u32 height) {
     // SDL3: SDL_Init returns bool (true = success), the SDL2 '!= 0' check is inverted
@@ -29,8 +48,12 @@ bool windowCreate(const char* title, u32 width, u32 height) {
     }
 
     // SDL3: no position params (window is centered), shown by default, no ALLOW_HIGHDPI (always on)
-    window.handle = SDL_CreateWindow(title, (int)width, (int)height,
-                                     SDL_WINDOW_RESIZABLE);
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+    bool hidden = automatedHiddenRun();
+    if (hidden) {
+        flags |= SDL_WINDOW_HIDDEN;
+    }
+    window.handle = SDL_CreateWindow(title, (int)width, (int)height, flags);
     if (!window.handle) {
         utils::error("window: SDL_CreateWindow failed (%s)", SDL_GetError());
         SDL_Quit();
@@ -39,7 +62,7 @@ bool windowCreate(const char* title, u32 width, u32 height) {
 
     window.width = width;
     window.height = height;
-    utils::info("window: created %u x %u", width, height);
+    utils::info("window: created %u x %u%s", width, height, hidden ? " (hidden)" : "");
     return true;
 }
 
