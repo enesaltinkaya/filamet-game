@@ -20,6 +20,14 @@ static Backend backend = Backend::Filament;
 static RenderBackend* activeBackend = nullptr;
 static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
+static u32 screenshotStartFrame = 3;
+
+static void selectScreenshotStartFrame(void) {
+    if (const char* env = getenv("ENGINE_SCREENSHOT_FRAME")) {
+        const unsigned long v = strtoul(env, nullptr, 10);
+        screenshotStartFrame = v ? (u32)v : 1;
+    }
+}
 
 // ── screenshot (ENGINE_SCREENSHOT=path: capture one frame, quit) ────────────
 static const char* screenshotPath = nullptr;
@@ -42,7 +50,7 @@ bool rendererScreenshotShouldCapture(void) {
     if (!screenshotPath || screenshotDone) {
         return false;
     }
-    if (screenshotFrame++ < 3) {
+    if (screenshotFrame++ < screenshotStartFrame) {
         return false;  // let shaders/textures warm up first
     }
     screenshotDone = true;
@@ -87,6 +95,8 @@ bool rendererInit(const char* title, u32 width, u32 height) {
         return false;
     }
     utils::info("renderer: initialized (%s backend)", rendererBackendName());
+
+    selectScreenshotStartFrame();
 
     const char* screenshotEnv = getenv("ENGINE_SCREENSHOT");
     if (screenshotEnv && screenshotEnv[0] != '\0') {
