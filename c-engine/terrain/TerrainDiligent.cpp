@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <set>
 #include <string>
@@ -225,19 +226,29 @@ float4 main(in PSIn i) : SV_Target
 
     float3 geomNormal = normalize(i.Normal);
 
+    // unpainted area: procedural defaults from the engine pak — sand near
+    // sea level, snow high up, cliff on steep slopes, grass everywhere
+    // else (cliff overrides the others)
+    float slope = 1.0 - geomNormal.y;
+    float y = worldPos.y;
+
+    float snowW  = smoothstep(g_snowHeight - g_snowFade, g_snowHeight, y);
+    float sandW  = 1.0 - smoothstep(g_sandHeight, g_sandHeight + g_sandFade, y);
+    float grassW = (1.0 - snowW) * (1.0 - sandW);
+    float cliffW = smoothstep(g_cliffSlope, g_cliffSlope + g_cliffFade, slope);
+
+    // diagnostic (ENGINE_DEBUG_TERRAIN=dw|dwc): procedural default weights
+    if (g_diag > 10.5 && g_diag < 11.5)
+        return float4(sandW, grassW, snowW, 1.0);
+    if (g_diag > 11.5 && g_diag < 12.5)
+        return float4(cliffW, cliffW, cliffW, 1.0);
+    if (g_diag > 12.5 && g_diag < 13.5)
+        return float4(g_sandHeight / 100.0, g_snowHeight / 1000.0, g_styleTiling, 1.0);
+    if (g_diag > 13.5)
+        return float4(g_sandFade / 100.0, g_snowFade / 1000.0, g_cliffSlope, 1.0);
+
     if (wsum < 0.004)
     {
-        // unpainted area: procedural defaults from the engine pak — sand near
-        // sea level, snow high up, cliff on steep slopes, grass everywhere
-        // else (cliff overrides the others)
-        float slope = 1.0 - geomNormal.y;
-        float y = worldPos.y;
-
-        float snowW  = smoothstep(g_snowHeight - g_snowFade, g_snowHeight, y);
-        float sandW  = 1.0 - smoothstep(g_sandHeight, g_sandHeight + g_sandFade, y);
-        float grassW = (1.0 - snowW) * (1.0 - sandW);
-        float cliffW = smoothstep(g_cliffSlope, g_cliffSlope + g_cliffFade, slope);
-
         float open = 1.0 - cliffW;
         accumulateDefault(sandW * open, 0.0, suv, wsum, albedo, rough, ao, nAcc);
         accumulateDefault(grassW * open, 1.0, suv, wsum, albedo, rough, ao, nAcc);
@@ -269,7 +280,26 @@ float4 main(in PSIn i) : SV_Target
             return float4(clamp(wsum, 0.0, 1.0), 0.0, 0.0, 1.0);               // splat coverage
         if (g_diag < 4.5)
             return float4(N * 0.5 + 0.5, 1.0);                                 // final normal
-        return float4(geomNormal * 0.5 + 0.5, 1.0);                           // geometry normal
+        if (g_diag < 5.5)
+            return float4(geomNormal * 0.5 + 0.5, 1.0);                       // geometry normal
+        if (g_diag < 6.5)
+            return float4(clamp(abs(w0.rgb), 0.0, 1.0), 1.0);                 // group0 rgb weights
+        if (g_diag < 7.5) {
+            float a = clamp(w0.a, 0.0, 1.0);                                   // group0 alpha weight
+            return float4(a, a, a, 1.0);
+        }
+        if (g_diag < 8.5)
+            return float4(clamp(float3(layer0, layer1, layer2) / 17.0, 0.0, 1.0),  // tile layer indices
+                    1.0);
+        if (g_diag < 9.5) {
+            float a = clamp(w1.a, 0.0, 1.0);                                   // group1 alpha weight
+            return float4(a, a, a, 1.0);
+        }
+        if (g_diag < 10.5) {
+            float a = clamp(w2.a, 0.0, 1.0);                                   // group2 alpha weight
+            return float4(a, a, a, 1.0);
+        }
+        return float4(0.0, 0.0, 0.0, 1.0);                                    // unreachable
     }
 
     // lighting calibrated against the filament path's defaults: sun 110000
@@ -374,8 +404,7 @@ bool terrainStartDiligent(void) {
 
     CreateUniformBuffer(device, sizeof(float4x4), "terrain frame VS constants", &frameVSBuffer);
     CreateUniformBuffer(device, 3 * sizeof(float4) + sizeof(float), "terrain frame PS constants", &framePSBuffer);
-    CreateUniformBuffer(device, sizeof(TerrainMaterialCpu), "terrain material constants", &materialBuffer);
-    if (!frameVSBuffer || !framePSBuffer || !materialBuffer) {
+    if (!frameVSBuffer || !framePSBuffer) {
         utils::warn("terrain: constant buffer creation failed");
         return false;
     }
@@ -437,8 +466,14 @@ bool terrainFinishDiligent(const TerrainParams& params) {
         return false;
     }
 
-    // material constants (written once); the struct mirrors the GPU cbuffer's
-    // 16-byte int array strides — see TerrainMaterialCpu
+    // material constants are static per world load: upload once through an
+    // IMMUTABLE buffer. CreateUniformBuffer defaults to USAGE_DYNAMIC, whose
+    // Vulkan implementation sub-allocates each Map from a per-frame ring — a
+    // write-once-at-init DYNAMIC buffer gets clobbered as soon as the ring
+    // wraps (the per-frame frame/sun constants and gui mappings reuse the
+    // region, so the shader read viewProj floats as sandHeight/snowHeight and
+    // stale heap bytes as tile tables — the default painting flickered
+    // between sand/grass/flat colors while the camera moved)
     {
         TerrainMaterialCpu material{};
         for (int g = 0; g < TerrainParams::kMaxGroups; g++) {
@@ -457,13 +492,10 @@ bool terrainFinishDiligent(const TerrainParams& params) {
         material.cliffFade = params.cliffFade;
         material.styleTiling = params.styleTiling;
 
-        void* mapped = nullptr;
-        context->MapBuffer(materialBuffer, MAP_WRITE, MAP_FLAG_NONE, mapped);
-        if (mapped) {
-            memcpy(mapped, &material, sizeof(material));
-            context->UnmapBuffer(materialBuffer, MAP_WRITE);
-        } else {
-            utils::warn("terrain: material constants map failed");
+        CreateUniformBuffer(device, sizeof(TerrainMaterialCpu), "terrain material constants",
+                &materialBuffer, USAGE_IMMUTABLE, BIND_UNIFORM_BUFFER, CPU_ACCESS_NONE, &material);
+        if (!materialBuffer) {
+            utils::warn("terrain: material constants buffer failed");
             return false;
         }
     }
@@ -515,11 +547,9 @@ bool terrainFinishDiligent(const TerrainParams& params) {
         return false;
     }
 
-    // all shader resources are static (single resource each), so assign them
-    // on the pipeline state BEFORE the SRB is created: CreateShaderResourceBinding
-    // (InitStaticResources=true) snapshots the PSO's static cache into the SRB
-    // at creation time, and anything set afterwards is invisible to the SRB
-    // ("No resource is assigned to static shader variable" at commit)
+    // static resources (single resource each) are assigned on the PSO before
+    // the SRB is created; CreateShaderResourceBinding(InitStaticResources=true)
+    // snapshots the PSO's static cache into the SRB
     auto setStatic = [&](const char* name, SHADER_TYPE type, IDeviceObject* resource) {
         IShaderResourceVariable* var = terrainPSO->GetStaticVariableByName(type, name);
         if (!var) {
@@ -549,6 +579,23 @@ bool terrainFinishDiligent(const TerrainParams& params) {
     if (!terrainSRB) {
         utils::warn("terrain: SRB creation failed");
         return false;
+    }
+
+    if (const char* dumpPath = getenv("ENGINE_DUMP_TERRAIN_SPIRV")) {
+        auto dump = [&](IShader* shader, const char* suffix) {
+            const void* code = nullptr;
+            Uint64 size = 0;
+            shader->GetBytecode(&code, size);
+            std::string path = std::string(dumpPath) + suffix;
+            FILE* f = fopen(path.c_str(), "wb");
+            if (f) {
+                fwrite(code, 1, (size_t)size, f);
+                fclose(f);
+                utils::info("terrain: dumped %s", path.c_str());
+            }
+        };
+        dump(vertexShader, ".vs.spv");
+        dump(pixelShader, ".ps.spv");
     }
 
     resourcesReady = true;
@@ -637,6 +684,15 @@ void terrainDiligentDrawWorld(IDeviceContext* ctx, const Diligent::GLTF::Model& 
             else if (strcmp(dbg, "wsum") == 0) diag = 3.0f;   // splat coverage
             else if (strcmp(dbg, "norm") == 0) diag = 4.0f;   // final normal
             else if (strcmp(dbg, "geomn") == 0) diag = 5.0f;  // geometry normal
+            else if (strcmp(dbg, "w0") == 0) diag = 6.0f;     // group0 rgb weights
+            else if (strcmp(dbg, "wa") == 0) diag = 7.0f;     // group0 alpha weight
+            else if (strcmp(dbg, "lyr") == 0) diag = 8.0f;    // tile layer indices
+            else if (strcmp(dbg, "w1a") == 0) diag = 9.0f;    // group1 alpha weight
+            else if (strcmp(dbg, "w2a") == 0) diag = 10.0f;   // group2 alpha weight
+            else if (strcmp(dbg, "dw") == 0) diag = 11.0f;    // default sand/grass/snow weights
+            else if (strcmp(dbg, "dwc") == 0) diag = 12.0f;   // default cliff weight
+            else if (strcmp(dbg, "mat") == 0) diag = 13.0f;   // sandH/100, snowH/1000, tiling
+            else if (strcmp(dbg, "mat2") == 0) diag = 14.0f;  // sandF/100, snowF/1000, cliffSlope
         }
 
         MapHelper<FramePS> framePS(ctx, framePSBuffer, MAP_WRITE, MAP_FLAG_DISCARD);
