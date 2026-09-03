@@ -22,6 +22,7 @@
 #include <GLTFLoader.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <set>
 #include <string>
@@ -295,6 +296,28 @@ static RefCntAutoPtr<IBuffer> materialBuffer;
 static RefCntAutoPtr<ISampler> splatSampler;
 static RefCntAutoPtr<ISampler> styleSampler;
 
+// CPU mirror of the MaterialPS cbuffer. HLSC cbuffer packing aligns int array
+// ELEMENTS to 16-byte strides (arrays align to max(element, 16)), while a plain
+// C int array is packed 4-byte contiguous — a memcpy of the packed layout makes
+// the GPU's g_tileLayerX[tile] read the CPU's tileLayer[tile*4], and
+// g_tileLayer1/2 + g_styleRemap read past the buffer end (undefined UBO reads).
+// Pad every int to 16 bytes so the CPU and GPU layouts match element for
+// element; the buffer must be sized with sizeof(TerrainMaterialCpu).
+struct alignas(16) TerrainInt16 {
+    int v;
+    int pad[3];
+};
+struct alignas(16) TerrainMaterialCpu {
+    float sandHeight, sandFade, snowHeight, snowFade;
+    float cliffSlope, cliffFade, styleTiling, pad0;
+    TerrainInt16 tileLayer[TerrainParams::kMaxGroups][TerrainParams::kMaxTiles];
+    TerrainInt16 styleRemap[12];
+};
+static_assert(offsetof(TerrainMaterialCpu, tileLayer) == 32,
+        "tileLayer must start where the GPU cbuffer's float section ends");
+static_assert(offsetof(TerrainMaterialCpu, styleRemap) == 32 + sizeof(TerrainMaterialCpu::tileLayer),
+        "styleRemap must follow the three splat tables");
+
 static RefCntAutoPtr<ITexture> splatTilesTex;
 static RefCntAutoPtr<ITexture> styleAlbedoTex;
 static RefCntAutoPtr<ITexture> styleNormalTex;
@@ -351,8 +374,7 @@ bool terrainStartDiligent(void) {
 
     CreateUniformBuffer(device, sizeof(float4x4), "terrain frame VS constants", &frameVSBuffer);
     CreateUniformBuffer(device, 3 * sizeof(float4) + sizeof(float), "terrain frame PS constants", &framePSBuffer);
-    CreateUniformBuffer(device, 4 * 100 * sizeof(int) + 12 * sizeof(int) + 8 * sizeof(float),
-            "terrain material constants", &materialBuffer);
+    CreateUniformBuffer(device, sizeof(TerrainMaterialCpu), "terrain material constants", &materialBuffer);
     if (!frameVSBuffer || !framePSBuffer || !materialBuffer) {
         utils::warn("terrain: constant buffer creation failed");
         return false;
@@ -415,17 +437,18 @@ bool terrainFinishDiligent(const TerrainParams& params) {
         return false;
     }
 
-    // material constants (written once)
+    // material constants (written once); the struct mirrors the GPU cbuffer's
+    // 16-byte int array strides — see TerrainMaterialCpu
     {
-        struct MaterialCpu {
-            float sandHeight, sandFade, snowHeight, snowFade;
-            float cliffSlope, cliffFade, styleTiling, pad0;
-            int tileLayer[TerrainParams::kMaxGroups][TerrainParams::kMaxTiles];
-            int styleRemap[12];
-        };
-        MaterialCpu material{};
-        memcpy(material.tileLayer, params.tileLayer, sizeof(material.tileLayer));
-        memcpy(material.styleRemap, params.styleRemap, sizeof(material.styleRemap));
+        TerrainMaterialCpu material{};
+        for (int g = 0; g < TerrainParams::kMaxGroups; g++) {
+            for (int t = 0; t < TerrainParams::kMaxTiles; t++) {
+                material.tileLayer[g][t].v = params.tileLayer[g][t];
+            }
+        }
+        for (int i = 0; i < 12; i++) {
+            material.styleRemap[i].v = params.styleRemap[i];
+        }
         material.sandHeight = params.sandHeight;
         material.sandFade = params.sandFade;
         material.snowHeight = params.snowHeight;

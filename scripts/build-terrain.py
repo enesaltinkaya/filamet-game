@@ -37,7 +37,7 @@ except ImportError:
 #  Configuration
 # ═══════════════════════════════════════════════════════════════════════════
 BLEND_FILE     = Path("/home/enes/Projects/assets/Scenes/Terrain/oghuzlands/oghuzlands.blend")
-TERRAIN_CHUNKER = Path("/home/enes/Projects/c/game-001-cpp/tools/terrain-chunker/terrain-chunker")
+TERRAIN_CHUNKER = Path("/home/enes/Projects/c/filament-game/tools/terrain-chunker/terrain-chunker")
 GLTFPACK       = Path("/home/enes/Projects/c/cpp-thirdparty/meshoptimizer/git/build-linux/gltfpack")
 TOKTX          = Path("/home/enes/Sdks/ktx-4.4.2/bin/toktx")
 TOKTX_LIB_PATH = "/home/enes/Sdks/ktx-4.4.2/lib"
