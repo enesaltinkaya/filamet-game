@@ -11,6 +11,8 @@
 
 #include <basisu_transcoder.h>
 
+#include "stb/git/stb_image.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -19,13 +21,15 @@
 
 namespace engine::terrain {
 
-// ── KTX2 → BC7 decode (backend-agnostic) ───────────────────────────────────
+// ── KTX2/BC7 + PNG decode (backend-agnostic) ────────────────────────────────
 // Each file contributes one layer; all files must share dimensions and level
 // count (tiles are 1024x1024, styles are 2048x2048 — uniform per array).
-// Two payload kinds, picked per file by vkFormat:
-//   baked BC7 (VK_FORMAT_BC7_*_BLOCK, produced offline by scripts/ktx2bc7.c)
+// Three payload kinds, picked per file:
+//   baked BC7 KTX2 (VK_FORMAT_BC7_*_BLOCK, produced offline by scripts/ktx2bc7.c)
 //     → level bytes are already BC7 blocks, copied as-is
-//   UASTC (build-terrain.py toktx output) → transcoded to BC7 here
+//   UASTC KTX2 (build-terrain.py toktx output, style/detail textures)
+//     → transcoded to BC7 here
+//   PNG (build-terrain.py splat tiles) → decoded to raw RGBA8, one mip level
 // UASTC transcoding a layer takes tens of milliseconds of pure CPU (real BC7
 // encoding per 4x4 block), so layers run in parallel on the default thread
 // pool; GPU uploads stay on the main thread.
@@ -33,6 +37,7 @@ struct LayerJob {
     const std::string* file;
     std::vector<TerrainLevelBlocks> levels;
     uint32_t vkFormat = 0;
+    bool rgba8 = false;  // raw RGBA8 pixels (PNG), single level
 };
 
 static constexpr uint32_t kVkFormatBC7Unorm = 145;
@@ -55,6 +60,24 @@ static void loadLayer(void* userData) {
         return;
     }
     const uint8_t* bytes = (const uint8_t*)data.data;
+
+    // lossless splat tiles ship as PNGs (UASTC/BC7 KTX2 was both larger and
+    // artifact-visible for low-entropy weight maps): decode to raw RGBA8
+    static const uint8_t pngMagic[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (data.size >= 8 && !memcmp(bytes, pngMagic, 8)) {
+        int pw = 0, ph = 0, comp = 0;
+        uint8_t* pixels = stbi_load_from_memory(bytes, (int)data.size, &pw, &ph, &comp, 4);
+        if (!pixels) {
+            utils::warn("terrain: %s is not a decodable PNG", job->file->c_str());
+        } else {
+            job->levels.resize(1);
+            job->levels[0] = {pixels, (size_t)pw * (size_t)ph * 4u, (uint32_t)pw, (uint32_t)ph};
+            job->rgba8 = true;
+            job->vkFormat = 0;
+        }
+        utils::stringDestroy(&data);
+        return;
+    }
 
     // minimal KTX2 container parse (little-endian, single 2D image)
     static const uint8_t ktx2Magic[12] = {0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, '\r', '\n', 0x1A, '\n'};
@@ -183,6 +206,7 @@ static bool decodeArray(const std::vector<std::string>& files, bool srgb, Terrai
     // failure or dimension mismatch anywhere → reject the whole array
     for (size_t layer = 0; layer < jobs.size(); layer++) {
         if (jobs[layer].levels.empty() ||
+                jobs[layer].rgba8 != jobs[0].rgba8 ||
                 jobs[layer].vkFormat != jobs[0].vkFormat ||
                 jobs[layer].levels.size() != jobs[0].levels.size() ||
                 jobs[layer].levels[0].width != jobs[0].levels[0].width ||
@@ -209,6 +233,7 @@ static bool decodeArray(const std::vector<std::string>& files, bool srgb, Terrai
     }
 
     out.srgb = srgb;
+    out.rgba8 = jobs[0].rgba8;
     out.layers.resize(jobs.size());
     for (size_t layer = 0; layer < jobs.size(); layer++) {
         out.layers[layer] = std::move(jobs[layer].levels);

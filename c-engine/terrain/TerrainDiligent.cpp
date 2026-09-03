@@ -424,20 +424,26 @@ bool terrainArrayDiligent(TerrainArrayKind kind, TerrainDecodedArray& array) {
     texDesc.Type = RESOURCE_DIM_TEX_2D_ARRAY;
     texDesc.Usage = USAGE_IMMUTABLE;
     texDesc.BindFlags = BIND_SHADER_RESOURCE;
-    texDesc.Format = array.srgb ? TEX_FORMAT_BC7_UNORM_SRGB : TEX_FORMAT_BC7_UNORM;
+    // PNG splat tiles decode to raw RGBA8 (lossless); KTX2 arrays stay BC7
+    texDesc.Format = array.rgba8
+            ? (array.srgb ? TEX_FORMAT_RGBA8_UNORM_SRGB : TEX_FORMAT_RGBA8_UNORM)
+            : (array.srgb ? TEX_FORMAT_BC7_UNORM_SRGB : TEX_FORMAT_BC7_UNORM);
     texDesc.Width = array.layers[0][0].width;
     texDesc.Height = array.layers[0][0].height;
     texDesc.MipLevels = (Uint32)levelCount;
     texDesc.ArraySize = (Uint32)layerCount;
 
-    // subresource = mip + layer * mipLevels; BC7 stride = one row of blocks
+    // subresource = mip + layer * mipLevels; BC7 stride = one row of blocks,
+    // RGBA8 = one row of pixels
     std::vector<TextureSubResData> subresources(layerCount * levelCount);
     for (size_t layer = 0; layer < layerCount; layer++) {
         for (size_t mip = 0; mip < levelCount; mip++) {
             const TerrainLevelBlocks& level = array.layers[layer][mip];
-            const size_t blockCols = (level.width + 3) / 4;
+            const size_t stride = array.rgba8
+                    ? (size_t)level.width * 4u
+                    : ((level.width + 3) / 4) * 16;
             subresources[mip + layer * levelCount] =
-                    TextureSubResData(level.blocks, blockCols * 16);
+                    TextureSubResData(level.blocks, stride);
         }
     }
     TextureData initData(subresources.data(), (Uint32)subresources.size());

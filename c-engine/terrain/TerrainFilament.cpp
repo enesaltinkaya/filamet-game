@@ -54,6 +54,9 @@ bool terrainStartFilament(const char* materialPath) {
 }
 
 static Texture::InternalFormat internalFormat(const TerrainDecodedArray& array) {
+    if (array.rgba8) {
+        return array.srgb ? Texture::InternalFormat::SRGB8_A8 : Texture::InternalFormat::RGBA8;
+    }
     return array.srgb ? Texture::InternalFormat::SRGB_ALPHA_BPTC_UNORM
                       : Texture::InternalFormat::RGBA_BPTC_UNORM;
 }
@@ -63,13 +66,10 @@ bool terrainArrayFilament(TerrainArrayKind kind, TerrainDecodedArray& array) {
         return false;
     }
     if (!Texture::isTextureFormatSupported(*engine, internalFormat(array))) {
-        utils::warn("terrain: BC7 not supported by backend");
+        utils::warn("terrain: %s not supported by backend",
+                array.rgba8 ? "RGBA8" : "BC7");
         return false;
     }
-
-    const Texture::CompressedType compressedType = array.srgb
-            ? Texture::CompressedType::SRGB_ALPHA_BPTC_UNORM
-            : Texture::CompressedType::RGBA_BPTC_UNORM;
 
     Texture* texture = Texture::Builder()
                                .width(array.layers[0][0].width)
@@ -84,12 +84,24 @@ bool terrainArrayFilament(TerrainArrayKind kind, TerrainDecodedArray& array) {
     }
 
     // ownership of the blocks transfers to the upload descriptors (freed by
-    // bufferFree once the GPU consumed them)
+    // bufferFree once the GPU consumed them). Compressed levels carry the
+    // whole-level size as "stride"; uncompressed RGBA8 needs a per-row pixel
+    // stride and an uncompressed descriptor
     for (size_t layer = 0; layer < array.layers.size(); layer++) {
         for (size_t level = 0; level < array.layers[layer].size(); level++) {
             TerrainLevelBlocks& l = array.layers[layer][level];
-            Texture::PixelBufferDescriptor descriptor(l.blocks, l.byteCount, compressedType,
-                    l.byteCount, bufferFree);
+            Texture::PixelBufferDescriptor descriptor;
+            if (array.rgba8) {
+                descriptor = Texture::PixelBufferDescriptor(l.blocks, l.byteCount,
+                        Texture::Format::RGBA, Texture::Type::UBYTE, 4u, 0u, 0u,
+                        l.width, bufferFree);
+            } else {
+                const Texture::CompressedType compressedType = array.srgb
+                        ? Texture::CompressedType::SRGB_ALPHA_BPTC_UNORM
+                        : Texture::CompressedType::RGBA_BPTC_UNORM;
+                descriptor = Texture::PixelBufferDescriptor(l.blocks, l.byteCount,
+                        compressedType, l.byteCount, bufferFree);
+            }
             texture->setImage(*engine, (uint32_t)level, 0, 0, (uint32_t)layer, l.width, l.height, 1,
                     std::move(descriptor));
             l.blocks = nullptr;

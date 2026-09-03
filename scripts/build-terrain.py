@@ -4,9 +4,15 @@ Terrain asset pipeline: .blend → chunked GLB + splat/style KTX2 + manifest.
 
 Pipeline (standalone mode):
     blender → terrain-chunker (10x10) → gltfpack
-    painted splat UDIM tiles → UASTC KTX2 → baked to BC7 KTX2 (ktx2bc7)
+    painted splat UDIM tiles → lossless PNG copy (RGBA8 at load, no KTX2)
     style detail textures → merged 2K albedo/normal KTX2 (UASTC → BC7)
     manifest.json tying layers/chunks/styles together
+
+Splat tiles ship as straight PNG copies: weight maps are low-entropy, and
+UASTC/BC7 KTX2 came out ~1.4 MB per tile (vs ~10 KB PNG) with visible
+compression artifacts, so the engine decodes the PNGs to RGBA8 at load
+(terrain loadLayer). Style/detail textures stay KTX2 (high-entropy 4K sets,
+where BC7 actually wins).
 
 BC7 baking (scripts/ktx2bc7.c, driven by this script) transcodes the toktx
 UASTC output to raw BC7 blocks offline via libktx — the same basisu engine
@@ -36,13 +42,13 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════
 #  Configuration
 # ═══════════════════════════════════════════════════════════════════════════
-BLEND_FILE     = Path("/home/enes/Projects/assets/Scenes/Terrain/oghuzlands/oghuzlands.blend")
+BLEND_FILE      = Path("/home/enes/Projects/assets/Scenes/Terrain/oghuzlands/oghuzlands.blend")
 TERRAIN_CHUNKER = Path("/home/enes/Projects/c/filament-game/tools/terrain-chunker/terrain-chunker")
-GLTFPACK       = Path("/home/enes/Projects/c/cpp-thirdparty/meshoptimizer/git/build-linux/gltfpack")
-TOKTX          = Path("/home/enes/Sdks/ktx-4.4.2/bin/toktx")
-TOKTX_LIB_PATH = "/home/enes/Sdks/ktx-4.4.2/lib"
-KTX_ROOT       = TOKTX.parent.parent          # SDK include/ + lib/ for ktx2bc7
-TEXTURE_ROOT   = Path("/home/enes/Projects/assets/textures")
+GLTFPACK        = Path("/home/enes/Projects/c/cpp-thirdparty/meshoptimizer/git/build-linux/gltfpack")
+TOKTX           = Path("/home/enes/Sdks/ktx-4.4.2/bin/toktx")
+TOKTX_LIB_PATH  = "/home/enes/Sdks/ktx-4.4.2/lib"
+KTX_ROOT        = TOKTX.parent.parent          # SDK include/ + lib/ for ktx2bc7
+TEXTURE_ROOT    = Path("/home/enes/Projects/assets/textures")
 
 CHUNK_GRID     = 10        # chunk grid == UDIM grid (1 chunk : 1 tile per group)
 UDIM_GRID      = 10
@@ -420,12 +426,14 @@ def newestMtime(splatInfoPath: Path, textureIndex: dict, splatInfo: dict) -> int
 
 
 def convertSplatTiles(splatInfo: dict):
-    """Each painted UDIM tile → one UASTC KTX2 layer file. Returns per-group
-    tile lists in layer order (layer index = list position, globally offset).
-    Only v=one-minus / u=same orientation is supported (asserted by the
-    caller): exported in-tile V is GPU(top-row)-correct, so no flips here."""
+    """Each painted UDIM tile → a lossless copy (PNG) in the pak. Weight maps
+    are low-entropy: UASTC/BC7 KTX2 produced ~1.4 MB/tile (vs ~10 KB PNG) and
+    left visible compression artifacts, so the engine decodes the PNGs to
+    RGBA8 at load. Returns per-group tile lists in layer order (layer index =
+    list position, globally offset). Only v=one-minus / u=same orientation is
+    supported (asserted by the caller): exported in-tile V is
+    GPU(top-row)-correct, so no flips here."""
     blendDir = BLEND_FILE.parent
-    toktxEnv = {**os.environ, "LD_LIBRARY_PATH": TOKTX_LIB_PATH}
     groupsOut = []
     globalLayer = 0
 
@@ -440,19 +448,15 @@ def convertSplatTiles(splatInfo: dict):
         for png in sorted(groupDir.glob("*.png")):
             udim = int(png.stem.split(".")[-1])
             if png.stat().st_size <= NOOP_MAX_SIZE:
-                stale = outGroupDir / f"{udim}.ktx2"
+                stale = outGroupDir / f"{udim}.png"
                 if stale.exists():
                     stale.unlink()
                 continue
 
             outGroupDir.mkdir(parents=True, exist_ok=True)
-            dst = outGroupDir / f"{udim}.ktx2"
+            dst = outGroupDir / f"{udim}.png"
             if not dst.exists() or dst.stat().st_mtime < png.stat().st_mtime:
-                run(TOKTX, "--genmipmap", "--2d", "--target_type", "RGBA",
-                    "--encode", "uastc", "--zcmp", "19",
-                    "--assign_oetf", "linear", "--assign_primaries", "none",
-                    dst, png, env=toktxEnv)
-            bakeBc7(dst)
+                dst.write_bytes(png.read_bytes())
 
             tiles.append({
                 "udim": udim,
@@ -460,6 +464,10 @@ def convertSplatTiles(splatInfo: dict):
                 "layer": globalLayer,
             })
             globalLayer += 1
+
+        # pre-PNG-era KTX2 splat outputs are dead weight in the pak
+        for staleKtx in outGroupDir.glob("*.ktx2"):
+            staleKtx.unlink()
 
         groupsOut.append({"name": groupName, "channels": channels, "tiles": tiles})
         print(f"splat {groupName}: {len(tiles)} painted tiles")

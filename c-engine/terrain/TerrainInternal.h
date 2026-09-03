@@ -22,9 +22,11 @@ namespace engine::terrain {
 
 enum class TerrainArrayKind : u8 { SplatTiles, StyleAlbedo, StyleNormal, DefaultAlbedo, DefaultNormal };
 
-// one decoded KTX2 file set → a BC7 2D array; layers[layer][mip]
+// one decoded texture file set → a 2D array; layers[layer][mip]. Payload is
+// either BC7 blocks (KTX2: baked or UASTC-transcoded) or raw RGBA8 pixels
+// (PNG splat tiles, single mip level — set rgba8)
 struct TerrainLevelBlocks {
-    u8* blocks;  // malloc'd BC7 blocks
+    u8* blocks;  // malloc'd BC7 blocks or raw RGBA8 pixels
     size_t byteCount;
     u32 width;
     u32 height;
@@ -32,6 +34,7 @@ struct TerrainLevelBlocks {
 struct TerrainDecodedArray {
     std::vector<std::vector<TerrainLevelBlocks>> layers;
     bool srgb = false;
+    bool rgba8 = false;
 };
 
 struct TerrainParams {

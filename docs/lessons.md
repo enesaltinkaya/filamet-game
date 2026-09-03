@@ -77,3 +77,22 @@ dynamic — re-mapping them every draw is the correct pattern.
   memory behind it was clobbered.
 - **Texture array upload / mip layout:** subresource order and BC7 strides
   were correct all along (splat tiles and styles always rendered fine).
+
+---
+
+## 2026-09 — lossy KTX2 on splat weight maps is bigger AND visibly worse than PNG
+
+**Rule:** low-entropy painted maps (splat/weight tiles, masks) must not go
+through lossy texture codecs. UASTC zcmp19 + BC7 baking a 1024x1024 splat
+UDIM tile produced ~1.4 MB KTX2 vs ~10–130 KB PNG (17× for the whole
+splat set) with visible compression artifacts at blend edges. Ship the PNGs
+lossless; the engine decodes them to RGBA8 at load (`Terrain.cpp
+loadLayer` PNG branch, `TerrainDecodedArray.rgba8`, backends build an
+R8G8B8A8/TEX_FORMAT_RGBA8 array with a single mip level). KTX2+BC7 is
+still right for high-entropy PBR sets (style albedo/normal), where it wins.
+
+**Incident:** small grid-like glitches on painted terrain areas traced to
+the UASTC→BC7 splat pipeline; file-size comparison (roads1: 473 KB PNG vs
+8.1 MB KTX2) made the switch to straight PNG copies in `build-terrain.py
+convertSplatTiles` (old `.ktx2` splat outputs are pruned, manifest paths
+flip to `.png`).
