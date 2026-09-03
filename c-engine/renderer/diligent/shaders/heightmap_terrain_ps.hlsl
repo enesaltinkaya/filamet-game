@@ -241,7 +241,7 @@ PSTerrainOut main(in PSTerrainIn vs)
         } else {
             // 13 = cbuffer's view-matrix translation row * 0.01 (compare to
             // CPU's DiligentBackend::viewMatrix(); identity would read 0).
-            probe.Color = float4(g_Frame.Camera.mView[3] * 0.01, 1.0);
+            probe.Color = float4(g_Frame.Camera.mView[3].xyz * 0.01, 1.0);
         }
         return probe;
     }

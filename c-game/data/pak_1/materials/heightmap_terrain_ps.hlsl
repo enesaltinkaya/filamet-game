@@ -234,10 +234,14 @@ PSTerrainOut main(in PSTerrainIn vs)
             probe.Color = float4(vs.WorldPos * 0.0001, 1.0);
         } else if (debugView < 11.5) {
             probe.Color = float4(vs.Normal * 0.5 + 0.5, 1.0);
-        } else {
+        } else if (debugView < 12.5) {
             float4 clip = mul(float4(vs.WorldPos, 1.0), g_Frame.Camera.mViewProj);
             probe.Color = float4(clip.xy / max(clip.w, 1e-6) * 0.5 + 0.5,
                     clip.w > 0.0 ? 1.0 : 0.0, 1.0);
+        } else {
+            // 13 = cbuffer's view-matrix translation row * 0.01 (compare to
+            // CPU's DiligentBackend::viewMatrix(); identity would read 0).
+            probe.Color = float4(g_Frame.Camera.mView[3].xyz * 0.01, 1.0);
         }
         return probe;
     }
