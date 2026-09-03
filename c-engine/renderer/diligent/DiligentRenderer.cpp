@@ -7,11 +7,13 @@
 #include "Graphics/GraphicsEngine/interface/SwapChain.h"
 #include "Platforms/interface/NativeWindow.h"
 #include "Utils.h"
+#include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gltf/GltfInternal.h"
 #include "gui/GuiManager.h"
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/Window.h"
+#include "renderer/diligent/HeightmapTerrainDiligent.h"
 
 #include <SDL.h>
 #include <cmath>
@@ -181,7 +183,14 @@ public:
             utils::warn("cam: fmt color=%d depth=%d bufferCount=%d", (int)swapChain->GetDesc().ColorBufferFormat,
                     (int)swapChain->GetDesc().DepthBufferFormat, (int)swapChain->GetDesc().BufferCount);
         }
+        // heightmap terrain: budgeted GPU tile uploads (mirrors
+        // FilamentRenderer::draw; the pass lazily inits on the first update)
+        heightmapTerrainRenderUpdate();
+
         worldDraw(context);
+        // terrain draws over the same render targets after the glTF PBR draw;
+        // it calls setWorldDrew(true) itself when it actually drew
+        heightmapTerrainDiligentDraw();
 
         bool uiDrew = false;
         if (gui::guiIsActive()) {
@@ -269,6 +278,9 @@ public:
     }
 
     void destroy() override {
+        // terrain GPU state first (its borrowed glTF GGX LUT texture view
+        // must be released while the glTF pass — and the device — still live)
+        heightmapTerrainRenderDestroy();
         guiOnBackendDestroy();
         if (context) {
             context->Flush();

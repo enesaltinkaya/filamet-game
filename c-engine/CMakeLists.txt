@@ -176,6 +176,7 @@ target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 # pch's compilation cost — skip the shared pch for them
 set_source_files_properties(
     renderer/diligent/DiligentRenderer.cpp
+    renderer/diligent/HeightmapTerrainDiligent.cpp
     gltf/GltfDiligent.cpp
     gui/GuiDiligent.cpp
     PROPERTIES SKIP_PRECOMPILE_HEADERS ON
@@ -208,4 +209,32 @@ if (EXISTS ${MATC})
 else ()
     message(WARNING "matc not found at ${MATC}; using the committed heightmap_terrain.filamat")
 endif ()
+
+# ── heightmap terrain shaders (diligent pass, compiled at pass init) ─────
+# The .hlsl sources are shipped to the pak so the pass can read them with
+# dataManagerRead (same "source in-tree, artifact in pak" pattern as the
+# matc step above).
+set(HEIGHTMAP_TERRAIN_HLSL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_vs.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
+)
+set(HEIGHTMAP_TERRAIN_HLSL_OUT
+    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_vs.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
+)
+add_custom_command(
+    OUTPUT ${HEIGHTMAP_TERRAIN_HLSL_OUT}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_vs.hlsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_vs.hlsl
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
+    DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_SRC}
+    COMMENT "copy heightmap terrain .hlsl sources into pak_1"
+    VERBATIM
+)
+add_custom_target(heightmap_terrain_hlsl DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_OUT})
+add_dependencies(c-engine heightmap_terrain_hlsl)
 

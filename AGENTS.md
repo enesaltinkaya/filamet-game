@@ -2,7 +2,8 @@
 
 Everything related to project is either here /media/extra/Projects/c/filament-game or in thirdparty directory /home/enes/Projects/c/cpp-thirdparty.
 
-Dont use "find / ..."
+You are not allowed to use "find / ...".
+You are not allowed to use git.
 
 use `./scripts/run.sh` (or its variants) to launch the game.
 `scripts/run.sh` runs clear under set -e and it fails when TERM env variable is unset.

@@ -2,177 +2,132 @@
 
 ## brainstorm
 
-Core difficulty: The source adapter is tiny (~160 lines) but its settlement-plateau dependency is entangled with phase-7/8 machinery (building instances, props pass, Vulkan) that doesn't exist here yet; the plateau query is backed by lazily-built global mutable state whose construction is what must be extracted, while keeping `heightAt` a pure, thread-safe function of (x,z) callable from the background builder thread.
+## Core difficulty
 
-Key context verified on disk:
+The pass itself is a presentation problem, but it is presentation on a backend with none of Filament's conveniences: streaming per-tile VBOs + a shared IBO + budgeted upload/eviction/deferred-destroy must be hand-rolled against Diligent's PSO/SRB/resource-heap model, and the whole look of `terrain.mat` (written against Filament's `lit` shading + `prepareMaterial`) has to be re-expressed in the DiligentFX PBR pipeline — including Vulkan's lack of ktx-transcode sRGB-BC7 (solvable via `TEX_FORMAT_BC7_UNORM_SRGB`) and KTX2 decoding through the c-utils `ktx` library (Filament's ktxreader is backend-exclusive and a second BasisU copy cannot coexist in the process).
 
-- Old source: game-001-cpp `c-game/game/azgaar/AzgaarHeightmapSource.{h,cpp}` — includes
-  `azgaar/AzgaarSettlements.h` solely for `azgaarSettlementsPlateauY`.
-- Old `AzgaarSettlements.cpp` couples the plateau grid to building-cluster generation +
-  `azgaarPropsRegisterGlobal` (props pass, Vulkan) — none of which exist in the new engine.
-- New engine: `AzgaarWorld.settlements` (flatY, radiusM, wx/wz) already parsed and immutable
-  after `azgaarWorldLoad` (phase 2 done). No `AzgaarSettlements` module exists yet.
-- `heightmapTerrainInit` copies only the 2-pointer `HeightmapSource` vtable; the
-  `AzgaarHeightmapSource` object must outlive the terrain (old engine keeps it file-static in
-  LoadingAzgaar.cpp).
-- `MainMenuGui.cpp:27` already adds `heightmapTerrainSystem`; its update anchors the window
-  to the camera via `rendererCameraGet` and no-ops when no active terrain is set.
-- CMake is GLOB_RECURSE — no build-file edits needed.
+## Reductions / key lemmas
 
-Reductions / key lemmas:
+1. **Geometry parity is free — by construction, not by reimplementation.** The surface is already a pure function of (x,z) via the CPU lattice (`heightmapLatticeBuildCorners/BuildIndices`, shared by both backends). The Diligent pass must call the *same* pure functions; per-tile VBO = (pos3, normal3) floats, stride 24, over the 255-segment shared IBO. The vertex stage is a thin transform; no VS texture fetch, no lattice enumeration, no re-derivation of the TBN on the CPU (the PS rebuilds the frame from the normal, exactly like `buildTerrainTBN` in `terrain.mat`). Bit-identical geometry to the CPU/physics grid and watertight borders then hold without any further proof; `readyStamp` stays the re-upload cache key, `kUploadsPerFrame` budget and nearest-ring-first ordering carry over verbatim. Note the tangent-quaternion attribute the Filament VBO carries is *not* needed here (Filament's `lit` consumes it; our HLSL normal map application rebuilds the frame in the PS) — 6 floats/corner, not 7.
 
-1. The plateau grid is buildable at source-init time: settlements data is immutable after
-   load, so building the 1024 m bucket grid inside `azgaarHeightmapSourceInit` satisfies the
-   old engine's "grid live before any tile generates" ordering without a separate init or the
-   concurrent grid-swap safety dance (that was only needed because the old init ran while
-   tiles streamed for props).
-2. Lifetime rule: adapter + its heap data outlive the terrain (file-static in LoadingAzgaar);
-   `heightmapTerrainDestroyData` + `setActive(nullptr)` must run BEFORE
-   `loadingAzgaarReleaseWorld()`, else `heightAt` dereferences a destroyed world.
-3. `heightAt` is stateless once the grid exists, so "call twice, bit-identical" is a valid
-   runtime determinism probe; border-identity/eviction-regen is already covered by the
-   engine's self-test (analytic source).
-4. Wiring is init + setActive in Game::loadWorld and clear on teardown; no system-add work.
+2. **Lighting parity comes from sharing the pipeline, not from tuning.** `GltfDiligent.cpp` already feeds `GLTF_PBR_Renderer` a `PBRFrameAttribs` + `PBRLightAttribs` cbuffer (view/proj via `diligentFrameView/Proj`, sun via `diligentSun*`, ambient baked into two 1×1×6 constant IBL cubes, tone-map params `AverageLogLum/MiddleGray/WhitePoint`) and includes the DiligentFX HLSL PBR headers (`<Shaders/PBR/...>` — the `${diligent_git}/DiligentFX` include dir is already in CMake). The terrain PS should `#include` the same DiligentFX PBR lighting sources (`PBR_Lighting.hlsli` etc.) and feed them an identically-filled frame-attribs cbuffer + its *own* 1×1×6 constant IBL cubes derived from `diligentAmbient*` (same formula as `gltfIblUpdateDiligent`: `k = max(0,intensity) * 1.2*2^-15 * (1/pi)`, clamped). Terrain and glTF model then read as one scene by construction (same PBR, same tone mapping, same sun), with zero cross-namespace state sharing (the gltf namespace keeps its buffers private).
 
-Candidate approaches:
+3. **sRGB on Vulkan BC7.** `utils::imageLoadKtx(path, KTX_FORMAT_BC7_RGBA)` (c-utils `image/Image.cpp`, the process' single BasisU copy) decodes the pak's UASTC KTX2 to BC7 bytes with `vkFormat = VK_FORMAT_BC7_RGBA_UNORM` + per-mip `mipSizes`. The bytes are identical whether the GPU decodes sRGB or not, so: create the four albedo textures (grass/cliff/snow/sand) as `TEX_FORMAT_BC7_UNORM_SRGB` (exists in `GraphicsTypes.h`) and the normal maps as `TEX_FORMAT_BC7_UNORM` — hardware sRGB decode restored, matching Filament's `SRGB_ALPHA_BPTC_UNORM`. Per-world textures: biomeColor as `RGBA8_UNORM_SRGB`, climate as `RGBA8_UNORM` (R/G/B byte-encoded scalars are linear by design; A = biome id needs a second NEAREST sampler bound to the same texture).
 
-A. Near-verbatim port of source + minimal plateau-only AzgaarSettlements (~120 lines: bucket
-   grid + D8 blend + ENGINE_AZGAAR_SETTLE_DISABLED kill switch). Risk: slight module-split
-   deviation from the old engine (phase 8 absorbs it later). Effort: low (~1.5 h).
-B. Linear-scan plateau inline in heightAt (no new module). Risk: O(N) per texel x 262k
-   texels/tile x 25 tiles; settlement count unknown until runtime; adds seconds per
-   background tile build and throttles streaming; rework in phase 8. Effort: minimal.
-C. Skip the plateau in phase 4. Violates the plan invariant ("settlement plateaus blend
-   LAST") and the old header's float-houses warning. Rejected.
-D. Full AzgaarSettlements port with building clusters + props upload. Pulls in phase 7/8
-   deps that don't exist. Rejected for scope.
+4. **Samplers are a known trap (docs/lessons.md).** The six world-tiling default textures MUST get `LINEAR_MIPMAP_LINEAR` min + `LINEAR` mag + `REPEAT` + anisotropy 16 (the KTX2 assets ship 11 mips); biome/climate maps get plain clamp samplers (climate A channel via NEAREST). A plain-LINEAR tiling sampler is a logged regression, not a style choice.
 
-Recommended approach: A. Keeps the port near-verbatim, restores the invariant the old code
-guarantees (flat ground under future settlements), and the ~120 extra lines get folded into
-the full module in phase 8. Must be true for it to work: AzgaarWorld.settlements fully
-populated by azgaarWorldLoad (verified: flatY sampled at parse time), and the grid built
-before any tile generation (guaranteed by building it in azgaarHeightmapSourceInit, which
-runs before heightmapTerrainInit in Game::loadWorld).
+5. **Buffer lifetime rules.** Diligent `UpdateBuffer` copies (the Filament zero-copy lesson does *not* apply — heap-owned upload storage is unnecessary; plain `new float[]` scratch is fine for the one-shot upload). But two rules still bite: (a) anything outliving its upload frame must be `USAGE_IMMUTABLE`/`USAGE_DEFAULT` — `USAGE_DYNAMIC` maps are a per-frame ring shared with *all* other dynamic mappings, and a one-time write gets clobbered (the splat-terrain all-sand incident in docs/lessons.md); (b) per-tile VBOs must be deferred ~3 frames before release (in-flight command buffers), mirroring Filament's `kDeferredDestroyFrames`.
 
-Proposed tasks:
+6. **Shader compilation: build-time per the plan, runtime as the documented fallback.** The plan says pre-compiled at build time (per `plans/diligent-migration.md`), and the repo already has the exact analogue: the matc custom command compiles `terrain.mat` → committed `c-game/data/pak_1/materials/heightmap_terrain.filamat` (c-engine/CMakeLists.txt lines ~187-206), loaded via `dataManagerRead`. The SPIRV step mirrors it: a build-time-only compiler executable linked against the already-linked glslang/SPIRV-Tools statics (the "shader compiler chain" libs, CMakeLists ~119-129) compiles the HLSL (Vulkan target, VS/PS 5.0) → `pak_1/materials/heightmap_terrain_{vs,ps}.spv`; the pass loads both blobs via `dataManagerRead` + `device->CreateShader`. Caveat to watch: the committed-filamat fallback pattern ("if the compiler is missing, use the committed artifact") is cheap to copy. Fallback if the build-only-exe wiring proves painful: runtime HLSL→SPIRV via the already-linked `libDiligent-ShaderTools.a` (that is precisely what the removed splat `TerrainDiligent.cpp` did, per `plans/dual-renderer.md` — a one-time ~tens of ms compile at init; acceptable per the migration plan's own "acceptable alternative").
 
-1. Port the source + minimal plateau: create `c-game/game/azgaar/AzgaarHeightmapSource.{h,cpp}`
-   near-verbatim from game-001-cpp; create minimal `c-game/game/azgaar/AzgaarSettlements.{h,cpp}`
-   exposing only `azgaarSettlementsPlateauY(world, wx, wz, naturalY)` (1024 m bucket grid over
-   the map AABB, 3x3 bucket query, D8 blend y += (flatY-y)*(1-smoothstep(0.55r, r, d)),
-   ENGINE_AZGAAR_SETTLE_DISABLED=1 kill switch), grid built once in azgaarHeightmapSourceInit.
-   Verify: ./scripts/build.sh clean.
-2. Source lifetime in LoadingAzgaar: file-static AzgaarHeightmapSource in LoadingAzgaar.cpp,
-   azgaarHeightmapSourceInit right after azgaarWorldLoad (seed from s_world.mapName), new
-   loadingAzgaarGetHeightmapSource() accessor; release path documents that the terrain must be
-   destroyed before loadingAzgaarReleaseWorld. Verify: build + load log unchanged.
-3. Wire the terrain in Game::loadWorld: static engine::HeightmapTerrain,
-   heightmapTerrainInit(&terrain, &src->vtable, HEIGHTMAP_TILE_SIZE_M, HEIGHTMAP_WINDOW_SIZE)
-   + heightmapTerrainSetActive(&terrain), replacing the TODO; on menu-return/removed():
-   heightmapTerrainDestroyData + setActive(nullptr) BEFORE loadingAzgaarReleaseWorld().
-   Leave camera framing for phase 9. Verify: build; run shows tile-generation logs, no crash,
-   ESC/menu teardown clean.
-4. Acceptance sampling log: one-shot in Game::update when terrain.tilesReady > 0 — at 5 fixed
-   points near world center log src->vtable.heightAt called twice (assert bit-identical) and
-   heightmapTerrainSample with absolute difference (expect < ~1 m: sample is bilinear over 4 m
-   texels of the same surface, not bit-equal at arbitrary (x,z)); if two adjacent tiles are
-   READY, assert their shared border column is bit-identical. Verify: brief run, log diffs
-   small and determinism holds.
+7. **Draw-path wiring is a 3-line change per site.** `DiligentRenderer::draw()` calls `heightmapTerrainRenderUpdate()` before `worldDraw` (exact mirror of `FilamentRenderer::draw` line 94) and the terrain draw hook after the glTF PBR render (same render targets still bound; opaque + depth test, order vs. the model is visually irrelevant); `DiligentBackend::destroy()` calls `heightmapTerrainRenderDestroy()` first (terrain GPU state lives in the device being torn down); `HeightmapTerrainRender.cpp` dispatcher gains the `Backend::Diligent` branch (four call sites, one-line each). The terrain draw must `setWorldDrew(true)` so the UI pass takes LOAD (the `diligentWorldDrew` flag is currently only set by the glTF hook — a world with terrain but no glb would otherwise CLEAR the UI).
+
+## Candidate approaches
+
+1. **Full Filament mirror + DiligentFX PBR includes + build-time SPIRV** — new `renderer/diligent/HeightmapTerrainDiligent.{h,cpp}` (same lifecycle: init/update/registerLook/releaseLook/setDebugView/stats/destroy), one PSO (color = swapchain format, DSV = D32, `FrontCounterClockwise=true`, depth write, no cull surprises: lattice winding is CCW from above), one SRB per tile (VBO SRV + 8 texture views + samplers + look/frame cbuffer; ≤25 SRBs), shared IBO uploaded once, per-frame frame-attribs cbuffer re-mapped via `MapHelper` (the `fillFrameAttribs` pattern). Risk: Diligent boilerplate volume (PSO/SRB/descriptor plumbing is verbose — the migration plan budgets for this honestly); the PBR `#include` chain is a dependency on DiligentFX shader internals that must be copied into our cbuffer layout exactly (`PackMatrixRowMajor` convention). Effort: 2-3 days.
+2. **Same, but hand-rolled analytic lighting** (Lambert sun + GGX-ish ambient, tone-mapped by hand) instead of the DiligentFX PBR includes. Risk: the terrain and the glTF model then read as *two scenes*; matching Filament's `lit` + tone-map by eye is slow and never converges exactly. Effort: 1-2 days of code, unbounded tuning.
+3. **One big per-frame ring VBO** (append new tiles into a device-local heap, draw via buffer offset) instead of per-tile VBOs. Risk: breaks the `readyStamp` per-tile lifecycle (eviction can't reclaim), re-introduces the dynamic-ring clobbering class of bug from docs/lessons.md, no benefit at ≤25 concurrent tiles. Effort: more than it saves. Rejected.
+4. **Runtime ShaderTools compile** (repo precedent from the removed splat pass) instead of build-time SPIRV. Risk: none serious (libs already linked, CMake comment says the chain exists for exactly this); only cost is first-boot compile latency and a runtime dependency. Effort: less than option 1's build step. Keep as the fallback if the glslang build-only-executable step fights us.
+
+## Recommended approach
+
+Approach 1 (with option 4 as the explicit fallback for the compile step). Justification: the geometry half is a verbatim port of `HeightmapTerrainFilament.cpp`'s tile-cache/upload machinery onto `CreateBuffer`/`UpdateBuffer`/`CreatePipelineState`/per-tile SRB — every risky decision (cache key, budget, eviction, deferral, samplers) already has a proven Filament answer, so the only genuinely new work is the HLSL look and the Diligent boilerplate around it. The DiligentFX-PBR-includes choice is what makes "terrain + model read as one scene" structurally true rather than tuned. What must be true for it to work: the DiligentFX PBR `#include` chain must be usable standalone (it is — `GltfDiligent.cpp` already pulls the same fxh headers, and the include dir is in CMake); the terrain frame-attribs/light-attribs cbuffer must be *bit-compatible* with `HLSL::PBRFrameAttribs`/`PBRLightAttribs` (reuse the structs from the headers, don't redeclare); and `TEX_FORMAT_BC7_UNORM_SRGB` must be honored by the driver (it is on radv/desktop Vulkan; if a platform refuses it, the fallback is a manual sRGB decode in the PS — one `pow` per albedo sample — with the KTX bytes kept UNORM).
+
+## Proposed tasks
+
+1. **HLSL + build-time SPIRV step.** Write `renderer/diligent/shaders/heightmap_terrain.{vs,ps}` (thin VS: pos3/normal3 passthrough; PS: full `terrain.mat` look port — grass tiling + tangent normal, biome tint, dry-turf noise, beach/wet-sand, triplanar cliff + altitude rock, climate snow line, micro-band normal perturbation with the derivative octave fades and grazing gain, debugView ramp/biome modes — with DiligentFX PBR lighting includes; constants identical to the .mat: `AZGAAR_GRASS_TILE 2048/7000`, `CLIFF_DETAIL_TILE 32`, `SPLAT_NORMAL_STRENGTH 2.0`, `MICRO_NOISE_STRENGTH 0.45`, temp bias 64, Glacier id 11). Add the CMake custom command (build-only glslang exe → `c-game/data/pak_1/materials/heightmap_terrain_{vs,ps}.spv`, mirroring the matc step, with the committed-fallback warning pattern). Verifiable: `./scripts/build.sh` produces both .spv files; glslang emits no errors on the Vulkan/5.0 target.
+2. **`HeightmapTerrainDiligent.{h,cpp}`** mirroring the Filament file's structure: init (PSO+SRBs, shared IBO via `heightmapLatticeBuildIndices`, six default KTX2 textures via `utils::imageLoadKtx` — albedos BC7-UNORM-SRGB, normals BC7-UNORM, 16× anisotropic mipmap-repeat samplers; 1×1 white fallback; look textures on `registerLook`), update (deferred-destroy tick, `HeightmapTerrain*` change detection, snapshot, cache drop, nearest-ring sort, `kUploadsPerFrame=3` budgeted `uploadTile` with the float6 VBO pack), draw hook, stats (same 120/1000-frame averaging as the Filament side), destroy. Verifiable: compiles; a debugView=1 (ramp) screenshot through the diligent backend shows the streaming lattice.
+3. **Wiring + dispatcher.** Diligent branch in `HeightmapTerrainRender.cpp` (4 sites); `DiligentRenderer::draw()` calls `heightmapTerrainRenderUpdate()` pre-`worldDraw` + the terrain draw post-gltf with `setWorldDrew(true)`; `DiligentBackend::destroy()` calls `heightmapTerrainRenderDestroy()` before device release. Verifiable: `./scripts/build.sh` clean + `ENGINE_RENDERER=diligent` boot logs the pass init line and doesn't crash on world load/teardown (`ENGINE_LOG_TIMEOUT`-style run).
+4. **Visual verification against the phase-5 acceptance criteria.** `ENGINE_SCREENSHOT` (filament vs diligent): default-cam look, top-down height-ramp over the peak (seam check — no straight-line discontinuities at tile borders), biome debug view (mapBounds UV registration), and a moving-camera streaming run (window slides, builder stays ahead, re-uploads land without popping); compare against the phase-5 screenshots in `docs/azgaar-terrain/`.
 
 ## round 1
 
-Tasks 1 + 4 done. Created in c-game/game/azgaar/:
-- AzgaarHeightmapSource.{h,cpp}: near-verbatim port (macro height via
-  azgaarWorldSampleHeightSmooth + FNV-1a(map name)-seeded 2-octave value noise
-  128/64 m + seabed fade -10m->0 + plateau LAST). Deviation: dropped the old
-  include of ecs/system/heightmap/HeightmapTerrain.h (unused). Added
-  azgaarSettlementsPlateauInit(world) at the end of azgaarHeightmapSourceInit
-  (plan lemma 1: grid live before any tile generates).
-- AzgaarSettlements.{h,cpp}: minimal plateau-only module. API:
-  azgaarSettlementsPlateauInit(world) (reads ENGINE_AZGAAR_SETTLE_DISABLED
-  getenv!=nullptr, builds 1024 m bucket grid, count published last),
-  azgaarSettlementsPlateauClear(), azgaarSettlementsPlateauY(world,wx,wz,y)
-  (snapshot-at-entry + D8 3x3 bucket query, verbatim from old engine).
-  Old header's azgaarSettlementsInit/Clear/Nearest + building clusters NOT
-  ported (phase 8).
+Full recon written to `docs/azgaar-terrain/phase6-diligent-recon.md`. Key findings:
 
-Build: ./scripts/build.sh clean (GLOB_RECURSE picked both files up, no
-build-file edits). Source is NOT wired in yet — no caller of
-azgaarHeightmapSourceInit exists (tasks 2/3). No dead code warnings because
-the symbols are non-static public API.
-
-Notes for task 2/3 workers:
-- g_grid is file-static in AzgaarSettlements.cpp; azgaarSettlementsPlateauClear()
-  must be called on world release (or before, same ordering rule as the
-  terrain destroyData) — it is public in AzgaarSettlements.h.
-- vtable.userData == src, so the AzgaarHeightmapSource object + world must
-  outlive every heightAt call (file-static in LoadingAzgaar per plan).
+1. **Files**: create `c-engine/renderer/diligent/HeightmapTerrainDiligent.{h,cpp}` (mirror the Filament file's structure; public API = the 7 `heightmapTerrainFilament*` functions renamed) + `shaders/heightmap_terrain_{vs,ps}.hlsl`. Modify: `HeightmapTerrainRender.cpp` dispatcher (6 entry points, each currently `if (backend == Filament)`; two carry `// phase 6` comment placeholders), `DiligentRenderer.cpp` (`draw()` line 150: `heightmapTerrainRenderUpdate()` at top like FilamentRenderer.cpp:94; terrain draw hook after `worldDraw(context)` line 184; `destroy()` line 271: `heightmapTerrainRenderDestroy()` first, like FilamentRenderer.cpp:131), and `c-engine/CMakeLists.txt` (add the new .cpp to the SKIP_PRECOMPILE_HEADERS list, lines 178–182). Game side (Game.cpp registerLook/ setDebugView/releaseLook) is untouched — it only calls the dispatcher.
+2. **PSO/SRB/cbuffer pattern** (GltfDiligent.cpp): PSO = swapchain ColorBufferFormat (RGBA8_UNORM_SRGB) + DSV (D32_FLOAT), TRIANGLE_LIST, FrontCounterClockwise=true, PackMatrixRowMajor=true, CULL_MODE_BACK (lattice winding is CCW from above), depth test+write. Frame-attrs cbuffer = `CreateUniformBuffer` + per-frame `MapHelper<PBRFrameAttribs>` remap (fillFrameAttribs pattern, GltfDiligent.cpp ~250–300); light attribs sit right after the frame attribs. Terrain gets its OWN frame-attrs buffer + own 1×1×6 constant IBL cubes (gltfIblUpdateDiligent formula, `k = max(0,i) * 1.2*2^-15 * 1/π`) from `diligentAmbientColor/Intensity` — zero cross-namespace state with the gltf pass. PS `#include`s `Shaders/PBR/public/PBR_Shading.fxh` (ApplyDirectionalLightGGX, GetLambertianIBL, ResolveLighting, PerturbNormal…) — include root `${diligent_git}/DiligentFX` already in CMake (lines 105–107), same as the GltfDiligent.cpp fxh block.
+3. **Deviation from the plan (shader compile)**: the linked "glslang chain" (CMakeLists 119–129) compiles **GLSL only — glslang has no HLSL frontend**. The repo already compiles HLSL at runtime on every diligent boot: DiligentFX's PBR_Renderer (prebuilt) uses `device->CreateShader` with `DiligentFXShaderSourceStreamFactory::GetInstance()` (embedded fxh/vsh/psh stream factory; header include dir already in CMake). So the recommended path for task 2 is: runtime `device->CreateShader` (SHADER_SOURCE_LANGUAGE_HLSL + that stream factory, inline source with the fxh includes, entry `main`) at pass init — zero new build machinery, same in-process precedent. A true build-time HLSL→SPIRV step would need a build-only tool linking `libDiligent-ShaderTools.a`; keep as a later optimization, not a blocker.
+4. **Texture path**: `utils::imageLoadKtx(path, KTX_FORMAT_BC7_RGBA)` (c-utils/image/Image.cpp:83) — the process's single BasisU copy (do NOT use Filament's ktxreader here). Pak paths: `images/terrain/{grass_default,cliff_side_default,snow_default,sand_default}/{albedo,normal}.ktx2` (snow/sand albedo only). Formats: albedo BC7_UNORM_SRGB, normals BC7_UNORM; look textures RGBA8 (biomeColor SRGB, climate UNORM; climate A = biome id via a second NEAREST sampler on the same texture); 1×1 white fallback for all 8 slots. **Pitfall found: `Image::mipSizes` stores per-mip OFFSETS (`ktxTexture_GetImageOffset`), not sizes, and nothing in the repo consumes it — compute BC7 mip sizes yourself** (ceil(w/2^i)·ceil(h/2^i)·8). Samplers per docs/lessons.md: tiling = LINEAR_MIPMAP_LINEAR/REPEAT/aniso16; biome/climate linear-clamp; climateNearest nearest-clamp. Immutable textures need the UNKNOWN→SHADER_RESOURCE transition (gltfIblUpdateDiligent barrier pattern).
+5. **Backend selection**: `Renderer.cpp selectBackend()` — `ENGINE_RENDERER` env (filament|diligent) overrides persisted setting `rendererBackend` (1=diligent); `rendererBackend()` is the dispatcher switch. `setWorldDrew(true)` semantics: the UI pass LOADs over the world only if the world pass drew — the terrain draw hook MUST set it (a terrain-only world with no glb would otherwise CLEAR the UI).
+6. **Carries verbatim from the Filament pass** (do not re-derive): kUploadsPerFrame=3, kDeferredDestroyFrames=3, readyStamp cache key, pool cap = windowSize², Manhattan-ring insertion sort, failed-upload-doesn't-consume-budget, 120/1000-frame stats averaging. VBO = (pos3, normal3) 6 floats / 24 B stride (no tangent quaternion — PS rebuilds TBN from the normal); buffers USAGE_IMMUTABLE (dynamic-ring clobbering, docs/lessons.md); DrawIndexedAttribs with the shared IBO; per-tile SRB clone (only the VBO differs).
 
 ## round 2
 
-Tasks 2 + 3 done (wiring; tasks 1/4 already provided the ported files).
+Task 2 done: `c-engine/renderer/diligent/shaders/heightmap_terrain_vs.hlsl` + `heightmap_terrain_ps.hlsl`. **Both verified compiling HLSL→SPIRV** (system glslangValidator, after pre-expanding the `"Name.fxh"` includes from DiligentFX and prepending DiligentCore's `Graphics/ShaderTools/include/HLSLDefinitions.fxh` — that's what CreateShader injects; do NOT #include it in our files). The runtime path is Diligent's HLSL2GLSL→SPIRV, so final proof is at pass init (task 3/4).
 
-- LoadingAzgaar.cpp: `static AzgaarHeightmapSource s_source = {}` (file-static,
-  outlives the terrain). `azgaarHeightmapSourceInit(&s_source, &s_world,
-  s_world.mapName)` runs right after `s_loaded = true` in loadingAzgaarLoad
-  (old-engine ordering: world load → source init). New accessor
-  `loadingAzgaarGetHeightmapSource()` (declared in LoadingAzgaar.h with the
-  lifetime contract documented) returns `s_loaded ? &s_source : nullptr`.
-- Game.cpp: `static engine::HeightmapTerrain s_terrain = {}` (file-static).
-  loadWorld restructured: world-load block now guarded by `if (!worldLoaded)`
-  (gltfInit + loadingAzgaarLoad + optional self-test, early-return on load
-  failure); AFTER the guard, every entry (re-)inits:
-  `heightmapTerrainInit(&s_terrain, &src->vtable, HEIGHTMAP_TILE_SIZE_M,
-  HEIGHTMAP_WINDOW_SIZE)` + `heightmapTerrainSetActive(&s_terrain)` — replaces
-  the TODO. Init is idempotent (frees prior tiles) so re-entry after
-  menu-teardown works.
-- Teardown: ESC/menu-return in preUpdate does `heightmapTerrainDestroyData`
-  + `setActive(nullptr)` (world + source stay retained; re-entry re-inits).
-  GameSystem::removed() does destroyData + setActive(nullptr) +
-  `azgaarSettlementsPlateauClear()` BEFORE gltfDestroy +
-  loadingAzgaarReleaseWorld() (heightAt dereferences the world; plateau grid
-  indexes world->settlements).
-- DELIBERATE: plateau grid cleared ONLY at world release, not on menu-return.
-  The grid is built inside azgaarHeightmapSourceInit which runs once per world
-  load (loadingAzgaarLoad is idempotent), so clearing it on ESC would leave
-  re-entered worlds plateau-less. Matches the old engine (its
-  azgaarSettlementsClear was in loadingAzgaarReleaseWorld, not on menu-exit).
+**CreateShader parameters (task 3)**: `SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL`, `pShaderSourceStreamFactory = &DiligentFXShaderSourceStreamFactory::GetInstance()`, inline `Source` (read from `dataManagerRead` — the .hlsl files must reach the pak, e.g. a CMake copy step into `c-game/data/pak_1/materials/` mirroring the matc step in c-engine/CMakeLists.txt), `EntryPoint = "main"`, SHADER_TYPE_VERTEX/PIXEL. **No ShaderMacros needed** (USE_IBL defaults 1, tone map mode is #defined in-source).
 
-Verified: ./scripts/build.sh clean. Runtime (ENGINE_AUTOTEST=enter, headless):
-map loads, source inits, terrain window @ tile(0,1) resident=25, multiple
-tiles READY (~57 ms each, i.e. heightAt + plateau grid execute without
-crash), clean shutdown ("game: removed", exit 0). Screenshot at capture
-moment is pre-terrain (2 tiles ready, taken a few frames after startup) —
-expected timing, not a wiring fault.
+**Include rule (verified in the factory mechanics)**: the prebuilt factory registers embedded files under their **BARE FILE NAME only** (convert_shaders_to_headers: `get_filename_component NAME`), and it also contains the PostProcess files (`ToneMapping.fxh`, `ToneMappingStructures.fxh` — confirmed in build-linux/.../shaders_inc/shaders_list.h). So `#include "PBR_Shading.fxh"` style works; `<Shaders/PBR/...>` path-style would NOT resolve. Keep bare-name includes if editing.
 
-For task 5 (acceptance log): the app auto-exits quickly in headless runs
-right after startup, so a one-shot "when tilesReady > 0" probe in
-Game::update fires within the first second or two; probe points should be
-near the window anchor (camera default eye (500,1590,2700), anchor (500,2700),
-tiles around origin). ENGINE_CAMERA=topdown/close exist for validation shots.
+**PS entry-point style**: `PSTerrainOut main(in PSTerrainIn vs)` with `struct PSTerrainOut { float4 Color : SV_Target0; }` (DiligentFX convention; note `out` is a reserved HLSL word — don't use it as an identifier).
+
+**cbuffer contracts**:
+- `cbFrameAttribs` = `PBRFrameAttribs g_Frame; PBRLightAttribs g_Sun;` in ONE cbuffer (VS declares only the PBRFrameAttribs part; same buffer binds both). Buffer size = `sizeof(Diligent::HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs)` — same as gltf's `pbrRenderer->GetPRBFrameAttribsSize()`. Fill exactly like GltfDiligent.cpp `fillFrameAttribs` (MapHelper<PBRFrameAttribs> + `GLTF_PBR_Renderer::WritePBRLightShaderAttribs` for the sun). **gltf's fill leaves fields the terrain PS reads UNSET — zero-init the buffer first and set**: `Renderer.EnvironmentRotation = float2(1,0)` (cos/sin identity), `Renderer.PrefilteredCubeLastMip = 0.0` (1-mip constant cube), `IBLScale=(1,1,1,1)`, tone-map trio (0.25/0.18/3.0), plus `EmissionScale/OcclusionStrength/MipBias/Time/DebugView/LoadingAnimation` (0/1/0/0/0). `fHandness`, `f4Position`, `f4ViewportSize`, `SetClipPlanes` per gltf.
+- `cbTerrainLook` (PS only) = `{ float4 mapBounds; float4 climateParams; float maxLandHeight; float debugView; }` → 48-byte C++ struct (compiler pads the cbuffer to 16-multiple; add a float2 pad on the C++ side). Values from `HeightmapTerrainLook` (mapBounds=(minX,minZ,maxX,maxZ), climateParams=(snowLo,snowHi,beachH,climateEnabled?1:0), maxLandHeight, debugView).
+
+**SRB layout (declaration order = slot order; bind by name in the template SRB)**: cbuffer `cbFrameAttribs` (VS+PS slot 0), PS cbuffer `cbTerrainLook` (slot 1); 12 SRVs: `g_GrassAlbedo, g_GrassNormal, g_CliffAlbedo, g_CliffNormal, g_SnowAlbedo, g_SandAlbedo, g_BiomeColor, g_Climate, g_ClimateNearest, g_IblIrradiance (Cube), g_IblPrefiltered (Cube), g_PreintegratedGGX`; 3 sampler states: `g_TilingSampler` (min LINEAR_MIPMAP_LINEAR/mag LINEAR/REPEAT/aniso 16 — the 6 terrain textures), `g_ClampSampler` (LINEAR/CLAMP — look maps + IBL cubes + LUT; ApplyIBL's cube/LUT sampler args are passed g_ClampSampler, **DiligentFX declares NO implicit companion samplers**), `g_ClampNearestSampler` (NEAREST/CLAMP — climate A channel). Plus the per-tile VBO (input layout slot 0; IBO passed at DrawIndexedAttribs, input slot 1).
+
+**g_PreintegratedGGX LUT**: `GLTF_PBR_Renderer::GetPreintegratedGGX_SRV()` is **public** (PBR_Renderer.hpp) and the LUT (512² RG16F) is precomputed in the GLTF_PBR_Renderer ctor (EnableIBL default true). Reuse it — lighting parity is then literally shared state. Constraints: gltf must be init'd first (Game.cpp loadWorld calls gltfInit() before look registration — OK); and `heightmapTerrainRenderDestroy()` must run **before** `gltfDestroyDiligent()` (SRB holds a raw ITextureView*; the texture is owned by the renderer) — DiligentRenderer::destroy() already destroys terrain first. If `worldPbrRenderer()` is null at terrain init, log + fall back to a CPU-computed LUT or white (decision for task 3).
+
+**Output contract**: PS emits linear HDR after Uncharted2 tone map (same constants as the gltf frame); the RGBA8_UNORM_SRGB swapchain RTV does the final sRGB encode — do NOT add FastLinearToSRGB. Albedo textures must be created BC7_UNORM_SRGB (hardware sRGB decode, per recon §7).
+
+**Look port parity notes**: all constants/thresholds identical to terrain.mat (GRASS_TILE 2048/7000, CLIFF_DETAIL 32, CLIFF_TRIPLANAR_SCALE 32/4096, SPLAT_NORMAL_STRENGTH 2.0, TEMP_BIAS 64, GLACIER 11, MICRO 0.45, octaves 32/16/8/4 m, grazing smoothstep(0.05,0.30), landMask smoothstep(0,0.2,y), beach -1.5..0.2 / 0.1..1.2 wet strip, rock slope smoothstep(0.1,0.4) + altitude band 0.55..0.85 of maxLandHeight, snow isotherm + glacier override, 0.75+0.25·noise breakup). Debug views: 1 = 256 m hue ramp, 2 = raw biome tex, both flat matte (roughness 1, geometric normal). Metallic 0 always (GetSurfaceReflectanceMR), Occlusion 1, Emissive 0.
+
 
 ## round 3
 
-Task 5 done (acceptance log + headless run, PASS).
+Task 3 done: `c-engine/renderer/diligent/HeightmapTerrainDiligent.{h,cpp}` (8 entry points: Init/Update/Draw/RegisterLook/ReleaseLook/SetDebugView/Stats/Destroy — one more than Filament's 7: the pass needs an explicit draw hook since Diligent has no scene-graph renderables), CMake .hlsl copy into `c-game/data/pak_1/materials/` (verified identical in-tree), new cpp in SKIP_PRECOMPILE_HEADERS. `./scripts/build.sh` clean, zero warnings in the new file.
 
-- Game.cpp: `heightmapAcceptanceLog()` (file-static, called from Game::update via
-  `s_acceptanceRan` one-shot flag). Gated per frame until ALL 5 probe tiles are
-  READY (found in a `heightmapTerrainSnapshotTiles` view — the thread-safe
-  snapshot, not `heightmapTerrainGetTile`) AND at least one adjacent READY pair
-  exists; first headless run without the gate fired at ready=1 and correctly
-  reported the missing pair as FAIL. Checks:
-  1. `src->vtable.heightAt` twice at 5 fixed points, `memcmp` bit-compare
-  2. `heightmapTerrainSample` vs heightAt, threshold diff < 1 m
-  3. shared border of first adjacent READY pair (east: per-row a[x=TEX-1] vs
-     b[x=0]; south: contiguous row memcmp), float bit-equality
-- Probe points (all in tile (0,1) = window anchor tile, window covers
-  x∈[-4096,6144) z∈[-2048,8192)): (400,2600) (500,2700) (560,2740)
-  (340,2820) (620,2580).
-- Verified headless (TERM=xterm ENGINE_AUTOTEST=enter
-  ENGINE_LOG_TIMEOUT=30000 ./build/c-game/c-game): all 5 probes heightAt
-  bit-identical, sample diffs ≤ 0.0001 m (well under 1 m), border tiles
-  (0,0)/(0,1) bit-identical, summary "heightmap acceptance: PASS", clean
-  shutdown (exit 0). Fired at ready=2 (tile(0,0) + anchor READY) — ~1.5 s in.
-- Cross-run determinism: probe heights identical between two runs
-  (-33.281174 / -32.832672 / -32.428520 / -36.834591 / -30.797935).
-- Build clean via ./scripts/build.sh (added `#include <cstring>` in Game.cpp).
+**API reality check (the prebuilt Diligent in this repo is a 2026 API — much of the old SRB world is gone; do NOT write code against the round-2 recon's assumed names):**
+- No `SetResourceBinding`/`DrawIndexedAttribs`/`InputLayoutAttrib`/`PipelineResourceBindingLayout`/`MappedBufferSubresource`/`SHADER_RESOURCE_TYPE_*`-by-slot. Current model:
+  - `IPipelineResourceSignature` (PRS, `device->CreatePipelineResourceSignature(PRS_desc_by_value, &prs)`) with `PipelineResourceDesc{ShaderStages, Name, ArraySize, ResourceType, VarType}`; static resources bound via `prs->GetStaticVariableByName(stage, name)->Set(obj, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE)`.
+  - `IShaderResourceBinding` from `prs->CreateShaderResourceBinding(&srb, /*InitStaticResources=*/true)`; commit with `context->CommitShaderResources(srb, TRANSITION)`.
+  - Draws: `SetPipelineState`, `SetVertexBuffers(slot,count,bufs,offsets,TRANSITION,SET_VERTEX_BUFFERS_FLAG_RESET)`, `SetIndexBuffer(ibo,0,TRANSITION)`, `DrawIndexed(DrawIndexedAttribs{num, VT_UINT32, flags, ...})`.
+  - `MapBuffer(buf, MAP_WRITE, MAP_FLAG_DISCARD, PVoid&)` + `UnmapBuffer(buf, MAP_WRITE)` (no MappedBufferSubresource); `CreateBuffer(BufferDesc_by_value, const BufferData*{pData,size,pContext}, &buf)` (no `Type` field — bind flags carry it); `CreateTexture(TextureDesc_by_value, const TextureData*, &tex)`; `CreateSampler(SamplerDesc_by_value, &s)`.
+  - `IDataBlob::GetConstDataPtr()` (no GetData).
+- **New enum spellings**: `FILTER_TYPE_POINT` (was NEAREST), `FILTER_TYPE_ANISOTROPIC` for anisotropic min (no more LINEAR_MIPMAP_LINEAR; MinFilter encodes min+mip D3D-style, MaxAnisotropy=16), `TEX_FORMAT_RG16_FLOAT` (not RG16F), BC7/RGBA8_UNORM(_SRGB) unchanged.
+- **Input layout**: `InputLayoutDesc{LayoutElements[], NumElements}` of `LayoutElement{HLSLSemantic, InputIndex, BufferSlot, NumComponents, ValueType, IsNormalized,...}`; on the Vulkan path HLSLSemantic MUST be "ATTRIB" (docs: anything else only works on D3D11/12) and the VS input struct must use `: ATTRIB0`/`: ATTRIB1` (DiligentFX convention — the PBR renderer's generated VS uses ATTRIBn). **I changed `heightmap_terrain_vs.hlsl` input semantics POSITION/NORMAL → ATTRIB0/ATTRIB1** (task-2 file; the SPIRV-compile verification still applies, semantics don't affect it). IBO gets no layout element — `SetIndexBuffer` binds it separately.
+- PSOs: `GraphicsPipelineStateCreateInfo{PSODesc, ppResourceSignatures=&prs, ResourceSignaturesCount=1, GraphicsPipeline{...}, pVS, pPS}`; RasterizerStateDesc has `FrontCounterClockwise` + `CullMode`; DepthStencil `DepthWriteEnable`.
+
+**Design decisions (deviations from the plan's "one SRB per tile")**:
+- **One shared SRB, no per-tile SRBs**: the per-tile VBO is NOT a shader resource — it's bound per draw call via `SetVertexBuffers` (slot 0). The PRS declares everything STATIC (2 cbuffers VS|PS/PS, 12 SRVs, 3 samplers); the SRB is recreated (cheap) whenever a static resource changes: IBL cube rebuild (ambient change), look register/release, GGX LUT swap. Static vars are overwritten on the PRS with `SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE` then `CreateShaderResourceBinding(&new, true)`.
+- **GGX LUT**: new `void* gltfDiligentPreintegratedGGX(void)` in GltfInternal.h/GltfDiligent.cpp (returns `pbrRenderer->GetPreintegratedGGX_SRV()` AddRef'd, or null). Terrain syncs it each update: borrows the gltf LUT while present (lighting parity = shared state), falls back to a 2×2 `TEX_FORMAT_RG16_FLOAT` all-1.0s texture until the gltf renderer exists; releases the borrowed ref on switch.
+- Frame-attrs cbuffer: own dynamic `CreateUniformBuffer` of `sizeof(PBRFrameAttribs)+sizeof(PBRLightAttribs)`, zeroed (memset after MapBuffer MAP_FLAG_DISCARD — DISCARD doesn't guarantee zeroed memory) then filled exactly like gltf fillFrameAttribs plus EnvironmentRotation=(1,0), PrefilteredCubeLastMip=0, IBLScale=(1,1,1,1) (round-2 contract). cbTerrainLook = 64-byte dynamic buffer, 48-byte TerrainLookCB {mapBounds, climateParams, maxLandHeight, debugView, float2 pad}, remapped each frame (trivial).
+- KTX2: `utils::imageLoadKtx` (c-utils, single BasisU copy) → immutable BC7 textures; `Image::mipSizes` = per-mip OFFSETS (recon §4 bug), BC7 row stride computed as ceil(w/4)*8 per mip. Albedos `TEX_FORMAT_BC7_UNORM_SRGB`, normals `TEX_FORMAT_BC7_UNORM`. Immutable textures force-transitioned UNKNOWN→SHADER_RESOURCE.
+- Cache/upload policy verbatim from Filament: readyStamp key, window² pool, drop-then-ring-sort (Manhattan, stable insertion), kUploadsPerFrame=3, failed upload keeps budget, deferred destroy 3 frames (VBO Release; the context's own strong ref to last-bound buffers makes release order-safe anyway), 120/1000 stats window, 6-float VBO (no tangent quaternion).
+- draw hook calls `setWorldDrew(true)` when it drew (UI-LOAD contract).
+
+**Not done (task 4)**: dispatcher branches in HeightmapTerrainRender.cpp (the two `// phase 6` placeholders + 4 more call sites), DiligentRenderer::draw() wiring (update pre-worldDraw, draw post-gltf, destroy pre-device-release), runtime proof (shader compile via CreateShader at init, PSO/SRB acceptance by the Vulkan driver, seams/look screenshots).
+
+**Env note for task 4**: in THIS session `./build/c-game/c-game` hangs pre-first-log on both backends (process survives TERM; 0-byte log) — looks like display/GPU-session related, not code (my pass isn't even reachable yet: the dispatcher still only routes to Filament). Verify boot/screenshot from a session that can open the X11 window (VK_ICD_FILENAMES=radeon_icd.json, ENGINE_LOG_TIMEOUT auto-quit exists).
+
+## round 4 (task 4)
+
+**Wiring (the actual task-4 deliverable) — DONE, verified working:**
+- `HeightmapTerrainRender.cpp` dispatcher: all 6 entry points now route to the diligent half when `rendererBackend()==Diligent` (RegisterLook/ReleaseLook/SetDebugView/Update/Stats/Destroy).
+- `DiligentRenderer.cpp`: `heightmapTerrainRenderUpdate()` before `worldDraw(context)`; `heightmapTerrainDiligentDraw()` after it; `heightmapTerrainRenderDestroy()` first in `destroy()` (before device release, per the GltfDiligent GGX-LUT borrow contract). `setWorldDrew(true)` is set *inside* the pass's `drawImpl` when it actually drew (UI-LOAD contract preserved).
+- **c-game link fixed** (was failing on c-utils `Image.cpp`): built `stb/build-linux/libstb.a`; in `c-game/CMakeLists.txt` linked ktx (`libktx_read.a libktx.a libobj_basisu_cbind.a libastcenc-avx2-static.a`) + stb, plus `-Wl,--allow-multiple-definition`. ktx vendors a different-ABI BasisU that collides with Filament's `libbasis_transcoder.a`; ktx libs are listed FIRST so their symbols win (the game only ever calls c-utils' ktx path, never Filament's ktxreader, on the diligent backend).
+- **Critical dangling-pointer class fixed** (round-3 `HeightmapTerrainDiligent.cpp`): `loadKtx2Texture`, `createRgba8`, the IBL `makeCube` lambda, and `createHlslShader` all returned right after their local `RefCntAutoPtr` went out of scope — that released the only ref, so the GPU object was dead on arrival. Each now does `x->AddRef(); return x;`. NOTE: in this Diligent `RefCntAutoPtr::Release()` returns `void` — you cannot `return ptr->Release()`; must use `AddRef`.
+- Added a null-safe `prsVar(stage,name)` helper (GetStaticVariableByName can return null) and guarded all static-var call sites (kept — legitimate robustness). Dropped all the raw debug probes.
+- **IBL init ordering fixed**: `initPass` now calls `rebuildIblCubes` up front (with the current ambient) so the first SRB is not born with unassigned IBL-cube statics (was logging Diligent errors).
+
+`./scripts/build.sh` clean. `ENGINE_RENDERER=diligent` boots, all 25 tiles stream+upload (log `uploaded` ×25), no crash on load/teardown.
+
+**OPEN VISUAL BUG (not fixed — needs GPU-level inspection): terrain renders misplaced.**
+- Default cam: terrain appears as a *thin distant band* mid-screen (west half only) vs. Filament phase-5 `docs/azgaar-terrain/terrain-default.jpg` (nearby slope fills the lower 2/3).
+- Top-down cam (`ENGINE_DEBUG_CAM=1 ENGINE_CAMERA=topdown`): **blank** — no terrain at all, though the CPU-side view*proj projects the world origin to screen-center (ndc 0,0) so it should be a big centered square.
+- Evidence chain (rules out several suspects, pins the next suspect):
+  - CPU VBO data IS correct world coords (per-tile `heightmapLatticeBuildCorners` origin applied; verified by dump: tile(0,1) corner0 (0,-36.8,2048), cornerN (2048,-23.2,4096)).
+  - CPU-side `view*proj` (the exact matrices written into `frameAttribsCB`) projects world (0,-30,0) to ndc≈(0.18,-0.13) / (0,0) — i.e. screen-center. So the *matrices* place the terrain in-frame.
+  - Encoding `vs.WorldPos` (the VS pass-through of the raw VBO position, pre-transform) into PS colour shows the band as **near-black / dark-blue** ⇒ the position the VS *sees* is ≈(0,0,small), NOT the world coords the CPU wrote. So between the CPU VBO (world) and the VS input (≈0) something is lost.
+  - **Strongest hypothesis: the Vulkan input-layout / vertex-attribute binding is not landing the VBO's pos3+normal3 into ATTRIB0/ATTRIB1 correctly** (mis-`LayoutElement` offsets/stride, or the element not matching the VS semantics ⇒ Vulkan binds the attribute to default 0). A partially-misaligned read gives small nonzero garbage (matches the dark-blue, not pure-black, readout).
+  - **Could NOT confirm by GPU readback**: the per-tile VBO is `USAGE_IMMUTABLE` (not mappable — `MapBuffer(MAP_READ)` returns null), and the RTX 5090 wedges after SIGKILL / hangs under a debugger, so no RenderDoc capture succeeded. To make it inspectable, temporarily switch the VBO to `USAGE_DYNAMIC` (or add a readback buffer) — but remember the dynamic-ring clobbering lesson (docs/lessons.md) if you leave it.
+- NOT the bug (verified): matrices (self-consistent in Diligent's row/col convention; VS uses the same `mul(pos, mViewProj)` as DiligentFX RenderPBR), input *stride* arithmetic (24), VBO world data, winding (top face CCW from +Y, FrontCounterClockwise+CULL_BACK shows the top face), depth (ndc z≈0.9999<1.0, LESS passes), `fillFrameAttribs` ordering (called in drawImpl before SetPipelineState/Draw; uses the terrain's OWN frameAttribsCB, not gltf's).
+
+**Remaining (next worker)**:
+1. Make the per-tile VBO inspectable (USAGE_DYNAMIC temp, or a CPU→GPU→CPU readback) and dump what the GPU actually holds for one tile — confirm whether it's world coords or ≈0/garbage.
+2. If the GPU VBO is correct but the VS still sees ≈0, the fault is the `InputLayoutDesc`/`LayoutElement` (semantic "ATTRIB", InputIndex 0/1, BufferSlot 0, NumComponents 3, VT_FLOAT32, stride) vs the VS `: ATTRIB0`/`: ATTRIB1` — cross-check against DiligentFX's own generated PBR VS input layout (the proven path) and fix the mismatch. If the GPU VBO itself is ≈0, the fault is the immutable-buffer upload (CreateBuffer/BufferData copy) — re-verify the copy actually runs.
+3. Once placement is right, re-do the full visual comparison vs `docs/azgaar-terrain/` (default look, top-down height-ramp seam check, biome debug mapBounds registration, moving-camera streaming).
+4. Note a *separate, likely-benign* framing question: the Diligent proj (vFOV≈60°, m[1][1]=1.7321) may frame differently than Filament's default camera — confirm FOV parity with the Filament backend once the geometry lands correctly, before treating any residual look-diff as a terrain bug.
+
+**Env/commands that work** (for the next worker): build `./scripts/build.sh`; run `ENGINE_RENDERER=diligent ENGINE_AUTOTEST=enter ENGINE_SCREENSHOT=/tmp/x.jpg ENGINE_SCREENSHOT_FRAME=150 ENGINE_TERRAIN_DEBUG=ramp ENGINE_CAMERA=topdown|default|close ENGINE_DEBUG_CAM=1 ./build/c-game/c-game`; prefix with `stdbuf -o0 -e0` so logs survive a crash; kill strays with `pkill -9 -f 'build/c-ga[m]e'` (avoid self-match) — after a SIGKILL the RTX 5090 can wedge, so wait ~10s and retry. Shaders live at `c-engine/renderer/diligent/shaders/heightmap_terrain_{vs,ps}.hlsl` and are copied into pak_1 by CMake — **rebuild after editing them**. All temp debug (red/worldpos PS early-return, vbo/proj/gpu-dump warns, debugDumped*) has been reverted; the tree is clean and builds.

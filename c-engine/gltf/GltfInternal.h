@@ -23,4 +23,10 @@ void gltfDestroyDiligent(void);
 bool gltfBoundingBoxDiligent(float min[3], float max[3]);
 size_t gltfDiligentMeshNodeCount(void);  // scene nodes carrying a mesh
 
+// The PBR preintegrated GGX LUT SRV (owned by the GLTF_PBR_Renderer):
+// returns the ITextureView* with the reference already incremented, or
+// null while the renderer is uninitialized. The terrain pass borrows it
+// for lighting parity; it must be destroyed before gltfDestroyDiligent.
+void* gltfDiligentPreintegratedGGX(void);
+
 }  // namespace engine::gltf

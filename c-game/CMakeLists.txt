@@ -21,6 +21,18 @@ target_link_libraries(c-game PRIVATE
     ${thirdparty}/jansson/git/${platform_dir}/lib/libjansson.a
     ${thirdparty}/thpool/${platform_dir}/libthpool.a
 
+    # image: KTX2/Basis transcode (ktx) + stb_image_resize2 (stb). The ktx
+    # bundle vendors its own BasisU copy (newer ABI than Filament's tnt
+    # basisu) and cannot be deduplicated against it, so the link must
+    # tolerate the overlapping basist:: symbols; the ktx libs are listed
+    # first, so its definitions win the duplicates
+    -Wl,--allow-multiple-definition
+    ${thirdparty}/ktx/git/${platform_dir}/libktx_read.a
+    ${thirdparty}/ktx/git/${platform_dir}/libktx.a
+    ${thirdparty}/ktx/git/${platform_dir}/interface/basisu_c_binding/libobj_basisu_cbind.a
+    ${thirdparty}/ktx/git/${platform_dir}/external/astc-encoder/Source/libastcenc-avx2-static.a
+    ${thirdparty}/stb/${platform_dir}/libstb.a
+
     # GUI (imgui rendered through filament via filagui; yoga for flexbox layout)
     ${thirdparty}/imgui/git/${platform_dir}/libimgui.a
     ${thirdparty}/filament/git/${platform_dir}/libs/filagui/libfilagui.a

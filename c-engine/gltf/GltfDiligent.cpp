@@ -284,6 +284,21 @@ Uint32 worldSceneIndex(void) { return sceneIndex; }
 
 }  // namespace engine::gltf
 
+namespace engine::gltf {
+
+void* gltfDiligentPreintegratedGGX(void) {
+    if (!pbrRenderer) {
+        return nullptr;
+    }
+    ITextureView* view = pbrRenderer->GetPreintegratedGGX_SRV();
+    if (view) {
+        view->AddRef();
+    }
+    return view;
+}
+
+}  // namespace engine::gltf
+
 namespace engine::renderer::diligent {
 
 void worldDraw(Diligent::IDeviceContext* ctx) {
