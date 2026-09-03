@@ -6,7 +6,6 @@
 #include "gltf/Gltf.h"
 #include "renderer/Renderer.h"
 #include "renderer/Window.h"
-#include "terrain/Terrain.h"
 #include "gameState/GameState.h"
 #include "mainMenu/MainMenuGui.h"
 
@@ -39,17 +38,10 @@ namespace game {
         if (worldLoaded) return;
 
         engine::gltf::gltfInit();
-        engine::terrain::terrainInit("models/terrain/oghuzlands.json");
-        engine::gltf::gltfLoad("models/terrain/oghuzlands.glb");
-        engine::terrain::terrainApplyToAsset();
 
-        // frame the terrain: slightly off-center, looking across it
-        f32 min[3];
-        f32 max[3];
-        engine::gltf::gltfBoundingBox(min, max);
-        f32 center[3] = {(min[0] + max[0]) * 0.5f,
-                         (min[1] + max[1]) * 0.5f,
-                         (min[2] + max[2]) * 0.5f};
+        // TODO(azgaar): load the .map world (AzgaarWorld + heightmap terrain)
+        // and frame the camera from the world bounds.
+        f32 center[3] = {0.0f, 0.0f, 0.0f};
 
         const char* cameraMode = getenv("ENGINE_CAMERA");
         if (cameraMode && utils::strequals(cameraMode, "topdown")) {
@@ -94,10 +86,7 @@ namespace game {
     void GameSystem::removed() {
         engine::systemRemove(&engine::flyingCameraSystem);
         if (worldLoaded) {
-            // destroy the glTF asset first: its renderables still reference
-            // the terrain material
             engine::gltf::gltfDestroy();
-            engine::terrain::terrainDestroy();
 
             // the renderer owns the sun/ambient now; they stay set for the
             // next world load and affect nothing while no geometry is drawn

@@ -16,7 +16,6 @@
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
 #include <utils/EntityManager.h>
-#include <utils/NameComponentManager.h>
 
 #include "materials/uberarchive.h"
 
@@ -32,7 +31,6 @@ static ResourceLoader* resourceLoader = nullptr;
 static MaterialProvider* materialProvider = nullptr;
 static TextureProvider* stbDecoder = nullptr;
 static TextureProvider* ktx2Decoder = nullptr;
-static utils::NameComponentManager* names = nullptr;
 static FilamentInstance* instance = nullptr;
 static Animator* animator = nullptr;
 
@@ -48,11 +46,9 @@ bool gltfInitFilament(void) {
         return false;
     }
 
-    names = new utils::NameComponentManager(utils::EntityManager::get());
     loader = AssetLoader::create({
             .engine = engine,
             .materials = materialProvider,
-            .names = names,
     });
     if (!loader) {
         utils::warn("gltf: AssetLoader::create failed");
@@ -105,7 +101,6 @@ bool gltfLoadFilament(const char* pakPath) {
 
 void gltfUpdateFilament(double elapsedSeconds) {
     if (asset) {
-        names->gc();
         loader->gc();
     }
     if (animator && animator->getAnimationCount() > 0) {
@@ -128,29 +123,6 @@ bool gltfBoundingBoxFilament(float min[3], float max[3]) {
     return true;
 }
 
-size_t gltfEntitiesNamedFilament(const char* prefix, u64* out, size_t cap) {
-    if (!asset || !names) {
-        return 0;
-    }
-
-    size_t found = 0;
-    const utils::Entity* entities = asset->getEntities();
-    for (size_t i = 0; i < asset->getEntityCount(); i++) {
-        utils::Entity e = entities[i];
-        if (!names->hasComponent(e)) {
-            continue;
-        }
-        const char* name = names->getName(names->getInstance(e));
-        if (name && utils::strStartsWith(name, prefix)) {
-            if (found < cap) {
-                out[found] = e.getId();
-            }
-            found++;
-        }
-    }
-    return found;
-}
-
 void gltfDestroyFilament(void) {
     if (asset) {
         scene->removeEntities(asset->getEntities(), asset->getEntityCount());
@@ -170,12 +142,9 @@ void gltfDestroyFilament(void) {
     delete stbDecoder;
     delete ktx2Decoder;
     AssetLoader::destroy(&loader);
-    delete names;
-
     resourceLoader = nullptr;
     stbDecoder = nullptr;
     ktx2Decoder = nullptr;
-    names = nullptr;
     utils::info("gltf: destroyed");
 }
 }  // namespace engine::gltf

@@ -5,7 +5,6 @@
 #include "logger/Logger.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/RenderBackend.h"
-#include "terrain/TerrainInternal.h"
 
 #include <Graphics/GraphicsEngine/interface/Buffer.h>
 #include <Graphics/GraphicsEngine/interface/DeviceContext.h>
@@ -50,7 +49,6 @@ static bool bindingsValid = false;
 static Uint32 sceneIndex = 0;
 static BoundBox modelBounds;
 static bool haveBounds = false;
-static std::vector<const GLTF::Node*> namedNodes;
 
 bool gltfInitDiligent(void) {
     if (!device) {
@@ -113,15 +111,6 @@ bool gltfLoadDiligent(const char* pakPath) {
     modelBounds = model->ComputeBoundingBox(sceneIndex, *transforms);
     haveBounds = true;
 
-    namedNodes.clear();
-    if (sceneIndex < model->Scenes.size()) {
-        for (const GLTF::Node* node : model->Scenes[sceneIndex].LinearNodes) {
-            if (!node->Name.empty()) {
-                namedNodes.push_back(node);
-            }
-        }
-    }
-
     modelBindings = pbrRenderer->CreateResourceBindings(*model, frameAttribsCB);
     bindingsValid = true;
 
@@ -170,7 +159,7 @@ void gltfIblUpdateDiligent(const f32 color[3], f32 intensity) {
         return;
     }
 
-    // match the terrain/filament ambient: color * (lux * exposure) / pi
+    // match the filament ambient: color * (lux * exposure) / pi
     const float exposure = 1.2f * (float)std::exp2(-15.0);
     const float k = std::max(0.0f, intensity) * exposure * 0.318309886f;  // 1/pi
     float rgb[3] = {std::min(1.0f, color[0] * k), std::min(1.0f, color[1] * k),
@@ -222,19 +211,6 @@ bool gltfBoundingBoxDiligent(float min[3], float max[3]) {
     return true;
 }
 
-size_t gltfEntitiesNamedDiligent(const char* prefix, u64* out, size_t cap) {
-    size_t found = 0;
-    for (const GLTF::Node* node : namedNodes) {
-        if (utils::strStartsWith(node->Name.c_str(), prefix)) {
-            if (found < cap) {
-                out[found] = (u64)node->Index;
-            }
-            found++;
-        }
-    }
-    return found;
-}
-
 size_t gltfDiligentMeshNodeCount(void) {
     if (!model || model->Scenes.empty()) {
         return 0;
@@ -248,8 +224,7 @@ size_t gltfDiligentMeshNodeCount(void) {
     return count;
 }
 
-// fills the shared PBR frame attribs (camera + sun); the terrain path uses its
-// own constant buffers, this one drives GLTF_PBR_Renderer
+// fills the shared PBR frame attribs (camera + sun) for GLTF_PBR_Renderer
 static void fillFrameAttribs(IDeviceContext* ctx) {
     const float4x4& view = engine::renderer::diligent::diligentFrameView();
     const float4x4& proj = engine::renderer::diligent::diligentFrameProj();
@@ -322,11 +297,6 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
 
     engine::renderer::diligent::setWorldDrew(true);
 
-    if (engine::terrain::terrainDiligentOwnsDrawing()) {
-        engine::terrain::terrainDiligentDrawWorld(ctx, *model, *transforms);
-        return;
-    }
-
     fillFrameAttribs(ctx);
 
     GLTF_PBR_Renderer* pbr = worldPbrRenderer();
@@ -351,7 +321,6 @@ void gltfDestroyDiligent(void) {
     iblIrradiance.Release();
     iblPrefiltered.Release();
     pbrRenderer.reset();
-    namedNodes.clear();
     haveBounds = false;
     utils::info("gltf: destroyed");
 }

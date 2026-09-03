@@ -29,10 +29,6 @@ bool gltfBoundingBox(f32 min[3], f32 max[3]) {
     return diligent() ? gltfBoundingBoxDiligent(min, max) : gltfBoundingBoxFilament(min, max);
 }
 
-size_t gltfEntitiesNamed(const char* prefix, u64* out, size_t cap) {
-    return diligent() ? gltfEntitiesNamedDiligent(prefix, out, cap)
-                      : gltfEntitiesNamedFilament(prefix, out, cap);
-}
 
 void gltfFrameCamera(void) {
     f32 min[3];

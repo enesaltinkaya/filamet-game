@@ -36,7 +36,7 @@ static void exitGame(void) {
 // diligent through imgui_impl_vulkan (a VkDescriptorSet). The .ktx2
 // originals stay the GPU-side assets; the PNGs are the CPU-friendly twins
 // for the UI (a second Basis transcoder copy can't coexist in the process:
-// the engine's copy is already used by the terrain/gltf ktx2 paths).
+// the engine's copy is already used by the gltf ktx2 path).
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/git/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
