@@ -23,3 +23,7 @@ We are using filament and diligent render backends.
 Sources are here with samples and docs;
 /home/enes/Projects/c/cpp-thirdparty/filament
 /home/enes/Projects/c/cpp-thirdparty/diligent
+
+### Lessons
+
+After a multi-hour debugging session, record the rule + incident in `docs/lessons.md` (dated entries, rule first). Read it before fighting renderer/texture/buffer weirdness — known pitfalls (e.g. Diligent dynamic-buffer ring clobbering) are listed there.
