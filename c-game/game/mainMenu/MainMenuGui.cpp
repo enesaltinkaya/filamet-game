@@ -1,5 +1,6 @@
 #include "MainMenuGui.h"
 #include "Game.h"
+#include "cameraGui/CameraGui.h"
 #include "gui/GuiManager.h"
 #include "gameState/GameState.h"
 #include "credits/CreditsGui.h"
@@ -26,6 +27,8 @@ static void enterWorld(void) {
     // no-op until a world sets an active HeightmapTerrain (phase 4)
     engine::ecsSystemAddDeferred(100, &engine::heightmapTerrainSystem);
     engine::gui::guiRemove(&mainMenuGui);
+    // the old engine showed the camera debug readout while in the world
+    engine::gui::guiAdd(&cameraGui);
 }
 
 static void exitGame(void) {

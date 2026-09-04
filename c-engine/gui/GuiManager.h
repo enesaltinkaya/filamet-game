@@ -34,6 +34,9 @@ ImFont* guiGetBodyFont(void);
 ImFont* guiGetTitleFont(void);
 // Bold Montserrat (main menu text; the old rcss menu used font-weight 900).
 ImFont* guiGetMenuFont(void);
+// Sometype Mono (debug readouts; the old engine's rcss debug documents —
+// camera, stats — were all set in "Sometype Mono").
+ImFont* guiGetMonoFont(void);
 
 // Upload an RGBA8 UI image (top-down rows); the backend takes ownership of the
 // pixel buffer. Returns an ImTextureID for ImGui draw commands, or

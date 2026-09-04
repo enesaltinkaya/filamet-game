@@ -19,10 +19,12 @@ static float curScale = 1.0f;
 static ImFont* fontBody = nullptr;
 static ImFont* fontTitle = nullptr;
 static ImFont* fontMenu = nullptr;
+static ImFont* fontMono = nullptr;
 
 ImFont* guiGetBodyFont(void) { return fontBody; }
 ImFont* guiGetTitleFont(void) { return fontTitle; }
 ImFont* guiGetMenuFont(void) { return fontMenu; }
+ImFont* guiGetMonoFont(void) { return fontMono; }
 float guiScale(void) { return curScale; }
 
 // Load a font from the pak into ImGui's atlas. ImGui takes ownership of the
@@ -99,6 +101,7 @@ public:
         fontBody = nullptr;
         fontTitle = nullptr;
         fontMenu = nullptr;
+        fontMono = nullptr;
         guiActive = 0;
     }
 
@@ -160,6 +163,8 @@ void guiInit(void) {
     // rendered Montserrat Black (900) for menu rows and Light (300) for
     // body text — the static instances above reproduce that.
     fontMenu = loadPakFont("fonts/montserratBlack.ttf", 18.0f);
+    // Sometype Mono: the old engine's debug-readout face (camera/stats gui)
+    fontMono = loadPakFont("fonts/SometypeMono-SemiBold.ttf", 14.0f);
 
     diligent ? guiBackendInitDiligent() : guiBackendInitFilament();
 
