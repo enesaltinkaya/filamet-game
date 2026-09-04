@@ -82,6 +82,7 @@ static struct {
     f32 camPitch = 20.0f * (float)M_PI / 180.0f;
     f32 camDist  = DIST_DEFAULT;
     f32 spawn[3] = {0.0f, 0.0f, 0.0f};
+    f32 moveYaw   = 0.0f;  // movement basis (old engine's moveYaw — stable during LMB drags)
     f32 facingYaw = 0.0f;  // model yaw toward the movement direction
     char animMoving  = 0; // old engine's isMoving
     char animJumping = 0; // old engine's isJumping
@@ -120,6 +121,7 @@ struct PlayerDb {
     f32 camYaw;
     f32 camPitch;
     f32 camDist;
+    f32 moveYaw;  // appended last — old blobs lack it (fall back to facingYaw)
 };
 
 static void playerDbInit(void) {
@@ -139,13 +141,14 @@ static void playerDbSave(const char* name, PlayerDb* data) {
     utils::sqliteFinalize(stmt);
 }
 
-static bool playerDbLoad(const char* name, PlayerDb* data) {
+static bool playerDbLoad(const char* name, PlayerDb* data, int* outBlobSize) {
     void* stmt = utils::sqliteStatement("SELECT data, length(data) FROM player WHERE name = ?;");
     bool result = false;
     utils::sqliteBindText(stmt, 1, name);
     if (utils::sqliteStep(stmt)) {
         void* blob   = utils::sqliteGetBlob(stmt, 0);
         int blobSize = utils::sqliteGetInt(stmt, 1);
+        *outBlobSize = blobSize;
         memcpy(data, blob, std::min(static_cast<size_t>(blobSize), sizeof(PlayerDb)));
         result = true;
     }
@@ -160,6 +163,7 @@ static void playerDbSaveState(void) {
         .camYaw    = p.camYaw,
         .camPitch  = p.camPitch,
         .camDist   = p.camDist,
+        .moveYaw   = p.moveYaw,
     };
     playerDbSave("player", &data);
 }
@@ -221,6 +225,7 @@ static void playerSpawn(void) {
     p.pos[1]               = groundY;
     p.pos[2]               = p.spawn[2];
     p.camDist              = DIST_DEFAULT;
+    p.moveYaw               = 0.0f;  // orbit convention: W runs away from the camera
     p.facingYaw            = 0.0f;
     p.animMoving           = 0;
     p.animJumping          = 0;
@@ -234,17 +239,46 @@ static void playerSpawn(void) {
     // onto the heightmap under the loaded position.
     playerDbInit();
     PlayerDb saved = {};
-    if (playerDbLoad("player", &saved)) {
+    int savedSize = 0;
+    if (playerDbLoad("player", &saved, &savedSize)) {
         p.pos[0]   = saved.pos[0];
         p.pos[1]   = saved.pos[1];
         p.pos[2]   = saved.pos[2];
         p.facingYaw = saved.facingYaw;
+        p.moveYaw   = (savedSize >= (int)sizeof(PlayerDb)) ? saved.moveYaw
+                                                           : saved.facingYaw + (float)M_PI;
         p.camYaw    = saved.camYaw;
         p.camPitch  = saved.camPitch;
         p.camDist   = saved.camDist;
         utils::info("player: loaded saved state pos (%.1f, %.1f, %.1f) cam (%.0f°, %.0f°, %.1f m)",
                     p.pos[0], p.pos[1], p.pos[2], p.camYaw * 180.0f / (float)M_PI,
                     p.camPitch * 180.0f / (float)M_PI, p.camDist);
+    }
+
+    // The camera table is the source for the last camera view (fly or orbit).
+    // If a saved view exists, derive the initial orbit from it: the orbit
+    // starts at the saved eye, so third-person mode picks up exactly where the
+    // last session's camera was (the player DB orbit above is the fallback
+    // for first runs without a camera row).
+    f32 savedEye[3];
+    f32 savedCamYaw, savedCamPitch;
+    if (flyingCameraSavedView(savedEye, &savedCamYaw, &savedCamPitch)) {
+        f32 dx = savedEye[0] - p.pos[0];
+        f32 dy = savedEye[1] - (p.pos[1] + CAPSULE_CENTER);
+        f32 dz = savedEye[2] - p.pos[2];
+        f32 d  = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (d > 0.05f) {
+            p.camDist  = d;
+            if (p.camDist < DIST_MIN) p.camDist = DIST_MIN;
+            if (p.camDist > DIST_MAX) p.camDist = DIST_MAX;
+            p.camPitch = asinf(dy / d);
+            if (p.camPitch < PITCH_MIN) p.camPitch = PITCH_MIN;
+            if (p.camPitch > PITCH_MAX) p.camPitch = PITCH_MAX;
+            p.camYaw   = atan2f(dx, dz);
+            utils::info("player: orbit restored from saved camera eye (%.1f, %.1f, %.1f) — dist %.1f m, pitch %.0f°",
+                        savedEye[0], savedEye[1], savedEye[2], p.camDist,
+                        p.camPitch * 180.0f / (float)M_PI);
+        }
     }
 
     if (!p.character) {
@@ -314,10 +348,11 @@ void PlayerSystem::preUpdate() {
     if (p.active) playerUpdateMouseMode();
 }
 
-// Camera-relative movement basis: forward = away from the camera (W), right =
-// screen right (D). Derives from the orbit yaw only — the camera sits at
-// pos + dist·(sin yaw·cos pitch, sin pitch, cos yaw·cos pitch), so the
-// camera→player horizontal direction is −(sin yaw, 0, cos yaw).
+// Movement basis: forward = away from the camera (W), right = screen right
+// (D). Derived from moveYaw, NOT camYaw — an LMB drag orbits the camera and
+// must not change the player's direction (old engine: moveYaw is only synced
+// to cameraYaw while RMB is held). moveYaw is in the camera convention
+// (camera→player = −(sin, 0, cos) at that yaw), so the same math applies.
 static void movementInput(f32* outHx, f32* outHz) {
     char f = (input.keys[SDL_SCANCODE_W] ? 1 : 0) - (input.keys[SDL_SCANCODE_S] ? 1 : 0);
     char r = (input.keys[SDL_SCANCODE_D] ? 1 : 0) - (input.keys[SDL_SCANCODE_A] ? 1 : 0);
@@ -332,8 +367,8 @@ static void movementInput(f32* outHx, f32* outHz) {
         *outHx = *outHz = 0.0f;
         return;
     }
-    f32 sy = sinf(p.camYaw);
-    f32 cy = cosf(p.camYaw);
+    f32 sy = sinf(p.moveYaw);
+    f32 cy = cosf(p.moveYaw);
     f32 fx = -sy, fz = -cy;  // forward (W)
     f32 rx =  cy, rz = -sy;  // right (D)
     f32 hx = fx * f + rx * r;
@@ -469,10 +504,14 @@ void PlayerSystem::update() {
         p.facingYaw     += diff * (f32)std::min(1.0f, TURN_SPEED * utils::timer.dt);
     }
 
-    // RMB drag rotates the character with the camera (old engine: while the
-    // right button is held, moveYaw/facingYaw = cameraYaw — the model faces
-    // away from the camera, i.e. the orbit forward (−sin, −cos) of camYaw).
+    // RMB held: the player's direction snaps to the camera's orbit forward
+    // (old engine: while the right button is held, moveYaw/facingYaw =
+    // cameraYaw — the model faces away from the camera). moveYaw is in the
+    // orbit convention (camera→player = −(sin, 0, cos) at that yaw); the
+    // model faces forward yaw (sin, 0, cos), so that is camYaw + π.
+    // LMB drag rotates the camera only — the player's direction stays as is.
     if (p.active && input.mouseRight) {
+        p.moveYaw   = p.camYaw;
         p.facingYaw = atan2f(-sinf(p.camYaw), -cosf(p.camYaw));
     }
     gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.facingYaw);
@@ -494,6 +533,19 @@ void PlayerSystem::postUpdate() {
     if (now > lastSave + 1000.0) {
         lastSave = now;
         playerDbSaveState();
+        // The camera table holds the last camera view in either mode — while
+        // the orbit drives the renderer camera, persist its actual eye
+        // position + yaw/pitch (fly convention: pitch > 0 = looking up). Gated
+        // on p.active: automated runs (screenshot / dolly) keep their scripted
+        // camera and must not clobber the saved view.
+        if (p.active) {
+            f32 pos[3];
+            f32 f[3];
+            renderer::rendererCameraGet(pos, f);
+            f32 yaw   = atan2f(-f[0], -f[2]);
+            f32 pitch = asinf(f[1]);
+            flyingCameraSaveView(pos, yaw, pitch);
+        }
     }
 }
 }  // namespace engine

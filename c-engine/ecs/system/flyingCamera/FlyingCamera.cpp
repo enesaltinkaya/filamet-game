@@ -89,6 +89,29 @@ static Vec3 forwardDir(void) {
     return {-cp * std::sin(yaw), std::sin(pitch), -cp * std::cos(yaw)};
 }
 
+bool flyingCameraSavedView(f32* outPos, f32* outYaw, f32* outPitch) {
+    CameraDb data = {};
+    // A missing table would terminate in sqliteStatement — guard it (the
+    // fly system's added() creates the table, the player may read it first).
+    if (!utils::sqliteTableExists("camera")) return false;
+    if (!cameraDbLoad("camera", &data)) return false;
+    outPos[0]   = data.pos[0];
+    outPos[1]   = data.pos[1];
+    outPos[2]   = data.pos[2];
+    *outYaw     = data.yaw;
+    *outPitch   = data.pitch;
+    return true;
+}
+
+void flyingCameraSaveView(const f32 pos[3], f32 yaw, f32 pitch) {
+    CameraDb data = {
+        .pos   = {pos[0], pos[1], pos[2]},
+        .yaw   = yaw,
+        .pitch = pitch,
+    };
+    cameraDbSave("camera", &data);
+}
+
 static Vec3 rightDir(void) {
     return {std::cos(yaw), 0.0f, -std::sin(yaw)};
 }
