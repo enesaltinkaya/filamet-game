@@ -17,15 +17,13 @@ PlayerSystem playerSystem;
 PlayerSystem::PlayerSystem() : System("Player") {}
 
 // ── Character + physics constants (old engine Player.cpp / jolt_c_api) ──────
-static const float CAPSULE_HALF    = 0.70f;  // feet → centre (old: 0.45 + 0.25)
-static const float RUN_SPEED      = 4.0f;   // m/s
-static const float WALK_SPEED     = 2.0f;   // shift-held
-static const float JUMP_SPEED     = 4.0f;   // vertical impulse
-static const float GRAVITY        = -9.81f; // Jolt's default world gravity
-static const float MAX_FALL       = 40.0f;  // terminal velocity
-static const float MAX_SLOPE_TAN  = 1.0f;   // 45° climb limit (old joltCharacterCreate)
-static const float STEP_HEIGHT    = 0.25f;  // Jolt mWalkStairsStepUp / mStickToFloorStepDown
-static const float GROUND_EPSILON = 0.02f;
+static const float CAPSULE_HALF_HEIGHT = 0.45f; // half of the cylindrical part
+static const float CAPSULE_RADIUS      = 0.25f; // capsule radius
+static const float CAPSULE_CENTER      = 0.70f; // feet → centre (0.45 + 0.25), camera target
+static const float MAX_SLOPE_ANGLE     = 45.0f * (float)M_PI / 180.0f; // old joltCharacterCreate
+static const float RUN_SPEED           = 4.0f; // m/s
+static const float WALK_SPEED          = 2.0f; // shift-held
+static const float JUMP_SPEED          = 4.0f; // vertical jump velocity
 
 // ── Third-person orbit camera (old engine's orbit-mode ranges) ──────────────
 static const float CAM_SENS       = 0.002f; // rad/px (same as the flying camera)
@@ -50,8 +48,9 @@ static char autoRunEnabled(void) {
 }
 
 static struct {
-    f32 pos[3];  // capsule centre, world metres
-    f32 vy       = 0.0f;
+    f32 pos[3];  // feet position, world metres (Jolt character position)
+    JoltCharacter* character = nullptr;
+    char waitingForGround    = 0; // pinned at spawn until the body under it exists
     f32 camYaw   = 0.0f;
     f32 camPitch = 20.0f * (float)M_PI / 180.0f;
     f32 camDist  = DIST_DEFAULT;
@@ -99,12 +98,16 @@ static void playerSpawn(void) {
     HeightmapTerrain* ht = heightmapTerrainGetActive();
     f32 groundY           = ht ? heightmapTerrainSample(ht, p.spawn[0], p.spawn[2]) : p.spawn[1];
     p.pos[0]               = p.spawn[0];
-    p.pos[1]               = groundY + CAPSULE_HALF;
+    p.pos[1]               = groundY;
     p.pos[2]               = p.spawn[2];
-    p.vy                   = 0.0f;
     p.camDist              = DIST_DEFAULT;
     p.spawned               = 1;
-    gltf::gltfPlaceAt(p.pos[0], p.pos[1] - CAPSULE_HALF, p.pos[2]);
+    p.waitingForGround      = 1;  // released by the first update once the body under the spawn exists
+    if (!p.character) {
+        p.character = joltCharacterCreate(CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS, p.pos, MAX_SLOPE_ANGLE);
+        if (!p.character) utils::warn("player: Jolt character creation failed");
+    }
+    gltf::gltfPlaceAt(p.pos[0], p.pos[1], p.pos[2]);
     utils::info("player: spawned at (%.1f, %.1f, %.1f), ground %.1f m",
                 p.pos[0], p.pos[1], p.pos[2], groundY);
 }
@@ -125,6 +128,12 @@ void PlayerSystem::added() {
 
 void PlayerSystem::removed() {
     playerSetActive(0);
+    // ecsDestroy snapshots the system list, so removed() may run twice;
+    // only destroy the character once.
+    if (p.character) {
+        joltCharacterDestroy(p.character);
+        p.character = nullptr;
+    }
     p.spawned = 0;
 }
 
@@ -141,14 +150,14 @@ void PlayerSystem::preUpdate() {
             if (flyingCameraFlying()) {
                 // Take over from a fly: park the player where the camera was
                 // (the old engine's playerFollowFlyingCamera) — the first
-                // update ground-snaps it.
+                // physics update drops it onto the ground.
                 f32 pos[3];
                 f32 f[3];
                 renderer::rendererCameraGet(pos, f);
                 p.pos[0] = pos[0];
                 p.pos[1] = pos[1] - 3.0f;
                 p.pos[2] = pos[2];
-                p.vy     = 0.0f;
+                if (p.character) joltCharacterSetPosition(p.character, p.pos);
                 flyingCameraStop();
             }
             playerSetActive(1);
@@ -203,77 +212,61 @@ static void playerUpdateCamera(void) {
     f32 sy  = sinf(p.camYaw);
     f32 cp  = cosf(p.camPitch);
     f32 sp  = sinf(p.camPitch);
+    // The camera orbits the capsule centre (feet + 0.70 m), not the feet.
+    f32 cx   = p.pos[0];
+    f32 cy   = p.pos[1] + CAPSULE_CENTER;
+    f32 cz   = p.pos[2];
     f32 eye[3] = {
-        p.pos[0] + sy * cp * p.camDist,
-        p.pos[1] + sp * p.camDist,
-        p.pos[2] + cosf(p.camYaw) * cp * p.camDist,
+        cx + sy * cp * p.camDist,
+        cy + sp * p.camDist,
+        cz + cosf(p.camYaw) * cp * p.camDist,
     };
     f32 up[3] = {0.0f, 1.0f, 0.0f};
-    renderer::rendererCameraLookAt(eye, p.pos, up);
+    f32 target[3] = {cx, cy, cz};
+    renderer::rendererCameraLookAt(eye, target, up);
 }
 
 void PlayerSystem::update() {
-    if (!p.spawned) return;
-    HeightmapTerrain* ht = heightmapTerrainGetActive();
-    if (!ht) return;
-    float dt = utils::timer.dt;
+    if (!p.spawned || !p.character) return;
 
-    // ── Desired horizontal velocity (old engine: instant, full air control) ──
-    f32 hx = 0.0f, hz = 0.0f;
-    if (p.active) movementInput(&hx, &hz);
-
-    // ── Vertical (mirrors joltCharacterUpdate: grounded → jump impulse or
-    //    flat, airborne → accumulate gravity) ─────────────────────────────
-    f32 groundY  = heightmapTerrainSample(ht, p.pos[0], p.pos[2]);
-    f32 feet     = p.pos[1] - CAPSULE_HALF;
-    char onGround = feet <= groundY + GROUND_EPSILON;
-    if (onGround) {
-        p.vy = (p.active && input.keys[SDL_SCANCODE_SPACE]) ? JUMP_SPEED : 0.0f;
-    } else {
-        p.vy += GRAVITY * dt;
-        if (p.vy < -MAX_FALL) p.vy = -MAX_FALL;
-    }
-
-    // ── Integrate ─────────────────────────────────────────────────────────
-    f32 nx   = p.pos[0] + hx * dt;
-    f32 ny   = p.pos[1] + p.vy * dt;
-    f32 nz   = p.pos[2] + hz * dt;
-    f32 newFeet = ny - CAPSULE_HALF;
-    f32 oldFeet = p.pos[1] - CAPSULE_HALF;
-    f32 groundAt = heightmapTerrainSample(ht, nx, nz);
-
-    if (newFeet <= groundAt) {
-        // Ground at/above the feet. Beyond a step, steeper than the climb
-        // limit is a wall: keep the old XZ (the vertical move still applies).
-        f32 rise = groundAt - oldFeet;
-        if (rise > STEP_HEIGHT) {
-            f32 dx    = nx - p.pos[0];
-            f32 dz    = nz - p.pos[2];
-            f32 horiz = sqrtf(dx * dx + dz * dz);
-            if (horiz > 1e-4f && rise / horiz > MAX_SLOPE_TAN) {
-                nx       = p.pos[0];
-                nz       = p.pos[2];
-                groundAt = heightmapTerrainSample(ht, nx, nz);
-            }
+    // Hold the character at its spawn position until the streaming heightfield
+    // body under it exists (the old engine's waitingForGround gate — without
+    // it the character would fall through the terrain before the collision
+    // data is ready). No active heightmap means a non-heightmap world: the
+    // gate clears immediately.
+    if (p.waitingForGround) {
+        HeightmapTerrain* ht = heightmapTerrainGetActive();
+        if (!ht || heightmapTerrainHasBodyAt(ht, p.pos[0], p.pos[2])) {
+            p.waitingForGround = 0;
+            utils::info("player: ground body ready, releasing character");
+        } else {
+            // No ground yet: stay pinned at spawn, no physics step.
+            if (p.active) playerUpdateCamera();
+            return;
         }
-        p.pos[0] = nx;
-        p.pos[1] = groundAt + CAPSULE_HALF;  // snap feet onto the surface
-        p.pos[2] = nz;
-        if (p.vy < 0.0f) p.vy = 0.0f;        // landing
-    } else if (oldFeet > groundAt && oldFeet - groundAt <= STEP_HEIGHT && p.vy <= 0.0f) {
-        // Walked off a small ledge: stick to the floor (Jolt's
-        // mStickToFloorStepDown) instead of falling one frame at a time.
-        p.pos[0] = nx;
-        p.pos[1] = groundAt + CAPSULE_HALF;
-        p.pos[2] = nz;
-    } else {
-        // Airborne.
-        p.pos[0] = nx;
-        p.pos[1] = ny;
-        p.pos[2] = nz;
     }
 
-    gltf::gltfPlaceAt(p.pos[0], p.pos[1] - CAPSULE_HALF, p.pos[2]);
+    // Desired velocity (old engine: instant, full air control).
+    f32 desiredVel[3] = {0.0f, 0.0f, 0.0f};
+    if (p.active) movementInput(&desiredVel[0], &desiredVel[2]);
+
+    // Jump: grounded + SPACE → vertical velocity. The wrapper keeps the
+    // desired Y while grounded, cancels it otherwise, and accumulates
+    // gravity in the air itself.
+    if (p.active && input.keys[SDL_SCANCODE_SPACE] &&
+        joltCharacterGetGroundState(p.character) == JOLT_GROUND_STATE_ON_GROUND) {
+        desiredVel[1] = JUMP_SPEED;
+    }
+
+    // Step the character controller, read the position back (feet).
+    joltCharacterUpdate(p.character, desiredVel, utils::timer.dt);
+    f32 charPos[3];
+    joltCharacterGetPosition(p.character, charPos);
+    p.pos[0] = charPos[0];
+    p.pos[1] = charPos[1];
+    p.pos[2] = charPos[2];
+
+    gltf::gltfPlaceAt(p.pos[0], p.pos[1], p.pos[2]);
     if (p.active) playerUpdateCamera();
 }
 }  // namespace engine

@@ -1,5 +1,6 @@
 #include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
+#include "ecs/system/physics/PhysicsSystem.h"
 #include "thread/Thread.h"
 #include "renderer/Renderer.h"
 
@@ -92,8 +93,18 @@ static HeightmapTile* heightmapTerrainCreateTile(HeightmapTerrain* ht, i32 tileX
 }
 
 static void heightmapTerrainFreeTile(HeightmapTile* tile) {
-    // Phase 2/3 hooks land here (GPU texture / Jolt body teardown) before
-    // the delete; main thread only.
+    // Phase 2/3 teardown before the delete; main thread only.
+    //
+    // The Jolt body is freed UNCONDITIONALLY (not gated on
+    // physicsSystemJoltActive): joltHeightMapDestroy is safe when the Jolt
+    // world is already gone (it null-checks joltSystem and just deletes the
+    // wrapper). Gating on the active flag leaked every body, because the
+    // physics system is removed before the heightmap terrain is destroyed
+    // at shutdown.
+    if (tile->physicsData) {
+        joltHeightMapDestroy(reinterpret_cast<JoltHeightMap*>(tile->physicsData));
+        tile->physicsData = nullptr;
+    }
     delete tile;
 }
 
@@ -107,6 +118,21 @@ HeightmapTile* heightmapTerrainGetTile(HeightmapTerrain* ht, i32 tileX, i32 tile
 
 // Forward declaration (defined below; caller must hold heightmapLock).
 static HeightmapTile* heightmapTerrainFindTile(HeightmapTerrain* ht, i32 tileX, i32 tileZ);
+
+char heightmapTerrainHasBodyAt(const HeightmapTerrain* ht, float wx, float wz) {
+    if (!ht || !ht->initialized) return 0;
+
+    utils::threadLock(&heightmapLock);
+    char has = 0;
+    if (ht->registered) {
+        HeightmapTile* tile = heightmapTerrainFindTile(const_cast<HeightmapTerrain*>(ht),
+                                                       heightmapWorldToTileCoord(ht, wx),
+                                                       heightmapWorldToTileCoord(ht, wz));
+        has = (tile && tile->physicsData != nullptr);
+    }
+    utils::threadUnlock(&heightmapLock);
+    return has;
+}
 
 u32 heightmapTerrainSnapshotTiles(HeightmapTerrain* ht,
                                   HeightmapTileView* outViews,
@@ -747,6 +773,88 @@ bool heightmapTerrainSelfTest(void) {
     return pass;
 }
 
+// ── Phase 3: Jolt heightfield collision ────────────────────────────────
+// One static heightfield body per READY tile, built from the tile's physics
+// grid (HEIGHTMAP_PHYSICS_PSN^2 samples, spacing size/(PSN-1) — the SAME
+// lattice the render lattice lifts, so the walked surface is the rendered
+// surface). Bodies are created on the main thread (the Jolt world is not
+// thread-safe) with a per-frame budget, nearest to the anchor first, and
+// destroyed with the tile on eviction (heightmapTerrainFreeTile).
+
+#define HEIGHTMAP_PHYSICS_BODIES_PER_FRAME 8
+
+struct HeightmapPhysicsPending {
+    HeightmapTile* tile;
+    float          dist2;
+};
+
+static int heightmapPhysicsPendingCompare(const void* a, const void* b) {
+    float da = static_cast<const HeightmapPhysicsPending*>(a)->dist2;
+    float db = static_cast<const HeightmapPhysicsPending*>(b)->dist2;
+    return (da > db) - (da < db);
+}
+
+static void heightmapTerrainSyncPhysics(HeightmapTerrain* ht, float anchorX, float anchorZ) {
+    if (!physicsSystemJoltActive()) return;
+
+    // Collect READY tiles without a body (under the lock; the builder thread
+    // only publishes grids, it never touches Jolt).
+    HeightmapPhysicsPending pending[64];
+    u32                     count = 0;
+
+    utils::threadLock(&heightmapLock);
+    if (ht->registered) {
+        for (HeightmapTile* tile : ht->tiles) {
+            if (count >= 64) break;
+            if (tile->state != HEIGHTMAP_TILE_READY || tile->physicsHeights.empty()) continue;
+            if (tile->physicsData) continue;
+            float dx = tile->originX + tile->sizeMeters * 0.5f - anchorX;
+            float dz = tile->originZ + tile->sizeMeters * 0.5f - anchorZ;
+            pending[count].tile  = tile;
+            pending[count].dist2 = dx * dx + dz * dz;
+            count++;
+        }
+    }
+    utils::threadUnlock(&heightmapLock);
+
+    if (count == 0) return;
+    qsort(pending, count, sizeof(pending[0]), heightmapPhysicsPendingCompare);
+
+    static int hitchOn = -1;
+    if (hitchOn < 0) hitchOn = getenv("ENGINE_HITCH_DEBUG") != nullptr;
+    double joltT0 = utils::nanos();
+    u32 created = 0;
+    for (u32 i = 0; i < count && created < HEIGHTMAP_PHYSICS_BODIES_PER_FRAME; i++) {
+        HeightmapTile* tile = pending[i].tile;
+
+        // Sample (x, y) sits at world offset + scale * (x, h, y): anchor the
+        // grid's first sample at the tile's min corner with the physics grid's
+        // spacing, so the heightfield surface coincides with the CPU grid and
+        // the render lattice.
+        float pos[3]    = {0.0f, 0.0f, 0.0f};
+        float rot[4]    = {0.0f, 0.0f, 0.0f, 1.0f};
+        float offset[3] = {tile->originX, 0.0f, tile->originZ};
+        float spacing   = tile->sizeMeters / static_cast<float>(HEIGHTMAP_PHYSICS_PSN - 1);
+        float scale[3]  = {spacing, 1.0f, spacing};
+
+        JoltHeightMap* hm =
+            joltCreateHeightShapeNoFile(tile->physicsHeights.data(), pos, rot, offset, scale, HEIGHTMAP_PHYSICS_PSN);
+        if (!hm) {
+            utils::warn("heightmapTerrain: Jolt heightfield creation failed for tile(%d,%d)", tile->tileX, tile->tileZ);
+            continue;
+        }
+        tile->physicsData = hm;
+        created++;
+    }
+    if (hitchOn && created > 0) utils::info("HITCH: jolt heightfields: %u bodies in %.1f ms", created, (utils::nanos() - joltT0) / 1e6);
+    if (created > 0) {
+        utils::info("heightmapTerrain: created %u heightfield bod%s this frame (%u pending)",
+             created,
+             created == 1 ? "y" : "ies",
+             count);
+    }
+}
+
 // ── System ─────────────────────────────────────────────────────────────────
 // Tracks the streaming window around the camera. Does nothing while no world
 // has an active heightmap terrain (e.g. regular-mesh worlds).
@@ -765,6 +873,9 @@ void HeightmapTerrainSystem::update() {
     renderer::rendererCameraGet(pos, fwd);
 
     heightmapTerrainUpdateWindow(ht, pos[0], pos[2]);
+
+    // Phase 3: keep the Jolt heightfield bodies in sync with the window.
+    heightmapTerrainSyncPhysics(ht, pos[0], pos[2]);
 
     // One-shot phase-5 acceptance log (plans/azgaar-terrain.md): steady-state
     // CPU cost of the terrain work (this system + the render pass, averaged

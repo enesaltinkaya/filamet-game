@@ -14,11 +14,13 @@ namespace engine {
 //   wheel  orbit distance (1.5–20 m)
 //   mouse  orbit yaw/pitch (captured in player mode)
 //
-// Physics: a capsule (r 0.25 m, 0.70 m feet→centre — the old engine's Jolt
-// CharacterVirtual dimensions) walked on the streaming heightmap through
-// heightmapTerrainSample: gravity −9.81, 45° max climb, 0.25 m steps,
-// stick-to-floor on small drops — the same behaviour the old Jolt controller
-// gave (joltCharacterUpdate with mMaxSlopeAngle 45°, step up/down 0.25 m).
+// Physics: a Jolt CharacterVirtual capsule (r 0.25 m, 0.45 m half-cylinder —
+// the old engine's dimensions) walked on the streaming heightmap
+// heightfields: 45° max climb, 0.25 m stair steps, stick-to-floor on small
+// drops — the same behaviour the old engine's joltCharacterUpdate gave.
+// The character position is the FEET position (the shape is offset up by
+// half its height inside the wrapper); the model is placed there and the
+// orbit camera targets the capsule centre (feet + 0.70 m).
 class PlayerSystem final : public System {
 public:
     PlayerSystem();

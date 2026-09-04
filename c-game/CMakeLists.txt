@@ -49,6 +49,10 @@ target_link_libraries(c-game PRIVATE
     # one is picked at startup) + entt windowing (paths from c-engine/CMakeLists.txt)
     ${FILAMENT_LIBS}
     ${DILIGENT_LIBS}
+
+    # physics (Jolt, same prebuilt wrapper + core the old engine linked)
+    ${thirdparty}/jolt/wrapper/${platform_dir}/libcjolt.a
+    ${thirdparty}/jolt/git/${platform_dir}/libJolt.a
     -Wl,--end-group
 )
 

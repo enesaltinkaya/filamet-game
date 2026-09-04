@@ -4,6 +4,7 @@
 #include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "ecs/system/player/Player.h"
+#include "ecs/system/physics/PhysicsSystem.h"
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gui/GuiManager.h"
 #include "gltf/Gltf.h"
@@ -946,6 +947,7 @@ namespace game {
             engine::ecsSystemRemoveDeferred(&engine::playerSystem);
             engine::ecsSystemRemoveDeferred(&engine::flyingCameraSystem);
             engine::ecsSystemRemoveDeferred(&engine::heightmapTerrainSystem);
+            engine::ecsSystemRemoveDeferred(&engine::physicsSystem);
             // Drop the terrain's tile data + render look while the menu is
             // up (world and source stay retained; re-entering the world
             // re-inits the terrain and re-registers the look). The
@@ -966,6 +968,7 @@ namespace game {
         engine::systemRemove(&engine::playerSystem);
         engine::systemRemove(&engine::flyingCameraSystem);
         engine::systemRemove(&engine::heightmapTerrainSystem);
+        engine::systemRemove(&engine::physicsSystem);
         if (worldLoaded) {
             // Terrain before world: heightAt dereferences the world, and the
             // plateau grid indexes into world->settlements.

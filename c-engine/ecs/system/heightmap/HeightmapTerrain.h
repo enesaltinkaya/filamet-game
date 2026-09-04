@@ -135,6 +135,12 @@ void heightmapTerrainRequestGeneration(HeightmapTerrain* ht, i32 tileX, i32 tile
 // O(n) resident-tile lookup (n <= window^2); NULL when not resident.
 HeightmapTile* heightmapTerrainGetTile(HeightmapTerrain* ht, i32 tileX, i32 tileZ);
 
+// True when a Jolt heightfield body exists for the tile containing world
+// (wx, wz). Used by the player to hold the character in place until the
+// ground under it exists (avoids falling through the terrain on spawn, when
+// the streaming heightfields are still being generated/created).
+char heightmapTerrainHasBodyAt(const HeightmapTerrain* ht, float wx, float wz);
+
 // Immutable copy of a READY tile's data, for consumers on other threads or
 // in the renderer (which must not touch the tile table while the builder
 // thread is publishing). The grid pointers stay valid until the owning tile

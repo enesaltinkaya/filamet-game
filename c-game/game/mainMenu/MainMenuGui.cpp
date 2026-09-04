@@ -7,6 +7,7 @@
 #include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "ecs/system/player/Player.h"
+#include "ecs/system/physics/PhysicsSystem.h"
 #include "Engine.h"
 #include "Utils.h"
 
@@ -24,6 +25,9 @@ static void enterWorld(void) {
     utils::info("mainMenu: ENTER WORLD");
     gameSystem.loadWorld();  // blocks a moment on first entry only
     gameStateSet(STATE_PLAYING);
+    // Jolt world first: the terrain's heightfield sync and the player's
+    // character controller both need it alive before they run.
+    engine::ecsSystemAddDeferred(100, &engine::physicsSystem);
     engine::ecsSystemAddDeferred(100, &engine::flyingCameraSystem);
     // no-op until a world sets an active HeightmapTerrain (phase 4)
     engine::ecsSystemAddDeferred(100, &engine::heightmapTerrainSystem);

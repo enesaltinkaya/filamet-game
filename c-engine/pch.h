@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Utils.h"          // IWYU pragma: keep
+#include "jolt/wrapper/src/jolt_c_api.h"  // IWYU pragma: keep
 #include <entt/entt.hpp>    // IWYU pragma: keep
 #include <filament/Camera.h>       // IWYU pragma: keep
 #include <filament/Engine.h>       // IWYU pragma: keep
