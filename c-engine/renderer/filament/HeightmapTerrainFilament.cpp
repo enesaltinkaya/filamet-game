@@ -22,6 +22,7 @@
 #include <utils/EntityManager.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 /*
@@ -161,7 +162,13 @@ filament::Texture* loadKtx2(const char* path, bool srgb) {
     return tex;
 }
 
-// Upload packed RGBA8 pixels (one mip level).
+// Upload packed RGBA8 pixels (one mip level). The caller's buffer is copied:
+// setImage is zero-copy (the driver reads the descriptor's buffer on the
+// engine loop thread), so the descriptor must OWN the storage — the release
+// callback frees the copy once consumed. (A caller buffer + nullptr callback
+// broke the 1x1 white fallback, whose stack source was dead by upload time,
+// and would race a later look-register vector realloc against the in-flight
+// biome/climate uploads.)
 filament::Texture* createRgba8(const u8* pixels, u32 w, u32 h, bool srgb) {
     filament::Texture::Builder builder = filament::Texture::Builder()
             .width((int)w)
@@ -176,10 +183,19 @@ filament::Texture* createRgba8(const u8* pixels, u32 w, u32 h, bool srgb) {
     }
     filament::Texture* tex = builder.build(*engine);
     if (tex) {
+        const size_t bytes = (size_t)w * (size_t)h * 4u;
+        void* copy = malloc(bytes);
+        if (!copy) {
+            utils::warn("heightmapTerrain: rgba8 upload copy failed (%ux%u)", w, h);
+            engine->destroy(tex);
+            return nullptr;
+        }
+        memcpy(copy, pixels, bytes);
         tex->setImage(*engine, 0,
-                filament::backend::PixelBufferDescriptor(pixels, (size_t)w * (size_t)h * 4u,
-                        filament::backend::PixelDataFormat::RGBA,
-                        filament::backend::PixelDataType::UBYTE, nullptr));
+                filament::Texture::PixelBufferDescriptor::make(copy, bytes,
+                        filament::Texture::Format::RGBA,
+                        filament::Texture::Type::UBYTE,
+                        [](void* b, size_t) { free(b); }));
     }
     return tex;
 }

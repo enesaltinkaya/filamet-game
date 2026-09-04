@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -155,6 +156,19 @@ filament::TextureSampler const samplerCardClamp = {
         filament::TextureSampler::MagFilter::LINEAR,
         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE};
 
+// Heap copy of a CPU pixel buffer handed to a PixelBufferDescriptor.
+// setImage is ZERO-COPY: the descriptor only references the buffer and the
+// driver reads it later, on the engine loop thread. The callback form of the
+// descriptor (PixelBufferDescriptor::make with a release functor) is the only
+// safe way to release the storage — freeing (or stack-allocating) it right
+// after setImage makes the GPU copy whatever the heap block holds by then:
+// garbage texture content, different every launch.
+void* uploadCopy(const void* pixels, size_t bytes) {
+    void* copy = malloc(bytes);
+    if (copy) memcpy(copy, pixels, bytes);
+    return copy;
+}
+
 // Load a pak PNG (grass card) as sRGB RGBA8, level 0 only. These are sparse
 // alpha-CUTOUT textures (a tuft over a mostly-transparent backdrop), so they
 // must NOT be mipmipped: the generated mips average the alpha, raising the
@@ -169,6 +183,10 @@ filament::Texture* loadGrassTexture(const char* path) {
         utils::imageDestory(&img);
         return nullptr;
     }
+    const size_t bytes = (size_t)img.width * (size_t)img.height * 4u;
+    void* pixels = uploadCopy(img.data, bytes);
+    utils::imageDestory(&img);
+    if (!pixels) return nullptr;
     filament::Texture::Builder builder = filament::Texture::Builder()
             .width(img.width)
             .height(img.height)
@@ -177,15 +195,16 @@ filament::Texture* loadGrassTexture(const char* path) {
             .sampler(filament::Texture::Sampler::SAMPLER_2D)
             .usage(filament::Texture::Usage::DEFAULT);
     filament::Texture* tex = builder.build(*engine);
-    if (tex) {
-        tex->setImage(*engine, 0,
-                filament::backend::PixelBufferDescriptor(
-                        static_cast<const u8*>(img.data),
-                        (size_t)img.width * (size_t)img.height * 4u,
-                        filament::backend::PixelDataFormat::RGBA,
-                        filament::backend::PixelDataType::UBYTE, nullptr));
+    if (!tex) {
+        free(pixels);
+        return nullptr;
     }
-    utils::imageDestory(&img);
+    tex->setImage(*engine, 0,
+            filament::Texture::PixelBufferDescriptor::make(
+                    pixels, bytes,
+                    filament::Texture::Format::RGBA,
+                    filament::Texture::Type::UBYTE,
+                    [](void* b, size_t) { free(b); }));
     return tex;
 }
 
@@ -212,10 +231,15 @@ void initPass(void) {
                           .usage(filament::Texture::Usage::DEFAULT)
                           .build(*engine);
     if (fallbackTex) {
-        fallbackTex->setImage(*engine, 0,
-                filament::backend::PixelBufferDescriptor(white, 4,
-                        filament::backend::PixelDataFormat::RGBA,
-                        filament::backend::PixelDataType::UBYTE, nullptr));
+        void* whiteCopy = uploadCopy(white, 4);
+        if (whiteCopy) {
+            fallbackTex->setImage(*engine, 0,
+                    filament::Texture::PixelBufferDescriptor::make(
+                            whiteCopy, 4,
+                            filament::Texture::Format::RGBA,
+                            filament::Texture::Type::UBYTE,
+                            [](void* b, size_t) { free(b); }));
+        }
     }
 
     initialized = true;
