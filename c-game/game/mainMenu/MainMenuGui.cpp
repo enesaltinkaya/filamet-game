@@ -6,6 +6,7 @@
 #include "credits/CreditsGui.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "ecs/system/heightmap/HeightmapTerrain.h"
+#include "ecs/system/player/Player.h"
 #include "Engine.h"
 #include "Utils.h"
 
@@ -26,6 +27,9 @@ static void enterWorld(void) {
     engine::ecsSystemAddDeferred(100, &engine::flyingCameraSystem);
     // no-op until a world sets an active HeightmapTerrain (phase 4)
     engine::ecsSystemAddDeferred(100, &engine::heightmapTerrainSystem);
+    // Third-person player: spawns at the point set by loadWorld (the gltf
+    // model is already placed there) and takes the camera in player mode.
+    engine::ecsSystemAddDeferred(100, &engine::playerSystem);
     engine::gui::guiRemove(&mainMenuGui);
     // the old engine showed the camera debug readout while in the world
     engine::gui::guiAdd(&cameraGui);

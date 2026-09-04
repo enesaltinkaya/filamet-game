@@ -150,4 +150,6 @@ void FlyingCameraSystem::update() {
 FlyingCameraSystem flyingCameraSystem;
 
 bool flyingCameraFlying(void) { return flying != 0; }
+
+void flyingCameraStop(void) { setFlying(0); }
 }  // namespace engine

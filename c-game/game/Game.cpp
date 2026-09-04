@@ -3,6 +3,7 @@
 #include "Engine.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "ecs/system/heightmap/HeightmapTerrain.h"
+#include "ecs/system/player/Player.h"
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gui/GuiManager.h"
 #include "gltf/Gltf.h"
@@ -734,14 +735,33 @@ namespace game {
         }
 
         // Player character (eve): a zstd-compressed glb exported by
-        // scripts/export-models.sh, stood at the old engine's player spawn
-        // (playerGetSpawn in the old Player.cpp) so the "character" camera
-        // vantage matches the reference.
+        // scripts/export-models.sh. Stood at the densest prop-bearing land
+        // point (the "props"/"propsground" camera's vantage — the
+        // old-engine reference view was a player view over that same dry
+        // land; the old engine's hardcoded spawn xz now maps to open seabed
+        // in this world, so it is only the last-resort fallback).
+        f32 spawnPt[3] = {0.0f, 0.0f, 0.0f};
+        if (!worldDensestPropsPoint(loadingAzgaarGetWorld(),
+                                   spawnPt,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr) &&
+            !worldHighestLandPoint(loadingAzgaarGetWorld(), spawnPt)) {
+            spawnPt[0] = -881.88f;  // old engine's spawn xz
+            spawnPt[1] = 511.55f;
+            spawnPt[2] = 1691.46f;
+        }
         // gltfInit is idempotent — this re-creates the loader after the
         // menu-return gltfDestroy on re-entry.
         if (engine::gltf::gltfInit() && engine::gltf::gltfLoad("models/eve.zstd")) {
-            engine::gltf::gltfPlaceAt(-881.88f, 511.55f, 1691.46f);
+            engine::gltf::gltfPlaceAt(spawnPt[0], spawnPt[1], spawnPt[2]);
         }
+        utils::info("game: player spawn at (%.0f, %.0f, %.0f)", spawnPt[0], spawnPt[1], spawnPt[2]);
+
+        // The playerSystem (added deferred by the menu) ground-snaps to the
+        // heightmap surface at this point and takes over the model from here.
+        engine::playerSetSpawn(spawnPt[0], spawnPt[1], spawnPt[2]);
 
         // Camera framing: ENGINE_CAMERA selects a validation vantage; the
         // default frames the world's highest land point (see the else branch).
@@ -923,6 +943,7 @@ namespace game {
             engine::input.pressed == SDL_SCANCODE_ESCAPE) {
             utils::info("game: back to main menu");
             gameStateSet(STATE_MAIN_MENU);
+            engine::ecsSystemRemoveDeferred(&engine::playerSystem);
             engine::ecsSystemRemoveDeferred(&engine::flyingCameraSystem);
             engine::ecsSystemRemoveDeferred(&engine::heightmapTerrainSystem);
             // Drop the terrain's tile data + render look while the menu is
@@ -942,6 +963,7 @@ namespace game {
     }
 
     void GameSystem::removed() {
+        engine::systemRemove(&engine::playerSystem);
         engine::systemRemove(&engine::flyingCameraSystem);
         engine::systemRemove(&engine::heightmapTerrainSystem);
         if (worldLoaded) {

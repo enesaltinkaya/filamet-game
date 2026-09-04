@@ -22,4 +22,8 @@ public:
 
 extern FlyingCameraSystem flyingCameraSystem;
 bool flyingCameraFlying(void);  // true while the mouse is captured (flying)
+
+// Exit flying mode (no-op when already off). Lets other systems (the third-
+// person player) hand the camera back / take it over.
+void flyingCameraStop(void);
 }  // namespace engine
