@@ -1001,7 +1001,7 @@ namespace game {
     }
 
     void GameSystem::update() {
-        engine::gltf::gltfUpdate(utils::nanos() / BILLION);
+        engine::gltf::gltfUpdate(utils::timer.dt);
         updateCameraDolly();
 
         // Props (phase 7): advance the scatter + forward fresh tiles.
