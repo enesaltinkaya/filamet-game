@@ -16,6 +16,10 @@
 //   texel 3i+2 = phase, ---
 // meshA = (boundsMin.xyz, swayFactor); meshB = (boundsMax.xyz, flags)
 // flags: bit0 = alpha-test the base texture (cutout grass cards),
+//        bit1 = thin double-sided vegetation — the pass calls
+//               MaterialInstance::setDoubleSided(false) for these ranges so the
+//               back of each blade is NOT normal-flipped (both faces catch the
+//               sun); culling stays NONE so both faces still render,
 //        bit2 = radial flower-disc test on the unit-UV quad.
 //
 // Look (port of the old engine's azgaar_props.vert/.frag):

@@ -1530,8 +1530,16 @@ float azgaarPropsSpeciesSway(u32 species) {
 
 u32 azgaarPropsSpeciesRenderFlags(u32 species) {
     switch (species) {
-        case AZGAAR_PROP_GRASS_TUFT:  return AZGAAR_PROPS_FLAG_ALPHA_TEST;
-        case AZGAAR_PROP_FLOWER:      return AZGAAR_PROPS_FLAG_FLOWER;
+        // Thin double-sided vegetation (matches the old engine's per-species
+        // Nlight): both faces of a blade face the sky, so both must catch the
+        // sun. The built-in lit model's doubleSided normal flip would leave the
+        // back of each blade with a down-facing normal (NdotL == 0) and render
+        // half of every tuft near-black, so these species light both faces with
+        // the unflipped normal.
+        case AZGAAR_PROP_GRASS_TUFT:  return AZGAAR_PROPS_FLAG_ALPHA_TEST | AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
+        case AZGAAR_PROP_PALM:        return AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
+        case AZGAAR_PROP_REED:        return AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
+        case AZGAAR_PROP_FLOWER:      return AZGAAR_PROPS_FLAG_FLOWER | AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
         default:                       return 0;
     }
 }

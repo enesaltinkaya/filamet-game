@@ -62,14 +62,23 @@ struct PropsRenderRange {
     float aabbMax[3];
 };
 
+// Per-draw look flags (PropsRenderMeshVariant.flags). A shared contract with
+// the game (AzgaarProps.h AZGAAR_PROPS_FLAG_*) and the material (props.mat).
+namespace props_render_flags {
+constexpr u32 ALPHA_TEST   = 1u;  // bit 0: alpha-test the base texture
+constexpr u32 DOUBLE_SIDED = 2u;  // bit 1: thin veg — no backface normal flip
+constexpr u32 FLOWER       = 4u;  // bit 2: radial flower-disc alpha test
+}  // namespace props_render_flags
+
 // Merged-mesh sub-range for one (species, variant): all indices in
 // [indexOffset, indexOffset + indexCount) point into the merged vertex
 // array. boundsMin/Max are the unit-space AABB (metres at scale 1) used
 // to normalise the wind-sway height weight; swayFactor is how much this
 // species sways (0 = static, e.g. rocks). flags are per-draw look flags:
 //   bit 0 = alpha-test the base texture (cutout grass cards)
-//   bit 1 = reserved (thin double-sided look now comes from the material's
-//           twoSided normal flip, not a per-draw flag)
+//   bit 1 = thin double-sided vegetation: render both faces but light them
+//           with the unflipped normal (no backface normal flip) — the built-in
+//           lit model's doubleSided flip would darken the back of every blade
 //   bit 2 = radial flower-disc alpha test (unit-UV quads)
 // texturePath (pak-relative) is the base-colour texture for textured
 // species (grass cards); null for procedural species (tinted vertex

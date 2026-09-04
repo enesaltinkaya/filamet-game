@@ -146,8 +146,13 @@ filament::TextureSampler const samplerLinearMipmapClamp = {
         filament::TextureSampler::MagFilter::LINEAR,
         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE};
 
-// Load a pak PNG (grass card) as sRGB RGBA8 with generated mipmaps (the
-// cards minify hard with distance, like the terrain grass).
+// Load a pak PNG (grass card) as sRGB RGBA8, level 0 only. These are sparse
+// alpha-CUTOUT textures (a tuft over a mostly-transparent backdrop), so they
+// must NOT be mipmipped: the generated mips average the alpha, raising the
+// transparent border above the fragment's hard 0.5 cutout and rendering the
+// whole card as a solid rectangle at distance. Level-0 sampling is the correct
+// look (matches the old engine's grass). The cards are small on screen, so the
+// absence of a minification chain is not noticeable.
 filament::Texture* loadGrassTexture(const char* path) {
     utils::Image img = utils::imageLoad(path);
     if (!img.data || img.depth != 1 || img.channels != 4 || img.width <= 0 || img.height <= 0) {
@@ -161,10 +166,7 @@ filament::Texture* loadGrassTexture(const char* path) {
             .levels(1)
             .format(filament::Texture::InternalFormat::SRGB8_A8)
             .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            // generateMipmaps() below needs GEN_MIPMAPPABLE (DEFAULT does not
-            // include it).
-            .usage(filament::Texture::Usage::DEFAULT |
-                    filament::Texture::Usage::GEN_MIPMAPPABLE);
+            .usage(filament::Texture::Usage::DEFAULT);
     filament::Texture* tex = builder.build(*engine);
     if (tex) {
         tex->setImage(*engine, 0,
@@ -173,7 +175,6 @@ filament::Texture* loadGrassTexture(const char* path) {
                         (size_t)img.width * (size_t)img.height * 4u,
                         filament::backend::PixelDataFormat::RGBA,
                         filament::backend::PixelDataType::UBYTE, nullptr));
-        tex->generateMipmaps(*engine);
     }
     utils::imageDestory(&img);
     return tex;
@@ -427,6 +428,18 @@ bool buildTile(GpuTile& t, const PendingTile& p) {
                     (float)(r.start + c * kMaxInstancesPerDraw), 0.0f, 0.0f, 0.0f));
             mi->setParameter("instUV", filament::math::float4(
                     1.0f / (float)kInstanceTexWidth, 1.0f / (float)texH, 0.0f, 0.0f));
+
+            // Thin double-sided vegetation (grass cards, reed blades, palm
+            // fronds, flower heads): the built-in lit model flips the normal on
+            // back faces (doubleSided), which would leave the back of each blade
+            // with a down-facing normal (NdotL == 0) and render half of every
+            // tuft near-black. Light both faces with the unflipped normal
+            // instead — matches the old engine's per-species Nlight. Disable the
+            // flip and keep culling NONE (both faces still render).
+            if (v->flags & props_render_flags::DOUBLE_SIDED) {
+                mi->setDoubleSided(false);
+                mi->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+            }
 
             utils::Entity entity = utils::EntityManager::get().create();
             // The range's AABB (inflated 1 m), TILE-LOCAL: the renderable

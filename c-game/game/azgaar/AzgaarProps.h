@@ -161,11 +161,12 @@ float azgaarPropsBiomeDensity(const AzgaarWorld* world, u32 biomeId, bool treesO
 float azgaarPropsSpeciesSway(u32 species);
 
 // Per-species look flags for the render pass' material (bitmask, see
-// AZGAAR_PROPS_FLAG_*): which ranges alpha-test their base texture and which
-// take the radial flower-disc test. Only the grass cards (textured, cutout)
-// and the flower (unit-UV disc) set bits; every other range is plain opaque.
-#define AZGAAR_PROPS_FLAG_ALPHA_TEST 1u
-#define AZGAAR_PROPS_FLAG_FLOWER     4u
+// AZGAAR_PROPS_FLAG_*): which ranges alpha-test their base texture, which
+// take the radial flower-disc test, and which are thin double-sided
+// vegetation. Every other range is plain opaque.
+#define AZGAAR_PROPS_FLAG_ALPHA_TEST   1u  // cutout: alpha-test the base texture
+#define AZGAAR_PROPS_FLAG_DOUBLE_SIDED 2u  // thin blades: light both faces with the unflipped normal (no backface normal flip)
+#define AZGAAR_PROPS_FLAG_FLOWER       4u  // unit-UV quad: radial disc alpha test
 u32 azgaarPropsSpeciesRenderFlags(u32 species);
 
 void azgaarPropsInit(const AzgaarWorld* world);
