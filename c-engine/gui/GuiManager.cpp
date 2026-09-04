@@ -28,6 +28,13 @@ float guiScale(void) { return curScale; }
 // Load a font from the pak into ImGui's atlas. ImGui takes ownership of the
 // buffer and frees it on atlas destruction.
 static ImFont* loadPakFont(const char* path, float sizePx) {
+    // Missing fonts fall back to ImGui's default instead of hard-terminating
+    // the process (dataManagerGetSize terminates when the path is in no pak —
+    // a font is cosmetic, not a reason to kill the game).
+    if (!utils::dataManagerFileExists(path)) {
+        utils::warn("gui: font not found '%s' (using ImGui default)", path);
+        return nullptr;
+    }
     u32 size = utils::dataManagerGetSize(path);
     if (size == 0) {
         utils::error("gui: cannot read font '%s'", path);
@@ -139,14 +146,19 @@ void guiInit(void) {
     utils::info("gui: initializing ImGui backend (%s)", diligent ? "vulkan" : "filagui");
 
     ctx = ImGui::CreateContext();
+    // Fonts: montserrat.ttf is the raw variable font (default instance =
+    // Thin, wght 100-900). Dear ImGui cannot pick a weight from a VF, so the
+    // menu/body weights ship as static instances montserratLight.ttf (300)
+    // and montserratBlack.ttf (900), instanced from that same VF with
+    // fontTools (scripts and provenance in plans/azgaar-terrain.md phase-7
+    // cleanup). If a static instance is ever missing, loadPakFont falls back
+    // to ImGui's default font (deliberate: cosmetic, must not crash).
     fontBody = loadPakFont("fonts/montserratLight.ttf", 18.0f);
     fontTitle = loadPakFont("fonts/montserrat.ttf", 42.0f);
-    // The old rcss menu requested font-weight 900. RMLUI's freetype font
-    // engine enumerated the variable font's named instances and registered
-    // one face per weight, so the old menu rendered Montserrat Black (900);
-    // the body text used weight 300 (Light). Dear ImGui renders variable
-    // fonts at their default instance (Thin), so we load static Black/Light
-    // instances instead of the raw VF.
+    // The old rcss menu requested font-weight 900; RMLUI's freetype font
+    // engine registered one face per named instance, so the old menu
+    // rendered Montserrat Black (900) for menu rows and Light (300) for
+    // body text — the static instances above reproduce that.
     fontMenu = loadPakFont("fonts/montserratBlack.ttf", 18.0f);
 
     diligent ? guiBackendInitDiligent() : guiBackendInitFilament();

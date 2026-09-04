@@ -27,6 +27,11 @@ public:
 
     virtual void setSun(const f32 direction[3], const f32 color[3], f32 intensity) = 0;
     virtual void setAmbient(const f32 color[3], f32 intensity) = 0;
+
+    // Atmospheric distance fog on the world view (exponential extinction,
+    // constant density, fog color should match the sky clear color so the
+    // fogged far terrain meets the horizon seamlessly). density is [1/m].
+    virtual void setFog(const f32 color[3], f32 density) = 0;
 };
 
 // Implemented by the backends (renderer/filament, renderer/diligent).

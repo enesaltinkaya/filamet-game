@@ -165,4 +165,10 @@ void rendererSetAmbient(const f32 color[3], f32 intensity) {
         activeBackend->setAmbient(color, intensity);
     }
 }
+
+void rendererSetFog(const f32 color[3], f32 density) {
+    if (activeBackend) {
+        activeBackend->setFog(color, density);
+    }
+}
 }  // namespace engine::renderer

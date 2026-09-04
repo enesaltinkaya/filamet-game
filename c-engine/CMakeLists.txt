@@ -206,8 +206,22 @@ if (EXISTS ${MATC})
     )
     add_custom_target(heightmap_terrain_mat DEPENDS ${HEIGHTMAP_TERRAIN_MAT_OUT})
     add_dependencies(c-engine heightmap_terrain_mat)
+
+    # ── Azgaar props material (same source-in-tree / artifact-in-pak pattern) ─
+    set(AZGAAR_PROPS_MAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/renderer/filament/materials/props.mat)
+    set(AZGAAR_PROPS_MAT_OUT ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props.filamat)
+    add_custom_command(
+        OUTPUT ${AZGAAR_PROPS_MAT_OUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
+        COMMAND ${MATC} -a vulkan -l 2 -o ${AZGAAR_PROPS_MAT_OUT} ${AZGAAR_PROPS_MAT_SRC}
+        DEPENDS ${AZGAAR_PROPS_MAT_SRC} ${MATC}
+        COMMENT "matc Azgaar props.mat"
+        VERBATIM
+    )
+    add_custom_target(azgaar_props_mat DEPENDS ${AZGAAR_PROPS_MAT_OUT})
+    add_dependencies(c-engine azgaar_props_mat)
 else ()
-    message(WARNING "matc not found at ${MATC}; using the committed heightmap_terrain.filamat")
+    message(WARNING "matc not found at ${MATC}; using the committed heightmap_terrain.filamat + props.filamat")
 endif ()
 
 # ── heightmap terrain shaders (diligent pass, compiled at pass init) ─────

@@ -128,9 +128,10 @@ filament::TextureSampler const samplerNearestClamp = {
 
 // Load a pak KTX2 (UASTC supercompressed) and transcode+upload it as BC7.
 // Uses Filament's own ktxreader (which bundles the matching BasisU
-// transcoder) — the engine's KTX build is read-only and its vendored
-// BasisU would collide with Filament's, so no thirdparty KTX symbols are
-// linked into the terrain path at all.
+// transcoder). KTX-Software is deliberately NOT linked into the game
+// anymore: its vendored BasisU (newer ABI) used to win the basist:: symbol
+// overlap and made every UASTC transcode fail here (see c-game/CMakeLists.txt
+// and docs/lessons.md 2026-09-04).
 filament::Texture* loadKtx2(const char* path, bool srgb) {
     utils::String data = utils::dataManagerRead(path);
     if (!data.data || data.size == 0) {

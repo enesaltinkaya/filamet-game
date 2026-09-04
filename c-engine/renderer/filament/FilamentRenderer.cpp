@@ -6,6 +6,7 @@
 #include "gui/Gui.h"
 #include "gui/GuiManager.h"
 #include "logger/Logger.h"
+#include "renderer/PropsRender.h"
 #include "renderer/Renderer.h"
 #include "renderer/Window.h"
 
@@ -15,6 +16,7 @@
 #include <filament/Engine.h>
 #include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
+#include <filament/Options.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
@@ -92,6 +94,9 @@ public:
         // heightmap terrain: sync streaming tiles + budgeted GPU uploads
         // (main thread, before the frame renders)
         heightmapTerrainRenderUpdate();
+        // props: apply queued scatters + evict out-of-window GPU tiles
+        // (same window snapshot the terrain pass uses)
+        propsRenderUpdate();
 
         if (renderer->beginFrame(swapChain)) {
             renderer->render(view);  // 3D scene
@@ -126,8 +131,9 @@ public:
     }
 
     void destroy() override {
-        // terrain GPU state first (its scene entities, buffers and textures
-        // all live in the engine about to be torn down)
+        // terrain + props GPU state first (their scene entities, buffers and
+        // textures all live in the engine about to be torn down)
+        propsRenderDestroy();
         heightmapTerrainRenderDestroy();
 
         filament::Engine* enginePtr = engine;
@@ -166,6 +172,17 @@ public:
         forward[2] = f.z;
     }
 
+    void setFog(const f32 color[3], f32 density) override {
+        filament::FogOptions fog{};
+        fog.enabled         = true;
+        fog.color           = {color[0], color[1], color[2]};
+        fog.density         = density;
+        fog.height          = 0.0f;      // "sea level" (world Y = 0)
+        fog.heightFalloff   = 0.0f;      // constant density with altitude
+        fog.maximumOpacity  = 1.0f;
+        view->setFogOptions(fog);
+    }
+
     void setSun(const f32 direction[3], const f32 color[3], f32 intensity) override {
         sunColor[0] = color[0];
         sunColor[1] = color[1];
@@ -182,6 +199,7 @@ public:
         engine->getLightManager().setColor(inst, {color[0], color[1], color[2]});
         engine->getLightManager().setIntensity(inst, intensity);
         engine->getLightManager().setDirection(inst, {direction[0], direction[1], direction[2]});
+        camera->setExposure(16.0f, 1.0f / 125.0f, 100.0f);
     }
 
     void setAmbient(const f32 color[3], f32 intensity) override {

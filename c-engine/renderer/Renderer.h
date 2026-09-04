@@ -25,4 +25,7 @@ void rendererCameraGet(f32 pos[3], f32 forward[3]);
 void rendererSetSun(const f32 direction[3], const f32 color[3], f32 intensity);
 void rendererSetAmbient(const f32 color[3], f32 intensity);
 
+// Atmospheric distance fog on the world view (see RenderBackend::setFog).
+void rendererSetFog(const f32 color[3], f32 density);
+
 }  // namespace engine::renderer

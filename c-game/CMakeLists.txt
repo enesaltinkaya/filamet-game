@@ -21,16 +21,23 @@ target_link_libraries(c-game PRIVATE
     ${thirdparty}/jansson/git/${platform_dir}/lib/libjansson.a
     ${thirdparty}/thpool/${platform_dir}/libthpool.a
 
-    # image: KTX2/Basis transcode (ktx) + stb_image_resize2 (stb). The ktx
-    # bundle vendors its own BasisU copy (newer ABI than Filament's tnt
-    # basisu) and cannot be deduplicated against it, so the link must
-    # tolerate the overlapping basist:: symbols; the ktx libs are listed
-    # first, so its definitions win the duplicates
+    # image: stb_image_resize2 (stb). NOTE: the KTX-Software bundle (libktx)
+    # is deliberately NOT linked: it vendors its own BasisU copy with a
+    # newer ABI than Filament's tnt basisu, and its basist:: definitions
+    # winning the duplicates silently broke Filament's ktxreader (init and
+    # start_transcoding succeeded, transcode_image_level failed for every
+    # UASTC asset → white-fallback terrain). One binary, one BasisU copy:
+    # Filament's (used by ktxreader for terrain + gltfio ktx2). KTX2 loads
+    # that need CPU pixels go through c-utils Image (stb) or ktxreader.
+    # NOTE: --allow-multiple-definition survives ONLY for the benign,
+    # same-source stb duplicates (c-engine's inline STB_IMAGE_WRITE +
+    # MainMenuGui's inline STB_IMAGE vs cpp-thirdparty's libstb.a src.o —
+    # identical git revision, first definition wins). It must NEVER be
+    # needed to silence a *BasisU* overlap again: two basisu copies in one
+    # binary (KTX-Software's vs Filament's) made ktxreader transcode every
+    # UASTC asset fail while init/start_transcoding succeeded (2026-09-04,
+    # docs/lessons.md). Keep exactly one BasisU in the link: Filament's.
     -Wl,--allow-multiple-definition
-    ${thirdparty}/ktx/git/${platform_dir}/libktx_read.a
-    ${thirdparty}/ktx/git/${platform_dir}/libktx.a
-    ${thirdparty}/ktx/git/${platform_dir}/interface/basisu_c_binding/libobj_basisu_cbind.a
-    ${thirdparty}/ktx/git/${platform_dir}/external/astc-encoder/Source/libastcenc-avx2-static.a
     ${thirdparty}/stb/${platform_dir}/libstb.a
 
     # GUI (imgui rendered through filament via filagui; yoga for flexbox layout)

@@ -1,7 +1,6 @@
 #include "Image.h"
 #include "Utils.h"
 #include "datamanager/DataManager.h"
-#include "ktx/git/include/ktx.h"
 #include "stb/git/stb_image.h"
 #include "stb/git/stb_image_resize2.h" // IWYU pragma: keep
 #include "string/String.h"
@@ -11,64 +10,34 @@
 #include <stdlib.h>
 
 namespace utils {
+// KTX2 CPU decode is gone on purpose: KTX-Software's bundled BasisU
+// (newer ABI than Filament's) collided with Filament's ktxreader when both
+// were linked — its basist:: definitions won and every UASTC transcode via
+// ktxreader failed. GPU-side KTX2 goes through Filament's ktxreader
+// (HeightmapTerrainFilament.cpp, gltfio); this file now only decodes
+// uncompressed formats (PNG etc.) via stb.
 Image imageLoadFromData(const u8 *data, u64 size, const char *mime) {
   Image image = {};
-
   if (strEndsWithC(mime, "ktx2") || strEndsWithC(mime, "ktx")) {
-    ktxTexture2 *ktxTexture2 = {};
-
-    if (ktxTexture2_CreateFromMemory(data, size, 0, &ktxTexture2) > 0) {
-      terminate("failed to parse ktx");
-    }
-    image.width = ktxTexture2->baseWidth;
-    image.height = ktxTexture2->baseHeight;
-    image.isKtx = 1;
-
-    image.mips = ktxTexture2->numLevels;
-    uint32_t numChannels = ktxTexture2_GetNumComponents(ktxTexture2);
-    ktx_transcode_fmt_e target_format = static_cast<ktx_transcode_fmt_e>(0);
-
-    if (numChannels == 1) {
-      target_format = KTX_TTF_BC4_R;
-    } else if (numChannels == 2) {
-      target_format = KTX_TTF_BC5_RG;
-    } else {
-      target_format = KTX_TTF_BC7_RGBA;
-    }
-
-    if (ktxTexture2_NeedsTranscoding(ktxTexture2)) {
-      ktxTexture2_TranscodeBasis(ktxTexture2, target_format, 0);
-    }
-
-    for (i32 i = 0, s = image.mips; i < s; i++) {
-      size_t size = 0;
-      ktxTexture_GetImageOffset((ktxTexture *)ktxTexture2, i, 0, 0, &size);
-      image.mipSizes.push_back(size);
-    }
-
-    image.vkFormat = ktxTexture2->vkFormat;
-    image.size = ktxTexture2->dataSize;
-    image.data = new u8[image.size];
-    image.channels = numChannels;
-
-    memcpy(image.data, ktxTexture2->pData, image.size);
-    ktxTexture_Destroy((ktxTexture *)ktxTexture2);
-  } else {
-    char is16bit = stbi_is_16_bit_from_memory(data, size);
-    int channels = 0;
-    image.mips = 1;
-    if (is16bit) {
-      image.depth = 2;
-      image.data = stbi_load_16_from_memory(data, size, &image.width,
-                                            &image.height, &channels, 4);
-    } else {
-      image.depth = 1;
-      image.data = stbi_load_from_memory(data, size, &image.width,
-                                         &image.height, &channels, 4);
-    }
-    image.channels = 4; // channels;
-    image.size = image.width * image.height * image.channels * image.depth;
+    warn("image: KTX2 CPU decode removed (BasisU collision with Filament); "
+         "use the renderer's ktxreader path: %s", mime);
+    return image;
   }
+
+  char is16bit = stbi_is_16_bit_from_memory(data, size);
+  int channels = 0;
+  image.mips = 1;
+  if (is16bit) {
+    image.depth = 2;
+    image.data = stbi_load_16_from_memory(data, size, &image.width,
+                                          &image.height, &channels, 4);
+  } else {
+    image.depth = 1;
+    image.data = stbi_load_from_memory(data, size, &image.width,
+                                       &image.height, &channels, 4);
+  }
+  image.channels = 4; // channels;
+  image.size = image.width * image.height * image.channels * image.depth;
 
   return image;
 }
@@ -81,55 +50,29 @@ Image imageLoad(const char *path) {
 }
 
 Image imageLoadKtx(const char *path, KtxFormat format) {
-  Image image = {};
-
+  // Stub: KTX-Software is no longer linked (BasisU collision with Filament,
+  // see imageLoadFromData). Only the ignored Diligent terrain pass called
+  // this; ktx2 paths now get an empty image + a loud warning, anything else
+  // still decodes via stb.
+  (void)format;
   if (strEndsWithC(path, "ktx2") || strEndsWithC(path, "ktx")) {
-    ktxTexture2 *ktxTexture2 = {};
-    String fileData = dataManagerRead(path);
-
-    if (ktxTexture2_CreateFromMemory(reinterpret_cast<const ktx_uint8_t*>(fileData.data),
-                                     fileData.size, static_cast<ktxTextureCreateFlags>(0),
-                                     &ktxTexture2) > 0) {
-      terminate("failed to parse ktx in %s", path);
-    }
-    image.width = ktxTexture2->baseWidth;
-    image.height = ktxTexture2->baseHeight;
-    image.isKtx = 1;
-
-    image.mips = ktxTexture2->numLevels;
-    ktx_transcode_fmt_e target_format = (ktx_transcode_fmt_e)format;
-
-    if (ktxTexture2_NeedsTranscoding(ktxTexture2)) {
-      ktxTexture2_TranscodeBasis(ktxTexture2, target_format, 0);
-    }
-
-    for (i32 i = 0, s = image.mips; i < s; i++) {
-      size_t size = 0;
-      ktxTexture_GetImageOffset((ktxTexture *)ktxTexture2, i, 0, 0, &size);
-      image.mipSizes.push_back(size);
-    }
-
-    image.vkFormat = ktxTexture2->vkFormat;
-    image.size = ktxTexture2->dataSize;
-    image.data = new u8[image.size];
-    image.channels = ktxTexture2_GetNumComponents(ktxTexture2);
-    memcpy(image.data, ktxTexture2->pData, image.size);
-    ktxTexture_Destroy((ktxTexture *)ktxTexture2);
-    stringDestroy(&fileData);
-  } else {
-    String fileData = dataManagerRead(path);
-    char is16bit =
-        stbi_is_16_bit_from_memory(reinterpret_cast<const stbi_uc*>(fileData.data), fileData.size);
-    int channelsInFile = 0;
-    int channelsForce = 4;
-    image.depth = is16bit ? 2 : 1;
-    image.data = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(fileData.data), fileData.size,
-                                       &image.width, &image.height,
-                                       &channelsInFile, channelsForce);
-    image.channels = channelsForce;
-    image.size = image.width * image.height * image.channels * image.depth;
-    stringDestroy(&fileData);
+    warn("image: imageLoadKtx is a stub for ktx2 (KTX-Software unlinked): %s", path);
+    return {};
   }
+
+  Image image = {};
+  String fileData = dataManagerRead(path);
+  char is16bit =
+      stbi_is_16_bit_from_memory(reinterpret_cast<const stbi_uc*>(fileData.data), fileData.size);
+  int channelsInFile = 0;
+  int channelsForce = 4;
+  image.depth = is16bit ? 2 : 1;
+  image.data = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(fileData.data), fileData.size,
+                                     &image.width, &image.height,
+                                     &channelsInFile, channelsForce);
+  image.channels = channelsForce;
+  image.size = image.width * image.height * image.channels * image.depth;
+  stringDestroy(&fileData);
 
   return image;
 }

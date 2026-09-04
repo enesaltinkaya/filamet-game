@@ -45,6 +45,12 @@ static void exitGame(void) {
 #undef STB_IMAGE_IMPLEMENTATION
 
 static ImTextureID pngToImGuiTexture(const char* pakPath) {
+    // dataManagerGetSize terminates when a path is in no pak — a decorative
+    // UI texture is not worth killing the process (draw paths null-guard).
+    if (!utils::dataManagerFileExists(pakPath)) {
+        utils::error("mainMenu: texture not found '%s'", pakPath);
+        return ImTextureID_Invalid;
+    }
     u32 size = utils::dataManagerGetSize(pakPath);
     if (size == 0) {
         utils::error("mainMenu: cannot read '%s'", pakPath);
@@ -68,6 +74,10 @@ static int focusIdx = 0;  // old menu: first button autofocus, nav-up/down wraps
 
 void MainMenuGui::added() {
     if (logoTex == ImTextureID_Invalid) logoTex = pngToImGuiTexture("images/logo.png");
+    // images/button.png is the old engine's gui/images/button.png.ktx2 soft
+    // strip (1024x128 black RGB + horizontal alpha sheen), transcoded to PNG
+    // with basisu -unpack; the .ktx2 original stays in pak_0_engine as
+    // provenance. A missing strip just skips the focused-row highlight.
     if (barTex == ImTextureID_Invalid)  barTex  = pngToImGuiTexture("images/button.png");
     focusIdx = 0;
 }

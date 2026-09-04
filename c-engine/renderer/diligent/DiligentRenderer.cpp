@@ -324,6 +324,13 @@ public:
         engine::gltf::gltfIblUpdateDiligent(color, intensity);
     }
 
+    // Distance fog is not implemented on the Diligent path (backend is
+    // parked; the filament path is the live render path).
+    void setFog(const f32 color[3], f32 density) override {
+        (void)color;
+        (void)density;
+    }
+
 public:
     float4x4 frameView;
     float4x4 proj;

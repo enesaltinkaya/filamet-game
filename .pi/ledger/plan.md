@@ -1,17 +1,17 @@
-# Plan
+# plan
 
-Phase 6 of plans/azgaar-terrain.md: implement the **Diligent terrain render pass** — an HLSL mirror of the completed Filament pass (phase 5), sharing the CPU lattice and the "surface is a pure function of (x,z)" invariant.
+Phase 7 of plans/azgaar-terrain.md is Props / vegetation: port the old engine's (game-001-cpp) `AzgaarProps` scatter plus a Filament-only billboard/instanced render pass (Diligent deferred with phase 6).
 
-## Strategy
+Current on-disk state: the prior session already wrote the full stack — `c-game/game/azgaar/AzgaarProps.{h,cpp}` (deterministic per-tile CPU scatter on a background worker, physics-grid Y), `AzgaarPropMesh.{h,cpp}` (12 procedural species + 7 grass card variants, merged VBO/IBO, per-(species,variant) ranges), `c-engine/renderer/PropsRender.{h,cpp}` + `filament/PropsRenderFilament.cpp` + `props.mat` (matrix-packed `instanceTransform` instancing), and the Game.cpp wiring (init/update/destroy bridge, `ENGINE_CAMERA=props` land camera). None of it has been run through the Verification command in a ledgered round yet. Strategy: (1) run the pinned verification command and fix build/runtime issues until the props-camera screenshot shows scattered vegetation sitting exactly on the ground; (2) check the shot against `docs/azgaar-terrain/old-engine-reference.jpg` for density/distribution and check follow/evict under a dolly run; (3) clean up temp scaffolding (the "TEMP: ISO1600 test" exposure hack in FilamentRenderer.cpp) and land phase-7 acceptance notes.
 
-- Study the reference: `c-engine/renderer/filament/HeightmapTerrainFilament.{h,cpp}` (686 lines) and `materials/terrain.mat` (415 lines), plus how `DiligentRenderer.cpp` (367 lines, currently a basic scene) is wired into the backend selection and where the Filament terrain pass is invoked from the game side.
-- Create `c-engine/renderer/diligent/HeightmapTerrainDiligent.{h,cpp}` mirroring the Filament one: per READY tile, CPU-generated 256² lattice corners (world pos + border-aware stencil normal) + 255-segment shared IBO, uploaded as VBO/IBO, drawn with a pipeline the DiligentRenderer exposes. The CPU lattice code path must stay identical to the Filament one (same `readyStamp` cache key, LRU eviction, no re-upload of unchanged tiles).
-- Port `terrain.mat` look to an HLSL **pixel** shader (all look work in the pixel stage; vertex stage is a thin transform using the precomputed normals — no VS texture fetches, no implicit lattice enumeration). Reuse the already-registered climate/biome textures from world load.
-- Shaders are **pre-compiled at build time** per plans/diligent-migration.md: HLSL → SPIRV via the glslang chain already linked in c-engine (see the "shader compiler chain" comment in c-engine/CMakeLists.txt), or a dxc/spirv-build step in CMake if that fits the existing pattern better; do not rely on runtime compilation for the terrain pass.
-- Wire into whichever backend the build currently selects, and verify visually with `ENGINE_SCREENSHOT` (seams, look, streaming) in addition to the build command.
+Carry-over invariants: the surface is a pure function of (x,z); prop instance Y comes ONLY from the 256² physics grid (`heightmapGridBilinear` over `heightmapTerrainCopyPhysicsTile`) — never the finer CPU grid; scatter is bit-identical per (mapSeed, tile, build-time camera); Filament path only.
 
-## Verification
+Known gotchas (learned in the prior session — read before fighting the renderer):
+- This Filament is the **1.x bridge API**, not 1.4: `VertexAttribute` has no NORMAL/TEXCOORD0 (use CUSTOM slots, float4-only); lit shading models force TANGENTS — the props pass reconstructs the yaw basis from `instanceTransform` in the vertex stage instead; materials must be prebuilt `.filamat` (matc at /home/enes/Projects/c/cpp-thirdparty/filament/git/build-linux/tools/matc/matc, `-a vulkan -l 2`); `RenderableManager::Builder::geometry(type, vbo, ibo, indexOffset, minIndex, maxIndex, count)` where the offset is the INDEX-buffer start; transforms are a TransformManager component; engine teardown panics if any material instance is still alive — destroy props GPU state in `FilamentRenderer::destroy` before the engine.
+- `instanceTransform` packing (16 floats): colX[0..2]=s·(cos yaw,0,−sin yaw), colZ[4..6]=s·(sin yaw,0,cos yaw), pos[8..10], color[12..14] (may exceed 1.0 — do not clamp), wind phase[15]; species/variant is the draw-call identity (one InstancedDraw per (tile,species,variant) range).
+- Cull distance caps are **XZ ground-plane** distance, not 3D — the validation cameras fly high, and a 3D cap culls everything from aerial views.
+- The default validation camera looks at the map centre, which is open sea — use `ENGINE_CAMERA=props` (close framing over the highest land point) for props shots.
+- `scripts/run.sh` fails when TERM is unset (runs `clear`); use `scripts/build.sh` + the binary directly, as the Verification line does.
 
-Verification: ./scripts/build.sh
-
-Baseline commit: e547d56995d873a6e408b128ae9271d064f50917 (clean)
+Verification: cd /media/extra/Projects/c/filament-game && ./scripts/build.sh && ENGINE_AUTOTEST=enter ENGINE_CAMERA=props ENGINE_SCREENSHOT_FRAME=600 ENGINE_SCREENSHOT=/tmp/phase7-shot.jpg ./build/c-game/c-game
+Baseline commit: ddc1aa70a230a9bcad7e5fa38165fe4093754e90 (dirty — the tree already contains the in-flight phase-7 work this run continues; untracked files are tarred at /tmp/phase7-wip-backup-20260903.tar. git restore only covers the tracked files: Game.cpp, c-engine/CMakeLists.txt, FilamentRenderer.cpp, plans, ledger)

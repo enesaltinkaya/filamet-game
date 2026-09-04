@@ -1,7 +1,98 @@
 [
-  {"id": 1, "desc": "Recon: document how to mirror the Filament terrain pass into the Diligent backend (files, PSO/SRB patterns, texture path, dispatcher call sites)", "status": "done", "result": "Recon written to docs/azgaar-terrain/phase6-diligent-recon.md; deviation: runtime HLSL compile at pass init (glslang can't parse HLSL); c-utils Image::mipSizes bug noted"},
-  {"id": 2, "desc": "HLSL VS/PS mirroring terrain.mat (thin VS, full-look PS w/ DiligentFX PBR lighting includes)", "status": "done", "result": "shaders/heightmap_terrain_{vs,ps}.hlsl created; both compile cleanly to SPIRV under the Diligent include env (verifier PASS; runtime CreateShader path still to be proven at init)"},
-  {"id": 3, "desc": "HeightmapTerrainDiligent.{h,cpp}: pass init, per-READY-tile VBO upload + draw, readyStamp cache, LRU eviction, deferred destroy, stats + CMake copy step for .hlsl", "status": "done", "result": "Full pass implemented (~1000 lines) using the 2026 Diligent API (PRS/SRB/CommitShaderResources); shared SRB with per-tile SetVertexBuffers; CMake copies .hlsl into pak_1; build clean (verifier PASS); runtime CreateShader + boot not yet exercised"},
-  {"id": 4, "desc": "Wire terrain pass into Diligent backend + dispatcher; setWorldDrew(true); verify build + ENGINE_SCREENSHOT (seams, look, streaming)", "status": "in-progress", "result": "Wiring done (dispatcher 6 sites, draw/destroy ordering, setWorldDrew, c-game ktx/stb link); build + boot verified PASS; OPEN BUG: terrain renders misplaced — thin distant band (default cam), blank (top-down)"},
-  {"id": 5, "desc": "Fix geometry misplacement: GPU-side VS input (Vulkan input layout 'ATTRIB' semantics / LayoutElement offsets) vs immutable VBO upload; dump one tile's GPU VBO to distinguish, then fix", "status": "pending", "result": null}
+  {
+    "id": 1,
+    "desc": "Recon: map old AzgaarProps/pass to new-engine structures",
+    "status": "done",
+    "result": "Approach B — static per-tile instance buffers, matrix-packed instanceTransform, range-level cull, scatter-time frustum cull; procedural species meshes; Delaunator dead code in old engine"
+  },
+  {
+    "id": 2,
+    "desc": "Port Delaunator library",
+    "status": "done",
+    "result": "SKIPPED: dead code in old engine; scatter jitter is per-texel FNV hashing"
+  },
+  {
+    "id": 3,
+    "desc": "CPU scatter port: AzgaarProps.{h,cpp}",
+    "status": "done",
+    "result": "Verifier PASS: bit-identical re-scatter, Y-on-surface maxErr 0.0, background worker; XZ distance caps; 7 grass variants"
+  },
+  {
+    "id": 4,
+    "desc": "Procedural species meshes + grass cards, merged VBO/IBO per range",
+    "status": "done",
+    "result": "Verifier PASS: 19 ranges, 729 verts / 1638 idx, 52B Filament-native vertex"
+  },
+  {
+    "id": 8,
+    "desc": "Fix TBN repack degeneracy in PropsRenderFilament.cpp buildMeshBuffers",
+    "status": "done",
+    "result": "Fallback branch tLen2/bLen2 < 1e-12; NaN-free 198k cases, bit-identical for safe normals; build clean"
+  },
+  {
+    "id": 11,
+    "desc": "D1/D2/D3 isolation probe run",
+    "status": "done",
+    "result": "D1-only visible: base path healthy; real merged VBO/IBO range defective; props.mat vertex stage exonerated. Probe placement fixed to on-axis 60 m."
+  },
+  {
+    "id": 14,
+    "desc": "D4 differential probe: extra VBO slots vs VBO/IBO data",
+    "status": "done",
+    "result": "2x2 matrix: slots/stride/IBO/range-table/upload-style exonerated; only merged-bytes VBOs fail. Second blocker: props.mat probe parks real instances at origin."
+  },
+  {
+    "id": 16,
+    "desc": "Summarize the UNLEDGERED round (~23:30-00:02)",
+    "status": "done",
+    "result": "Round-2 verdict DISPROVEN: D19/D19b world-baked merged bytes SHOW (mesh+IBOs good on GPU). Real find: setTransform before build() is discarded (compat quirk). Still-zero: D4/D13/D25/D27/D29-31 (mesh-local+transform), D32-35 garbage positions. ISO1600 hack survives at FilamentRenderer.cpp:190. Full tables in notes.md '## unledgered round summary'."
+  },
+  {
+    "id": 15,
+    "desc": "Root-cause zero-pixel props draws (multi-slot fetch vs probe hijack)",
+    "status": "done",
+    "result": "Round 4 + verifier PASS: root cause = this Filament defaults camera_at_origin=true, so material.worldPosition is camera-relative; props.mat wrote absolute world coords (~2x map offset). Fix: worldPos -= getUserWorldFromWorldMatrix()[3].xyz + partColor=getCustom0(). Multi-slot fetch exonerated (D36), instance tex + RGBA32F exonerated. Props-on frame differs from ENGINE_NO_PROPS=1 by 8.38% px, all gates green. Also: probe hijack already removed in unledgered round; D32-35 garbage was use-after-free; D3/D4/D27 vanishings were object-local boundingBox misuse"
+  },
+  {
+    "id": 12,
+    "desc": "Remove the TEMP probeBase/probeOff/scale-25 hijack from the props.mat vertex stage (restore position=ia.xyz, scale=ib.x) — ABSORBED into task 15",
+    "status": "done",
+    "result": "Folded into task 15: removal is required before any props-on/off frame diff is meaningful"
+  },
+  {
+    "id": 9,
+    "desc": "Restore terrain KTX2 loading",
+    "status": "done",
+    "result": "Round 5 + verifier PASS: assets were fine — BasisU symbol collision (KTX-Software's newer-ABI basisu won over Filament's via --allow-multiple-definition); removed KTX-Software from the link (nothing live used it). Zero transcode WARNs, real albedo in shot, props still differ from control (45% px), clean teardown. Also: ISO1600 hack removed (ISO 100); pak_0_engine 23 MB restored from game-001-cpp; imageLoadKtx stubbed; lessons.md entry"
+  },
+  {
+    "id": 17,
+    "desc": "LOW PRIORITY: main-menu asset gap",
+    "status": "done",
+    "result": "Resolved in round 8 by sourcing assets: button.png recomposited from old-engine ETC1S KTX2 (RGB+A planes via basisu -unpack); montserratLight/Black.ttf static-instanced from shipped VF via fontTools; zero font/button warnings in final run"
+  },
+  {
+    "id": 13,
+    "desc": "Reframe the props camera + close the 2-of-25 tiles question",
+    "status": "done",
+    "result": "Round 6 + verifier PASS: worldDensestPropsPoint picks tree-density-weighted point (28450,7,-10450); framing log + emission summary land; 2-of-25 = XZ cull caps by design (23 tiles fully culled, ~150 ms/tile build, no stall); old framing was over a treeless peak. New: tile(13,-6) 71978 inst -> 9 draws + tile(13,-5) 38 -> 9; shot md5 58acb662 differs from control 65bd989c"
+  },
+  {
+    "id": 5,
+    "desc": "Verification command end-to-end green with a usable shot",
+    "status": "done",
+    "result": "Satisfied by round-6 verifier PASS on the exact Verification command: exit 0, all acceptance lines PASS, framing log, 2 tiles -> 18 draws, props-on/off md5 differ, dense grounded vegetation in shot"
+  },
+  {
+    "id": 6,
+    "desc": "Visual acceptance vs old-engine reference + dolly + cost/memory",
+    "status": "done",
+    "result": "Round 7 + verifier PASS: vantage-matched 7 m propsground camera; static 0.005 ms vs 1.5 ms budget; 57.8 MB window vs 150 MB; dolly 100/400 m/s claims/rescatters/evictions logged, no queue backup, no leak; instrumentation visually inert (md5 identical pre-strip)"
+  },
+  {
+    "id": 7,
+    "desc": "Cleanup + sign-off",
+    "status": "done",
+    "result": "Round 8 + verifier PASS: probes stripped (2360->821 lines, 7 mat + 7 filamat deleted), TileAcc.land removed, phase-7 acceptance report in plans/azgaar-terrain.md with shots in docs/azgaar-terrain/, 2 lessons entries; verification cmd exit 0, ZERO WARN/ERROR, phase 7 marked done"
+  }
 ]
