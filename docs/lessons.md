@@ -4,6 +4,16 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-04 — A yaw-pivot matrix must anchor the point that should stay fixed: gltfPlaceAtFacingFilament pivoted on the AABB corner, swinging the visible model ~1.3 m off the camera target when the facing yaw differed from the camera's
+
+**Rule:** when building a placement matrix as `T(anchor) * R(yaw) * S(comp)`, the point that stays put under the yaw is the LOCAL point that the pre-rotation transforms send to the origin — verify which local point that is, not which point you meant to anchor. In `T(off) * R * S * T(minc)`, the yaw-fixed point is local `-minc` (wherever `S*(p+minc) = 0`), NOT the origin/feet you intended; the origin then orbits a `|minc|`-radius arc around the target as yaw changes.
+
+**Incident:** "switching to S (run backwards) moves the player to the left of the screen." The movement basis, orbit camera, and Jolt character were all self-consistent (repro with per-frame pos/cam/model logging showed the character and camera correct); the VISIBLE MODEL was offset ~1.3 m screen-left while running S. Root cause: `gltfPlaceAtFacingFilament` used `T(pos - minc) * R(yaw) * S * T(minc)`, which pins local point `-aabbMin` at a fixed world spot and makes the feet (local origin, eve's minc = (-0.64,-0.01,-0.13)) swing in a 0.65 m arc — up to ~1.3 m lateral at facing = camYaw (running backwards). At the saved camera yaw the W-facing (camYaw+π) offset nearly cancelled, which is why only S looked wrong. Fix: `M = T(pos + (comp-1)*minc) * R(yaw) * S(comp)` — origin/feet at (x,z) for every yaw, and yaw-0 placement byte-identical to the pre-pivot-fix transform. Verified: S-run pdbg log showed model == pos exactly, and S-run + auto-run screenshots show the model centred (back view on W, face view on S).
+
+**Superseded:** the 2026-09-04 facing entry's placement form `T(off) * R * S * T(minc)` fixed the FRONT DIRECTION (R(+yaw) → front on (sin,0,cos)) but left the pivot on the wrong point; its "back at frame ~400" auto-run check passes at yaws where the W-offset happens to cancel, so it does not validate the pivot. The portrait vantage (`ENGINE_CAMERA=character`) is unaffected — it frames the model by bounding box, not by the pivot.
+
+---
+
 ## 2026-09-04 — eve's front is local +Z and mat4f::rotation(r, +Y) maps +Z → (sin r, 0, cos r): gltfPlaceAtFacingFilament must use R(+yaw)
 
 **Rule:** never assume a character asset's front axis from "the glTF

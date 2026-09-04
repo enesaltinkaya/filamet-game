@@ -321,11 +321,12 @@ void PlayerSystem::preUpdate() {
 static void movementInput(f32* outHx, f32* outHz) {
     char f = (input.keys[SDL_SCANCODE_W] ? 1 : 0) - (input.keys[SDL_SCANCODE_S] ? 1 : 0);
     char r = (input.keys[SDL_SCANCODE_D] ? 1 : 0) - (input.keys[SDL_SCANCODE_A] ? 1 : 0);
-    // Auto-run: always run forward (W); a manual W/S press cancels it
-    // (the old engine's rule — A/D strafing does not cancel).
+    // Auto-run: always run forward (W); a manual W/S press cancels it and
+    // keeps the pressed direction (the old engine's rule — A/D strafing does
+    // not cancel).
     if (p.autoRun) {
         if (f) p.autoRun = 0;
-        f = 1;
+        else f = 1;
     }
     if (!f && !r) {
         *outHx = *outHz = 0.0f;

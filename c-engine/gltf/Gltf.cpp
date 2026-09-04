@@ -36,7 +36,6 @@ void gltfUpdate(double elapsedSeconds) {
 bool gltfBoundingBox(f32 min[3], f32 max[3]) {
     return diligent() ? gltfBoundingBoxDiligent(min, max) : gltfBoundingBoxFilament(min, max);
 }
-
 bool gltfLoadAnimations(const char* pakPath) {
     return diligent() ? gltfLoadAnimationsDiligent(pakPath) : gltfLoadAnimationsFilament(pakPath);
 }

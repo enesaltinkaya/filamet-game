@@ -400,28 +400,30 @@ bool gltfPlaceAtFacingFilament(f32 x, f32 y, f32 z, f32 yaw) {
     if (!asset || !instance || !engine) {
         return false;
     }
-    // Pivot the yaw on the model's local origin (feet / body centre for
+    // Pivot the yaw on the model's local ORIGIN (feet / body centre for
     // character assets — eve's AABB is [-0.64,-0.01,-0.13]..[0.64,1.39,0.12],
     // origin at the feet) so the character rotates in place under the orbit
-    // camera's look-at target: M = T(anchor) * R(yaw, +Y) * S(comp). Anchoring
-    // the origin (not an AABB corner) is what keeps the body centre on
-    // (x, z) for every yaw — corner pivoting swings the body up to ~0.9 m off
-    // the camera target as soon as the model yaw differs from the camera.
+    // camera's look-at target: M = T(anchor) * R(yaw, +Y) * S(comp). The
+    // origin (feet) stays at (x, z) for every yaw — corner-pivoting swings the
+    // feet in a |aabbMin|-radius arc around the camera target, which put the
+    // visible model ~1.3 m to the side of the screen whenever the facing yaw
+    // differed enough from the camera's (most visible running backwards, S).
     // mat4f::rotation(r, +Y) maps +Z to (sin r, 0, cos r), and the asset's front
     // is local +Z (Mixamo/Blender characters face the viewer), so the world
     // front is (sin yaw, 0, cos yaw) — the old engine's facing convention.
-    // S(comp) restores metre scale for cm-authored assets (s_compScale, 1.0
-    // otherwise); the anchor shifts by (comp-1)*aabbMin so the yaw-0 placement
-    // matches the pre-pivot-fix transform exactly (origin lands at
-    // spawn + (comp-1)*min in both).
-    filament::Aabb box = asset->getBoundingBox();
-    const filament::math::float3 off{x - box.min.x, y - box.min.y, z - box.min.z};
+    // The anchor (comp-1)*min keeps the yaw-0 placement byte-identical to the
+    // pre-pivot-fix transform (origin lands at spawn + (comp-1)*min in both).
+    const f32 comp = s_compScale;
+    const filament::Aabb box = asset->getBoundingBox();
+    const filament::math::float3 anchor{
+        x + (comp - 1.0f) * box.min.x,
+        y + (comp - 1.0f) * box.min.y,
+        z + (comp - 1.0f) * box.min.z,
+    };
     const filament::math::float3 up{0.0f, 1.0f, 0.0f};
-    const filament::math::float3 minc{box.min.x, box.min.y, box.min.z};
-    filament::math::mat4f m = filament::math::mat4f::translation(off)
+    filament::math::mat4f m = filament::math::mat4f::translation(anchor)
             * filament::math::mat4f::rotation(yaw, up)
-            * filament::math::mat4f::scaling(filament::math::float3{s_compScale, s_compScale, s_compScale})
-            * filament::math::mat4f::translation(minc);
+            * filament::math::mat4f::scaling(filament::math::float3{comp, comp, comp});
     filament::TransformManager& tcm = engine->getTransformManager();
     tcm.setTransform(tcm.getInstance(instance->getRoot()), m);
     return true;
