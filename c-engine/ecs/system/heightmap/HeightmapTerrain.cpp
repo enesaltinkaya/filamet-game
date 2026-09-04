@@ -831,14 +831,18 @@ static void heightmapTerrainSyncPhysics(HeightmapTerrain* ht, float anchorX, flo
         // grid's first sample at the tile's min corner with the physics grid's
         // spacing, so the heightfield surface coincides with the CPU grid and
         // the render lattice.
-        float pos[3]    = {0.0f, 0.0f, 0.0f};
         float rot[4]    = {0.0f, 0.0f, 0.0f, 1.0f};
-        float offset[3] = {tile->originX, 0.0f, tile->originZ};
+        // Double-precision body offset: an f32 offset at 39 km would put the
+        // whole heightfield surface on the 3.9 mm f32 grid (feet-vs-ground
+        // offset for the double-precision character position).
+        double posD[3]   = {0.0, 0.0, 0.0};
+        double offsetD[3] = {(double)tile->tileX * (double)tile->sizeMeters, 0.0,
+                             (double)tile->tileZ * (double)tile->sizeMeters};
         float spacing   = tile->sizeMeters / static_cast<float>(HEIGHTMAP_PHYSICS_PSN - 1);
         float scale[3]  = {spacing, 1.0f, spacing};
 
-        JoltHeightMap* hm =
-            joltCreateHeightShapeNoFile(tile->physicsHeights.data(), pos, rot, offset, scale, HEIGHTMAP_PHYSICS_PSN);
+        JoltHeightMap* hm = joltCreateHeightShapeNoFileD64(tile->physicsHeights.data(), posD, rot,
+                offsetD, scale, HEIGHTMAP_PHYSICS_PSN);
         if (!hm) {
             utils::warn("heightmapTerrain: Jolt heightfield creation failed for tile(%d,%d)", tile->tileX, tile->tileZ);
             continue;

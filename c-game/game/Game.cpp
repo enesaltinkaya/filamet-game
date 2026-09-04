@@ -754,10 +754,22 @@ namespace game {
             spawnPt[1] = 511.55f;
             spawnPt[2] = 1691.46f;
         }
+        // Override the spawn with an explicit position
+        // (ENGINE_TELEPORT="x,y,z") — mirrors the GUI Azgaar teleport,
+        // useful for far-field precision tests (see docs/lessons.md 2026-09-04 f32 entry).
+        if (const char* tpos = getenv("ENGINE_TELEPORT")) {
+            float tx = 0.0f, ty = 0.0f, tz = 0.0f;
+            if (sscanf(tpos, "%g,%g,%g", &tx, &ty, &tz) == 3) {
+                spawnPt[0] = tx;
+                spawnPt[1] = ty;
+                spawnPt[2] = tz;
+            }
+        }
         // gltfInit is idempotent — this re-creates the loader after the
-        // menu-return gltfDestroy on re-entry.
+        // menu-return gltfDestroy on re-entry. The model is PLACED after the
+        // camera framing below (placement re-expresses the feet relative to
+        // the world anchor, which the framing's cameraLookAt establishes).
         if (engine::gltf::gltfInit() && engine::gltf::gltfLoad("models/eve.zstd")) {
-            engine::gltf::gltfPlaceAt(spawnPt[0], spawnPt[1], spawnPt[2]);
         }
         // Animation source (the old engine's models/animations.dat): a second
         // glb carrying eve's skeleton + all clips (no textures). Not added to
@@ -892,22 +904,24 @@ namespace game {
             // Portrait of the player character (eve at the old spawn point):
             // ~1 character-height diagonal back, eye slightly above chest,
             // looking at chest height — close enough for a texture/material
-            // check, far enough that the whole silhouette is in frame.
-            f32 bmin[3], bmax[3];
-            if (engine::gltf::gltfBoundingBox(bmin, bmax)) {
-                f32 cx       = (bmin[0] + bmax[0]) * 0.5f;
-                f32 cz       = (bmin[2] + bmax[2]) * 0.5f;
-                f32 h        = bmax[1] - bmin[1];
-                f32 chest[3] = {cx, bmin[1] + h * 0.6f, cz};
-                f32 eye[3]   = {chest[0] + h, chest[1] + h * 0.2f, chest[2] - h};
-                f32 up[3]    = {0.0f, 1.0f, 0.0f};
-                utils::info("game: character camera — bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
-                            bmin[0],
-                            bmin[1],
-                            bmin[2],
-                            bmax[0],
-                            bmax[1],
-                            bmax[2]);
+            // check, far enough that the whole silhouette is in frame. The
+            // framing uses the LOCAL bounds + spawn (the model is placed
+            // after framing, once the anchor exists).
+            f32 lmin[3], lmax[3];
+            if (engine::gltf::gltfLocalBoundingBox(lmin, lmax)) {
+                const double cx   = spawnPt[0] + (lmin[0] + lmax[0]) * 0.5;
+                const double cz   = spawnPt[2] + (lmin[2] + lmax[2]) * 0.5;
+                const double h    = lmax[1] - lmin[1];
+                const double chest[3] = {cx, spawnPt[1] + lmin[1] + h * 0.6, cz};
+                const double eye[3]   = {chest[0] + h, chest[1] + h * 0.2, chest[2] - h};
+                const double up[3]    = {0.0, 1.0, 0.0};
+                utils::info("game: character camera — local bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
+                            lmin[0],
+                            lmin[1],
+                            lmin[2],
+                            lmax[0],
+                            lmax[1],
+                            lmax[2]);
                 engine::renderer::rendererCameraLookAt(eye, chest, up);
             } else {
                 utils::warn("game: character camera — no gltf bounds, keeping default camera");
@@ -918,6 +932,10 @@ namespace game {
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
         }
+
+        // Model placement: NOW that the camera (and therefore the world
+        // anchor) is framed — the feet are re-expressed relative to it.
+        engine::gltf::gltfPlaceAt(spawnPt[0], spawnPt[1], spawnPt[2]);
 
         // sun (directional) + constant ambient, backend-agnostic.
         // Ambient is ~1/9 of the sun (clear-sky ratio): the earlier 30000

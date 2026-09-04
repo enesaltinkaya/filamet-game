@@ -16,11 +16,11 @@ static float flySpeed    = 100.0f;  // units/second
 static float sensitivity = 0.002f;  // radians per pixel
 
 struct Vec3 {
-    float x, y, z;
+    double x, y, z;  // double: the camera is the world anchor (see Player.cpp)
 
     Vec3 operator+(const Vec3& o) const { return {x + o.x, y + o.y, z + o.z}; }
     Vec3 operator-(const Vec3& o) const { return {x - o.x, y - o.y, z - o.z}; }
-    Vec3 operator*(float s) const { return {x * s, y * s, z * s}; }
+    Vec3 operator*(double s) const { return {x * s, y * s, z * s}; }
     Vec3& operator+=(const Vec3& o) {
         x += o.x;
         y += o.y;
@@ -119,9 +119,9 @@ static Vec3 rightDir(void) {
 static void applyCamera(void) {
     // keep world up; pitch is clamped below 88 degrees so (0,1,0) stays valid
     Vec3 fwd = forwardDir();
-    f32 eye[3] = {pos.x, pos.y, pos.z};
-    f32 center[3] = {pos.x + fwd.x * 1000.0f, pos.y + fwd.y * 1000.0f, pos.z + fwd.z * 1000.0f};
-    const f32 up[3] = {0.0f, 1.0f, 0.0f};
+    double eye[3] = {pos.x, pos.y, pos.z};
+    double center[3] = {pos.x + fwd.x * 1000.0, pos.y + fwd.y * 1000.0, pos.z + fwd.z * 1000.0};
+    const double up[3] = {0.0, 1.0, 0.0};
     renderer::rendererCameraLookAt(eye, center, up);
 }
 
@@ -206,7 +206,7 @@ void FlyingCameraSystem::update() {
     }
 
     float speedMult = input.shift ? 10.0f : (input.ctrl ? 0.25f : 1.0f);
-    float step      = flySpeed * speedMult * utils::timer.dt;
+    double step     = (double)(flySpeed * speedMult) * utils::timer.dt;
 
     Vec3 fwd   = forwardDir();
     Vec3 right = rightDir();
@@ -232,7 +232,7 @@ void FlyingCameraSystem::update() {
     if (now > lastSave + 1000.0) {
         lastSave = now;
         CameraDb data = {
-            .pos   = {pos.x, pos.y, pos.z},
+            .pos   = {(f32)pos.x, (f32)pos.y, (f32)pos.z},
             .yaw   = yaw,
             .pitch = pitch,
         };

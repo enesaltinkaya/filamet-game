@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "datamanager/DataManager.h"
 #include "logger/Logger.h"
+#include "renderer/Renderer.h"
 #include "renderer/filament/FilamentRenderer.h"
 
 #include <filament/Box.h>
@@ -392,11 +393,11 @@ void gltfStopAnimationFilament(void) {
     s_play.fading  = false;
 }
 
-bool gltfPlaceAtFilament(f32 x, f32 y, f32 z) {
+bool gltfPlaceAtFilament(double x, double y, double z) {
     return gltfPlaceAtFacingFilament(x, y, z, 0.0f);
 }
 
-bool gltfPlaceAtFacingFilament(f32 x, f32 y, f32 z, f32 yaw) {
+bool gltfPlaceAtFacingFilament(double x, double y, double z, f32 yaw) {
     if (!asset || !instance || !engine) {
         return false;
     }
@@ -413,12 +414,20 @@ bool gltfPlaceAtFacingFilament(f32 x, f32 y, f32 z, f32 yaw) {
     // front is (sin yaw, 0, cos yaw) — the old engine's facing convention.
     // The anchor (comp-1)*min keeps the yaw-0 placement byte-identical to the
     // pre-pivot-fix transform (origin lands at spawn + (comp-1)*min in both).
+    //
+    // The translation is relative to the world anchor (the camera eye's xz):
+    // the renderer poses the camera in anchor space and every other renderable
+    // is anchor-relative too, so an absolute f32 translation would re-quantize
+    // the feet to the 3.9 mm f32 grid at 39 km (the jitter bug). The relative
+    // value is small (orbit distance), so f32 keeps sub-mm precision.
+    const double ax = renderer::rendererWorldAnchorX();
+    const double az = renderer::rendererWorldAnchorZ();
     const f32 comp = s_compScale;
     const filament::Aabb box = asset->getBoundingBox();
     const filament::math::float3 anchor{
-        x + (comp - 1.0f) * box.min.x,
-        y + (comp - 1.0f) * box.min.y,
-        z + (comp - 1.0f) * box.min.z,
+        (float)(x - ax) + (comp - 1.0f) * box.min.x,
+        (float)y + (comp - 1.0f) * box.min.y,
+        (float)(z - az) + (comp - 1.0f) * box.min.z,
     };
     const filament::math::float3 up{0.0f, 1.0f, 0.0f};
     filament::math::mat4f m = filament::math::mat4f::translation(anchor)
@@ -555,7 +564,7 @@ void gltfUpdateFilament(double elapsedSeconds) {
     }
 }
 
-bool gltfBoundingBoxFilament(float min[3], float max[3]) {
+bool gltfLocalBoundingBoxFilament(float min[3], float max[3]) {
     if (!asset) {
         return false;
     }
@@ -566,24 +575,34 @@ bool gltfBoundingBoxFilament(float min[3], float max[3]) {
         box.min.x *= s_compScale; box.min.y *= s_compScale; box.min.z *= s_compScale;
         box.max.x *= s_compScale; box.max.y *= s_compScale; box.max.z *= s_compScale;
     }
-    // World-space: add the instance root's translation (identity otherwise).
-    if (instance && engine) {
-        filament::TransformManager& tcm = engine->getTransformManager();
-        const filament::math::mat4f& m = tcm.getTransform(tcm.getInstance(instance->getRoot()));
-        f32 dx = m[3][0], dy = m[3][1], dz = m[3][2];  // translation column
-        box.min.x += dx;
-        box.min.y += dy;
-        box.min.z += dz;
-        box.max.x += dx;
-        box.max.y += dy;
-        box.max.z += dz;
-    }
     min[0] = box.min.x;
     min[1] = box.min.y;
     min[2] = box.min.z;
     max[0] = box.max.x;
     max[1] = box.max.y;
     max[2] = box.max.z;
+    return true;
+}
+
+bool gltfBoundingBoxFilament(float min[3], float max[3]) {
+    if (!gltfLocalBoundingBoxFilament(min, max)) {
+        return false;
+    }
+    // World-space (ABSOLUTE): the instance transform is anchor-relative, so
+    // add the anchor back to report the box in the game's world space.
+    if (instance && engine) {
+        filament::TransformManager& tcm = engine->getTransformManager();
+        const filament::math::mat4f& m = tcm.getTransform(tcm.getInstance(instance->getRoot()));
+        f32 dx = m[3][0] + (f32)renderer::rendererWorldAnchorX();
+        f32 dy = m[3][1];
+        f32 dz = m[3][2] + (f32)renderer::rendererWorldAnchorZ();  // translation column
+        min[0] += dx;
+        min[1] += dy;
+        min[2] += dz;
+        max[0] += dx;
+        max[1] += dy;
+        max[2] += dz;
+    }
     return true;
 }
 

@@ -21,11 +21,11 @@ bool gltfLoad(const char* pakPath) {
     return diligent() ? gltfLoadDiligent(pakPath) : gltfLoadFilament(pakPath);
 }
 
-bool gltfPlaceAt(f32 x, f32 y, f32 z) {
+bool gltfPlaceAt(double x, double y, double z) {
     return diligent() ? gltfPlaceAtDiligent(x, y, z) : gltfPlaceAtFilament(x, y, z);
 }
 
-bool gltfPlaceAtFacing(f32 x, f32 y, f32 z, f32 yaw) {
+bool gltfPlaceAtFacing(double x, double y, double z, f32 yaw) {
     return diligent() ? gltfPlaceAtFacingDiligent(x, y, z, yaw) : gltfPlaceAtFacingFilament(x, y, z, yaw);
 }
 
@@ -35,6 +35,10 @@ void gltfUpdate(double elapsedSeconds) {
 
 bool gltfBoundingBox(f32 min[3], f32 max[3]) {
     return diligent() ? gltfBoundingBoxDiligent(min, max) : gltfBoundingBoxFilament(min, max);
+}
+
+bool gltfLocalBoundingBox(f32 min[3], f32 max[3]) {
+    return diligent() ? gltfLocalBoundingBoxDiligent(min, max) : gltfLocalBoundingBoxFilament(min, max);
 }
 bool gltfLoadAnimations(const char* pakPath) {
     return diligent() ? gltfLoadAnimationsDiligent(pakPath) : gltfLoadAnimationsFilament(pakPath);

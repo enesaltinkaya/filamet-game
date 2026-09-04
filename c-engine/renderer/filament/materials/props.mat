@@ -93,6 +93,14 @@ material {
         {
             type : float4,
             name : wind
+        },
+        {
+            // Tile origin relative to the world anchor (this frame): the
+            // instance data is tile-local and the vertex stage places it
+            // in the anchor-space "world" frame with this offset (the
+            // renderable transform carries the same value for culling).
+            type : float4,
+            name : tileRel
         }
     ]
 }
@@ -133,20 +141,18 @@ vertex {
         float swayW = hN * hN * materialParams.meshA.w;
         float sway  = sin(materialParams.wind.z + ic.x) * materialParams.wind.w * swayW;
 
-        // World placement: instance ground position + rotated, scaled mesh
-        // local offset + world-space wind drift (the old engine's
-        // azgaar_props.vert formula; the object transform stays identity).
-        vec3 worldPos = ia.xyz + rot * local;
-        worldPos.xz  += vec2(materialParams.wind.x, materialParams.wind.z) * sway;
-
-        // This Filament build renders with the view origin shifted to the
-        // camera (Engine.debug.view.camera_at_origin defaults true), so
-        // material.worldPosition is CAMERA-RELATIVE, not absolute: writing
-        // absolute world coords places instances ~2x the map offset away
-        // (the zero-pixel bug). getUserWorldFromWorldMatrix maps shifted
-        // world -> absolute user world; its translation is the origin
-        // shift (identity rotation assumed: no IBL in this scene).
-        worldPos -= getUserWorldFromWorldMatrix()[3].xyz;
+        // Anchor-space "world" placement: instance tile-local ground position
+        // + rotated, scaled mesh local offset + world-space wind drift + the
+        // tile's anchor-relative origin. material.worldPosition is the final
+        // vertex position (clip = clipFromWorld * worldPosition — the
+        // renderable transform is NOT applied to it, it only moves the
+        // culling box), so the tile offset must be added here explicitly.
+        vec3 worldPos = ia.xyz + rot * local + materialParams.tileRel.xyz;
+        // World-space wind drift along the CONSTANT wind direction
+        // (dirX, dirZ) = wind.xy, scaled by the bounded oscillating sway.
+        // (wind.z is the accumulated phase — it is the sway's time argument,
+        // not a direction; using it here made the drift grow without bound.)
+        worldPos.xz  += vec2(materialParams.wind.x, materialParams.wind.y) * sway;
         material.worldPosition.xyz = worldPos;
 
         // The TANGENTS attribute decoded by the built-in stage carries the

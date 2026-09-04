@@ -15,6 +15,7 @@
 #include <filament/RenderableManager.h>
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
+#include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <ktxreader/Ktx2Reader.h>
 #include <math/mat3.h>
@@ -82,6 +83,9 @@ struct DeferredDestroy {
 
 filament::Material*         material = nullptr;
 filament::MaterialInstance* materialInstance = nullptr;
+
+static inline float fractD64(double x) { return (float)(x - std::floor(x)); }
+
 filament::IndexBuffer*      latticeIbo = nullptr;
 u32                         latticeIdxCount = 0;
 filament::Texture*          fallbackTex = nullptr;   // 1x1 white (empty slots)
@@ -402,7 +406,11 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
 
     static std::vector<HeightmapLatticeCorner> cornerScratch;
     cornerScratch.resize(cornerCount);
-    heightmapLatticeBuildCorners(v->heights, v->originX, v->originZ, v->sizeMeters,
+    // Tile-LOCAL corners (0,0 origin): the renderable transform carries the
+    // tile origin (relative to the world anchor, re-set every frame by the
+    // re-anchor pass). Absolute f32 corners at 39 km would sit on the 3.9 mm
+    // f32 grid; local corners + a small transform keep sub-mm precision.
+    heightmapLatticeBuildCorners(v->heights, 0.0f, 0.0f, v->sizeMeters,
             cornerScratch.data());
 
     // Interleaved VBO layout: float3 pos @ 0, float4 tangent-frame @ 12 (stride 28).
@@ -460,13 +468,14 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
             [](void* data, size_t, void*) { delete[] (float*)data; }));
 
     utils::Entity entity = utils::EntityManager::get().create();
-    // Object space == world space (identity transform); conservative Y range
-    // (seabed .. above the tallest peak) for the per-renderable culling box.
+    // Local-space culling box (object space == tile space: corners are
+    // tile-local, the renderable transform carries the tile origin — see the
+    // re-anchor pass). Conservative Y range (seabed .. above the tallest peak).
     const float minY = -128.0f;
     const float maxY = filament::math::max(look.maxLandHeightM + 128.0f, 256.0f);
     filament::Box box;
-    box.set({v->originX, minY, v->originZ},
-            {v->originX + v->sizeMeters, maxY, v->originZ + v->sizeMeters});
+    box.set({0.0f, minY, 0.0f},
+            {v->sizeMeters, maxY, v->sizeMeters});
 
     filament::RenderableManager::Builder(1)
             .boundingBox(box)
@@ -603,6 +612,36 @@ static void updateImplWork(void) {
                     views[j].tileZ, (unsigned long long)views[j].readyStamp);
         }
         // failed upload: retry next frame, do not consume budget
+    }
+
+    // 3) Re-anchor every resident tile to this frame's world anchor (the
+    // camera eye's xz). The VBO corners are tile-local; the transform carries
+    // the tile origin relative to the anchor — a small f32 value with sub-mm
+    // precision, unlike absolute f32 at 39 km (the 3.9 mm grid that made the
+    // ground shimmer). The material gets the anchor too so terrain.mat's
+    // world-anchored fields (tiling/noise phases, map UV) stay world-locked.
+    const double ax  = renderer::rendererWorldAnchorX();
+    const double az  = renderer::rendererWorldAnchorZ();
+    const double tile = (double)ht->tileSizeMeters;
+    filament::TransformManager& tcm = engine->getTransformManager();
+    for (u32 i = 0; i < gpuTiles.size(); i++) {
+        if (!gpuTiles[i].inUse) continue;
+        const double ox = (double)gpuTiles[i].tileX * tile;
+        const double oz = (double)gpuTiles[i].tileZ * tile;
+        tcm.setTransform(tcm.getInstance(gpuTiles[i].entity),
+                filament::math::mat4f::translation(filament::math::float3{(float)(ox - ax), 0.0f,
+                        (float)(oz - az)}));
+    }
+    if (materialInstance) {
+        // World-anchored pattern phases (see terrain.mat): the grass tiling is
+        // periodic, so an exact fract(anchor*freq) phase keeps it world-locked
+        // with zero shimmer. Aperiodic noise fields use anchorOffset directly
+        // (world xz reconstruction).
+        const float grassTile = 2048.0f / 7000.0f;
+        materialInstance->setParameter("anchorPhaseGrass",
+                filament::math::float4{fractD64(ax * grassTile), fractD64(az * grassTile), 0.0f, 0.0f});
+        materialInstance->setParameter("anchorOffset",
+                filament::math::float4{(float)ax, (float)az, 0.0f, 0.0f});
     }
 }
 

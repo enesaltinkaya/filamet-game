@@ -108,9 +108,9 @@ public:
         }
         swapChain = swapChainRef;
 
-        const f32 eye[3] = {0.0f, 0.0f, 5.0f};
-        const f32 center[3] = {0.0f, 0.0f, 0.0f};
-        const f32 up[3] = {0.0f, 1.0f, 0.0f};
+        const double eye[3] = {0.0, 0.0, 5.0};
+        const double center[3] = {0.0, 0.0, 0.0};
+        const double up[3] = {0.0, 1.0, 0.0};
         cameraLookAt(eye, center, up);
         resize(window.width, window.height);
         return true;
@@ -297,10 +297,14 @@ public:
         utils::info("renderer: diligent device released");
     }
 
-    void cameraLookAt(const f32 eye[3], const f32 center[3], const f32 up[3]) override {
-        memcpy(camEye, eye, sizeof(camEye));
-        memcpy(camCenter, center, sizeof(camCenter));
-        memcpy(camUp, up, sizeof(camUp));
+    void cameraLookAt(const double eye[3], const double center[3], const double up[3]) override {
+        // Parked backend: absolute f32 camera, no world anchor (the filament
+        // path is the live one; this just keeps compiling).
+        for (int i = 0; i < 3; i++) {
+            camEye[i] = (f32)eye[i];
+            camCenter[i] = (f32)center[i];
+            camUp[i] = (f32)up[i];
+        }
     }
 
     void cameraGet(f32 pos[3], f32 forward[3]) override {

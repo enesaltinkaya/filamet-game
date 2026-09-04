@@ -10,11 +10,12 @@ namespace engine::gltf {
 // ── filament (GltfFilament.cpp) ──
 bool gltfInitFilament(void);
 bool gltfLoadFilament(const char* pakPath);
-bool gltfPlaceAtFilament(f32 x, f32 y, f32 z);
-bool gltfPlaceAtFacingFilament(f32 x, f32 y, f32 z, f32 yaw);
+bool gltfPlaceAtFilament(double x, double y, double z);
+bool gltfPlaceAtFacingFilament(double x, double y, double z, f32 yaw);
 void gltfUpdateFilament(double elapsedSeconds);
 void gltfDestroyFilament(void);
 bool gltfBoundingBoxFilament(float min[3], float max[3]);
+bool gltfLocalBoundingBoxFilament(float min[3], float max[3]);
 bool gltfLoadAnimationsFilament(const char* pakPath);
 u32 gltfAnimationCountFilament(void);
 const char* gltfAnimationNameFilament(u32 index);
@@ -26,12 +27,13 @@ void gltfStopAnimationFilament(void);
 // ── diligent (GltfDiligent.cpp) ──
 bool gltfInitDiligent(void);
 bool gltfLoadDiligent(const char* pakPath);
-bool gltfPlaceAtDiligent(f32 x, f32 y, f32 z);
-bool gltfPlaceAtFacingDiligent(f32 x, f32 y, f32 z, f32 yaw);
+bool gltfPlaceAtDiligent(double x, double y, double z);
+bool gltfPlaceAtFacingDiligent(double x, double y, double z, f32 yaw);
 void gltfUpdateDiligent(double elapsedSeconds);
 void gltfIblUpdateDiligent(const f32 color[3], f32 intensity);
 void gltfDestroyDiligent(void);
 bool gltfBoundingBoxDiligent(float min[3], float max[3]);
+bool gltfLocalBoundingBoxDiligent(float min[3], float max[3]);
 size_t gltfDiligentMeshNodeCount(void);  // scene nodes carrying a mesh
 bool gltfLoadAnimationsDiligent(const char* pakPath);
 u32 gltfAnimationCountDiligent(void);

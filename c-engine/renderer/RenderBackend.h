@@ -22,8 +22,16 @@ public:
     virtual void draw() = 0;                        // one full frame (incl. UI)
     virtual void destroy() = 0;
 
-    virtual void cameraLookAt(const f32 eye[3], const f32 center[3], const f32 up[3]) = 0;
+    // World-space camera (absolute coords, double precision — the camera is
+    // the world anchor; see FilamentRenderer's anchor handling).
+    virtual void cameraLookAt(const double eye[3], const double center[3], const double up[3]) = 0;
     virtual void cameraGet(f32 pos[3], f32 forward[3]) = 0;
+
+    // The anchor (xz) the backend places renderables relative to. The filament
+    // backend anchors to the camera eye (see FilamentRenderer); backends
+    // without re-anchoring report the origin.
+    virtual double worldAnchorX() { return 0.0; }
+    virtual double worldAnchorZ() { return 0.0; }
 
     virtual void setSun(const f32 direction[3], const f32 color[3], f32 intensity) = 0;
     virtual void setAmbient(const f32 color[3], f32 intensity) = 0;

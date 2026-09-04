@@ -13,6 +13,7 @@
 #include <backend/PixelBufferDescriptor.h>
 #include <cstdlib>
 #include <filament/Camera.h>
+#include <filament/DebugRegistry.h>
 #include <filament/Engine.h>
 #include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
@@ -64,11 +65,21 @@ public:
         view = engine->createView();
         uiView = engine->createView();
 
+        // This build renders with the game managing the world anchor itself
+        // (camera_at_origin would shift the shader frame by the camera,
+        // double-composing with our anchor — geometry is placed exactly once,
+        // relative to the anchor, and the view is posed in anchor space).
+        // The property is registered by the View constructor, so this must
+        // run AFTER createView() or setProperty silently fails.
+        if (!engine->getDebugRegistry().setProperty("d.view.camera_at_origin", false)) {
+            utils::warn("renderer: failed to disable d.view.camera_at_origin");
+        }
+
         cameraEntity = utils::EntityManager::get().create();
         camera = engine->createCamera(cameraEntity);
-        const f32 eye[3] = {0.0f, 0.0f, 5.0f};
-        const f32 center[3] = {0.0f, 0.0f, 0.0f};
-        const f32 up[3] = {0.0f, 1.0f, 0.0f};
+        const double eye[3] = {0.0, 0.0, 5.0};
+        const double center[3] = {0.0, 0.0, 0.0};
+        const double up[3] = {0.0, 1.0, 0.0};
         cameraLookAt(eye, center, up);
 
         view->setScene(scene);
@@ -156,21 +167,32 @@ public:
         }
     }
 
-    void cameraLookAt(const f32 eye[3], const f32 center[3], const f32 up[3]) override {
-        camera->lookAt({eye[0], eye[1], eye[2]}, {center[0], center[1], center[2]},
-                {up[0], up[1], up[2]});
+    void cameraLookAt(const double eye[3], const double center[3], const double up[3]) override {
+        // World anchor = the camera eye's xz: everything in the frame is
+        // placed relative to it (f32 small numbers), so at 40 km from the
+        // origin the geometry is no longer stuck on the 3.9 mm f32 grid
+        // (see docs/lessons.md). The camera itself is posed in anchor space.
+        const double ax = eye[0], az = eye[2];
+        camera->lookAt({eye[0] - ax, eye[1], eye[2] - az},
+                       {center[0] - ax, center[1], center[2] - az},
+                       {up[0], up[1], up[2]});
+        anchorX = ax;
+        anchorZ = az;
     }
 
     void cameraGet(f32 pos[3], f32 forward[3]) override {
-        auto p = camera->getPosition();
-        pos[0] = p.x;
-        pos[1] = p.y;
-        pos[2] = p.z;
+        auto p = camera->getPosition();  // anchor space — add the anchor back
+        pos[0] = (f32)(p.x + anchorX);
+        pos[1] = (f32)p.y;
+        pos[2] = (f32)(p.z + anchorZ);
         auto f = camera->getForwardVector();
         forward[0] = f.x;
         forward[1] = f.y;
         forward[2] = f.z;
     }
+
+    double worldAnchorX() override { return anchorX; }
+    double worldAnchorZ() override { return anchorZ; }
 
     void setFog(const f32 color[3], f32 density) override {
         filament::FogOptions fog{};
@@ -234,6 +256,7 @@ public:
 
 private:
     u8* pendingScreenshot = nullptr;
+    double anchorX = 0.0, anchorZ = 0.0;
     utils::Entity sunEntity{};
     filament::IndirectLight* ambientLight = nullptr;
     f32 sunColor[3] = {1.0f, 1.0f, 1.0f};

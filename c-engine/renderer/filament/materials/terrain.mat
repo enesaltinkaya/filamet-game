@@ -92,6 +92,30 @@ material {
         {
             type : float,
             name : debugView
+        },
+        // ── World-anchor uniforms (set per frame by the terrain pass) ────
+        // This build renders with the game managing the world anchor (the
+        // camera eye's xz): geometry positions (getUserWorldPosition) are
+        // ANCHOR-SPACE, not absolute. World-anchored fields are re-locked in
+        // two ways:
+        //   • Aperiodic fields (value-noise dry-turf / micro-bump / snow
+        //     breakup) use WORLD xz = anchorSpace.xz + anchorOffset.xy. This
+        //     reconstruction is stationary per world point, so it does not
+        //     shimmer; its f32 grid (~4 mm at 39 km) is sub-pixel for these
+        //     4–48 m features.
+        //   • Periodic fields (grass tiling, cliff tiling) add an exact
+        //     fract(anchor * frequency) phase so the pattern stays world-locked
+        //     with zero shimmer (a periodic pattern only needs its phase).
+        // (A bare anchor-space input would swim with the camera; a bare
+        // absolute f32 reconstruction would sit on the 3.9 mm grid and
+        // shimmer, see docs/lessons.md.)
+        {
+            type : float4,
+            name : anchorPhaseGrass  // fract(anchor * AZGAAR_GRASS_TILE)
+        },
+        {
+            type : float4,
+            name : anchorOffset      // anchor xz (absolute reconstruction)
         }
     ],
 }
@@ -149,12 +173,16 @@ fragment {
 
     // Synthetic "height" of the micro band (metres), used only for its
     // slope. Each octave is derivative-faded so sub-pixel octaves do not
-    // alias into specular smudges at grazing angles.
-    float microBumpFaded(vec2 p, float dpx, float dpy) {
-        return 0.5 * microValueNoise(p / 32.0 + 11.17) * octaveFade(32.0, dpx, dpy) +
-               0.25 * microValueNoise(p / 16.0 + 5.93) * octaveFade(16.0, dpx, dpy) +
-               0.5 * microValueNoise(p / 8.0 + 7.31) * octaveFade(8.0, dpx, dpy) +
-               0.25 * microValueNoise(p / 4.0 + 3.7) * octaveFade(4.0, dpx, dpy);
+    // alias into specular smudges at grazing angles. Input is the WORLD xz
+    // (anchor-space + anchor) so the aperiodic value noise stays world-
+    // locked; the f32 grid on the reconstructed world xz is ~4 mm, sub-pixel
+    // for these 4–32 m features (and stationary per world point, so no
+    // frame-to-frame shimmer).
+    float microBumpFaded(vec2 w, float dpx, float dpy) {
+        return 0.5 * microValueNoise(w / 32.0 + 11.17) * octaveFade(32.0, dpx, dpy) +
+               0.25 * microValueNoise(w / 16.0 + 5.93) * octaveFade(16.0, dpx, dpy) +
+               0.5 * microValueNoise(w / 8.0 + 7.31) * octaveFade(8.0, dpx, dpy) +
+               0.25 * microValueNoise(w / 4.0 + 3.7) * octaveFade(4.0, dpx, dpy);
     }
 
     vec3 safeNormalize(vec3 v, vec3 fallback) {
@@ -182,21 +210,25 @@ fragment {
     }
 
     void material(inout MaterialInputs material) {
-        // getUserWorldPosition(), NOT getWorldPosition(): this Filament build
-        // renders with the view origin shifted to the camera (Engine.debug.
-        // view.camera_at_origin defaults true), so getWorldPosition() is
-        // CAMERA-RELATIVE and every world-anchored field below (world-space
-        // tiling, dry-turf noise, sea-level/beach/snow/rock bands, mapBounds
-        // UV) would swim with the camera — the ground reads as a treadmill
-        // that never stays put under flight. getUserWorldPosition() is the
-        // API-level (absolute) world position; directions (V, normals) stay
-        // on the shifted frame, which is fine (translation-invariant).
+        // getUserWorldPosition() is ANCHOR-SPACE in this build (the game
+        // manages the world anchor; see the parameter block above): every
+        // renderable is placed relative to the camera eye's xz, so positions
+        // are small (sub-mm f32 precision) and the view stays exact at 40 km.
+        // World-anchored fields are re-anchored with the phase uniforms above
+        // (periodic) or anchorOffset (map UV); directions (V, normals) are
+        // translation-invariant and need no compensation.
         vec3 worldPos = getUserWorldPosition();
+        // World xz (for the aperiodic noise fields) + the absolute xz used by
+        // the map UV. Both are anchor-space + anchor; the noise is world-locked
+        // because this reconstruction is stationary per world point.
+        vec2 absXZ    = worldPos.xz + materialParams.anchorOffset.xy;
+        vec2 worldXZ  = absXZ;
         vec3 V        = getWorldViewVector();
         vec3 geomNormal = normalize(getWorldGeometricNormalVector());
 
-        // World-space tiled UV for the grass texture (stable across tiles).
-        vec2 grassUV = worldPos.xz * AZGAAR_GRASS_TILE;
+        // World-space tiled UV for the grass texture (stable across tiles;
+        // the REPEAT sampler makes the unbounded UV fine).
+        vec2 grassUV = worldPos.xz * AZGAAR_GRASS_TILE + materialParams.anchorPhaseGrass.xy;
 
         vec3 baseColor;
         float roughness = 0.9;
@@ -236,8 +268,8 @@ fragment {
         bool mapUVValid = mapExtent.x > 1.0 && mapExtent.y > 1.0;
         if (mapUVValid) {
             mapUV = clamp(
-                vec2((materialParams.mapBounds.z - worldPos.x) / mapExtent.x,
-                     (materialParams.mapBounds.w - worldPos.z) / mapExtent.y),
+                vec2((materialParams.mapBounds.z - absXZ.x) / mapExtent.x,
+                     (materialParams.mapBounds.w - absXZ.y) / mapExtent.y),
                 0.0, 1.0);
         }
 
@@ -257,11 +289,11 @@ fragment {
         // Inserted before the beach/cliff/snow swaps so only the grass
         // base is affected.
         {
-            float n = 0.6 * microValueNoise(worldPos.xz / 12.0 + 31.7) +
-                      0.4 * microValueNoise(worldPos.xz / 48.0 + 71.3);  // [-1,1]
+            float n = 0.6 * microValueNoise(worldXZ / 12.0 + 31.7) +
+                      0.4 * microValueNoise(worldXZ / 48.0 + 71.3);  // [-1,1]
             float dryMask = smoothstep(0.32, 0.62, 0.5 + 0.5 * n);
             vec3 dryColor = vec3(0.58, 0.50, 0.32);
-            float wobble  = 0.82 + 0.36 * (0.5 + 0.5 * microValueNoise(worldPos.xz / 4.0 + 13.9));
+            float wobble  = 0.82 + 0.36 * (0.5 + 0.5 * microValueNoise(worldXZ / 4.0 + 13.9));
             baseColor    = mix(baseColor, dryColor, dryMask) * wobble;
         }
 
@@ -297,11 +329,14 @@ fragment {
             rockT            = max(cliffBlend, rockAlt);
 
             if (rockT > 0.01) {
-                // Triplanar sampling for the cliff texture.
+                // Triplanar sampling for the cliff texture. The 128 m period
+                // = 32 x 4 m, so its world-anchored phase is fract(anchor*SCALE)
+                // (the tiling is periodic, so a fract re-anchoring is exact).
+                vec2 ph128 = fract(materialParams.anchorOffset.xy * CLIFF_TRIPLANAR_SCALE);
                 vec3 w   = triplanarWeights(geomNormal, 4.0);
-                vec2 uvX = worldPos.zy * CLIFF_TRIPLANAR_SCALE;
-                vec2 uvY = worldPos.xz * CLIFF_TRIPLANAR_SCALE;
-                vec2 uvZ = worldPos.xy * CLIFF_TRIPLANAR_SCALE;
+                vec2 uvX = worldPos.zy * CLIFF_TRIPLANAR_SCALE + vec2(ph128.x, 0.0);
+                vec2 uvY = worldPos.xz * CLIFF_TRIPLANAR_SCALE + ph128;
+                vec2 uvZ = worldPos.xy * CLIFF_TRIPLANAR_SCALE + vec2(ph128.x, 0.0);
 
                 vec4 cliffAlbedoSample = texture(materialParams_cliffAlbedo, uvX) * w.x +
                                          texture(materialParams_cliffAlbedo, uvY) * w.y +
@@ -348,7 +383,8 @@ fragment {
                         (biomeId > AZGAAR_BIOME_GLACIER - 0.5 &&
                          biomeId < AZGAAR_BIOME_GLACIER + 0.5) ? 1.0 : 0.0);
             snowT *= landMask;
-            snowT *= 0.75 + 0.25 * (0.5 + 0.5 * microValueNoise(worldPos.xz * 0.02));
+            // 50 m breakup noise (world-locked):
+            snowT *= 0.75 + 0.25 * (0.5 + 0.5 * microValueNoise(worldXZ * 0.02));
 
             if (snowT > 0.004) {
                 vec3 snowColor = texture(materialParams_snowAlbedo, grassUV).rgb;
@@ -374,7 +410,7 @@ fragment {
         //      goes grazing (keyed on the stable pre-perturbation normal).
         {
             const float e = 0.5;
-            vec2 p        = worldPos.xz;
+            vec2 p        = worldXZ;
             float dpx = length(dFdx(p));
             float dpy = length(dFdy(p));
             float hC  = microBumpFaded(p, dpx, dpy);

@@ -338,10 +338,13 @@ void resolveVariantTexture(VariantDef* v) {
 }
 
 // Pack one instance into 3 RGBA32F texels (10 floats, 2 spare slots).
-void packInstance(float* dst, const PropsRenderInstance& inst) {
-    dst[0]  = inst.pos[0];
+// Position is TILE-LOCAL: the renderable transform carries the tile origin
+// (relative to the world anchor), so absolute f32 positions — which sit on
+// the 3.9 mm f32 grid at 39 km — are never stored in the texture.
+void packInstance(float* dst, const PropsRenderInstance& inst, double originX, double originZ) {
+    dst[0]  = (float)(inst.pos[0] - originX);
     dst[1]  = inst.pos[1];
-    dst[2]  = inst.pos[2];
+    dst[2]  = (float)(inst.pos[2] - originZ);
     dst[3]  = inst.yaw;
     dst[4]  = inst.scale;
     dst[5]  = inst.color[0];
@@ -367,9 +370,12 @@ bool buildTile(GpuTile& t, const PendingTile& p) {
     // padding stays zero.
     const u32 texelCount = n * 3u;
     const u32 texH = (texelCount + kInstanceTexWidth - 1u) / kInstanceTexWidth;
+    // Tile origin in exact (double) world metres.
+    const double originX = (double)p.tileX * (double)cachedHt->tileSizeMeters;
+    const double originZ = (double)p.tileZ * (double)cachedHt->tileSizeMeters;
     t.texPixels.assign((size_t)kInstanceTexWidth * texH * 4u, 0.0f);
     for (u32 i = 0; i < n; i++) {
-        packInstance(&t.texPixels[(size_t)i * 12u], p.instances[i]);
+        packInstance(&t.texPixels[(size_t)i * 12u], p.instances[i], originX, originZ);
     }
 
     t.instanceTex = filament::Texture::Builder()
@@ -423,12 +429,17 @@ bool buildTile(GpuTile& t, const PendingTile& p) {
                     1.0f / (float)kInstanceTexWidth, 1.0f / (float)texH, 0.0f, 0.0f));
 
             utils::Entity entity = utils::EntityManager::get().create();
-            // The range's world AABB (inflated 1 m): Filament culls every
+            // The range's AABB (inflated 1 m), TILE-LOCAL: the renderable
+            // transform carries the tile origin, so Filament transforms the
+            // local culling box (an absolute box here would be transformed a
+            // second time and cull everything). Filament culls every
             // instance of the draw with this box, so the scatter-time
             // cull + re-scatter is the only per-instance work left.
+            const float ox = (float)originX;
+            const float oz = (float)originZ;
             filament::Box box;
-            box.set({r.aabbMin[0] - 1.0f, r.aabbMin[1] - 1.0f, r.aabbMin[2] - 1.0f},
-                    {r.aabbMax[0] + 1.0f, r.aabbMax[1] + 1.0f, r.aabbMax[2] + 1.0f});
+            box.set({r.aabbMin[0] - ox - 1.0f, r.aabbMin[1] - 1.0f, r.aabbMin[2] - oz - 1.0f},
+                    {r.aabbMax[0] - ox + 1.0f, r.aabbMax[1] + 1.0f, r.aabbMax[2] - oz + 1.0f});
 
             filament::RenderableManager::Builder(1)
                     .boundingBox(box)
@@ -654,6 +665,28 @@ static void updateImplWork(void) {
     for (const GpuTile& t : tiles) {
         for (const GpuRange& r : t.ranges) {
             if (r.mi) r.mi->setParameter("wind", wind);
+        }
+    }
+
+    // 3) Re-anchor every resident tile to this frame's world anchor (same
+    // transform the terrain tiles get — the instance data is tile-local,
+    // the transform carries the tile origin relative to the anchor; the
+    // vertex stage needs the same value as the tileRel parameter).
+    if (cachedHt) {
+        const double ax   = renderer::rendererWorldAnchorX();
+        const double az   = renderer::rendererWorldAnchorZ();
+        const double tile = (double)cachedHt->tileSizeMeters;
+        filament::TransformManager& tcm = engine->getTransformManager();
+        for (const GpuTile& t : tiles) {
+            if (!t.instanceTex) continue;
+            const float relX = (float)((double)t.tileX * tile - ax);
+            const float relZ = (float)((double)t.tileZ * tile - az);
+            for (const GpuRange& r : t.ranges) {
+                tcm.setTransform(tcm.getInstance(r.entity),
+                        filament::math::mat4f::translation(filament::math::float3{relX, 0.0f, relZ}));
+                if (r.mi) r.mi->setParameter("tileRel",
+                        filament::math::float4{relX, 0.0f, relZ, 0.0f});
+            }
         }
     }
 }

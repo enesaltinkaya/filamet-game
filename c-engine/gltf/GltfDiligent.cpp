@@ -120,7 +120,7 @@ bool gltfLoadDiligent(const char* pakPath) {
     return true;
 }
 
-bool gltfPlaceAtDiligent(f32 x, f32 y, f32 z) {
+bool gltfPlaceAtDiligent(double x, double y, double z) {
     (void)x;
     (void)y;
     (void)z;
@@ -128,7 +128,7 @@ bool gltfPlaceAtDiligent(f32 x, f32 y, f32 z) {
     return false;
 }
 
-bool gltfPlaceAtFacingDiligent(f32 x, f32 y, f32 z, f32 yaw) {
+bool gltfPlaceAtFacingDiligent(double x, double y, double z, f32 yaw) {
     (void)yaw;
     return gltfPlaceAtDiligent(x, y, z);
 }
@@ -222,6 +222,10 @@ bool gltfBoundingBoxDiligent(float min[3], float max[3]) {
     max[1] = modelBounds.Max.y;
     max[2] = modelBounds.Max.z;
     return true;
+}
+
+bool gltfLocalBoundingBoxDiligent(float min[3], float max[3]) {
+    return gltfBoundingBoxDiligent(min, max);
 }
 
 size_t gltfDiligentMeshNodeCount(void) {

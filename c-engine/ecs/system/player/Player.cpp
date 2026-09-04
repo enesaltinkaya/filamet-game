@@ -75,7 +75,10 @@ static char autoRunEnabled(void) {
 }
 
 static struct {
-    f32 pos[3];  // feet position, world metres (Jolt character position)
+    // Feet position, world metres. DOUBLE: Jolt is double internally and the
+    // renderer anchors on the (double) camera eye — an f32 position at 39 km
+    // sits on the 3.9 mm f32 grid and the character shimmers (lessons.md).
+    double pos[3];
     JoltCharacter* character = nullptr;
     char waitingForGround    = 0; // pinned at spawn until the body under it exists
     f32 camYaw   = 0.0f;
@@ -107,7 +110,7 @@ char playerTeleportTo(f32 x, f32 y, f32 z) {
     p.pos[0] = x;
     p.pos[1] = y;
     p.pos[2] = z;
-    joltCharacterSetPosition(p.character, p.pos);
+    joltCharacterSetPositionD64(p.character, p.pos);
     p.autoRun = 0;  // old engine: a teleport cancels auto-run
     return 1;
 }
@@ -158,7 +161,7 @@ static bool playerDbLoad(const char* name, PlayerDb* data, int* outBlobSize) {
 
 static void playerDbSaveState(void) {
     PlayerDb data = {
-        .pos       = {p.pos[0], p.pos[1], p.pos[2]},
+        .pos       = {(f32)p.pos[0], (f32)p.pos[1], (f32)p.pos[2]},
         .facingYaw = p.facingYaw,
         .camYaw    = p.camYaw,
         .camPitch  = p.camPitch,
@@ -282,7 +285,10 @@ static void playerSpawn(void) {
     }
 
     if (!p.character) {
-        p.character = joltCharacterCreate(CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS, p.pos, MAX_SLOPE_ANGLE);
+        // The create API is f32 (one-shot: the spawn comes from f32 world data
+        // anyway); from here on the position stays double.
+        f32 cpos[3] = {(f32)p.pos[0], (f32)p.pos[1], (f32)p.pos[2]};
+        p.character = joltCharacterCreate(CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS, cpos, MAX_SLOPE_ANGLE);
         if (!p.character) utils::warn("player: Jolt character creation failed");
     }
     gltf::gltfPlaceAt(p.pos[0], p.pos[1], p.pos[2]);
@@ -336,7 +342,7 @@ void PlayerSystem::preUpdate() {
                 p.pos[0] = pos[0];
                 p.pos[1] = pos[1] - 3.0f;
                 p.pos[2] = pos[2];
-                if (p.character) joltCharacterSetPosition(p.character, p.pos);
+                if (p.character) joltCharacterSetPositionD64(p.character, p.pos);
                 flyingCameraStop();
             }
             playerSetActive(1);
@@ -398,16 +404,19 @@ static void playerUpdateCamera(void) {
     f32 cp  = cosf(p.camPitch);
     f32 sp  = sinf(p.camPitch);
     // The camera orbits the capsule centre (feet + 0.70 m), not the feet.
-    f32 cx   = p.pos[0];
-    f32 cy   = p.pos[1] + CAPSULE_CENTER;
-    f32 cz   = p.pos[2];
-    f32 eye[3] = {
+    // Eye in DOUBLE (absolute world metres): the renderer derives the world
+    // anchor from it, and the model placement below must use the same value,
+    // so the camera is computed BEFORE the model is placed.
+    double cx   = p.pos[0];
+    double cy   = p.pos[1] + CAPSULE_CENTER;
+    double cz   = p.pos[2];
+    double eye[3] = {
         cx + sy * cp * p.camDist,
         cy + sp * p.camDist,
         cz + cosf(p.camYaw) * cp * p.camDist,
     };
-    f32 up[3] = {0.0f, 1.0f, 0.0f};
-    f32 target[3] = {cx, cy, cz};
+    const double up[3] = {0.0, 1.0, 0.0};
+    double target[3] = {cx, cy, cz};
     renderer::rendererCameraLookAt(eye, target, up);
 }
 
@@ -487,11 +496,21 @@ void PlayerSystem::update() {
 
     // Step the character controller, read the position back (feet).
     joltCharacterUpdate(p.character, desiredVel, utils::timer.dt);
-    f32 charPos[3];
-    joltCharacterGetPosition(p.character, charPos);
+    double charPos[3];
+    joltCharacterGetPositionD64(p.character, charPos);
     p.pos[0] = charPos[0];
     p.pos[1] = charPos[1];
     p.pos[2] = charPos[2];
+
+    if (getenv("ENGINE_JITTER_PROBE")) {
+        static int jn = 0;
+        if ((jn++ % 5) == 0) {
+            f32 eye[3], fwd[3];
+            renderer::rendererCameraGet(eye, fwd);
+            utils::info("jit: pos %.6f %.6f %.6f eye %.6f %.6f %.6f", p.pos[0], p.pos[1], p.pos[2],
+                        eye[0], eye[1], eye[2]);
+        }
+    }
 
     const char moving   = desiredVel[0] != 0.0f || desiredVel[2] != 0.0f;
     const char onGround = joltCharacterGetGroundState(p.character) == JOLT_GROUND_STATE_ON_GROUND;
@@ -514,9 +533,12 @@ void PlayerSystem::update() {
         p.moveYaw   = p.camYaw;
         p.facingYaw = atan2f(-sinf(p.camYaw), -cosf(p.camYaw));
     }
+    // Camera BEFORE placement: playerUpdateCamera re-derives the world anchor
+    // from the orbit, and gltfPlaceAtFacing re-expresses the feet relative to
+    // exactly that anchor — the two must see the same value this frame.
+    if (p.active) playerUpdateCamera();
     gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.facingYaw);
     playerUpdateAnimation(moving, onGround);
-    if (p.active) playerUpdateCamera();
 }
 
 void PlayerSystem::postUpdate() {

@@ -142,10 +142,17 @@ void rendererDestroy(void) {
     windowDestroy();
 }
 
-void rendererCameraLookAt(const f32 eye[3], const f32 center[3], const f32 up[3]) {
+void rendererCameraLookAt(const double eye[3], const double center[3], const double up[3]) {
     if (activeBackend) {
         activeBackend->cameraLookAt(eye, center, up);
     }
+}
+
+void rendererCameraLookAt(const f32 eye[3], const f32 center[3], const f32 up[3]) {
+    const double deye[3] = {(double)eye[0], (double)eye[1], (double)eye[2]};
+    const double dcenter[3] = {(double)center[0], (double)center[1], (double)center[2]};
+    const double dup[3] = {(double)up[0], (double)up[1], (double)up[2]};
+    rendererCameraLookAt(deye, dcenter, dup);
 }
 
 void rendererCameraGet(f32 pos[3], f32 forward[3]) {
@@ -153,6 +160,9 @@ void rendererCameraGet(f32 pos[3], f32 forward[3]) {
         activeBackend->cameraGet(pos, forward);
     }
 }
+
+double rendererWorldAnchorX(void) { return activeBackend ? activeBackend->worldAnchorX() : 0.0; }
+double rendererWorldAnchorZ(void) { return activeBackend ? activeBackend->worldAnchorZ() : 0.0; }
 
 void rendererSetSun(const f32 direction[3], const f32 color[3], f32 intensity) {
     if (activeBackend) {
