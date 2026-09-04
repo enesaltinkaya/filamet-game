@@ -46,7 +46,7 @@ static const f32 ANIM_SPEED_WALK  = 1.5f;
 static const f32 ANIM_SPEED_JUMP  = 1.0f;
 static const f32 ANIM_SPEED_TPOSE = 1.0f;
 static const f32 ANIM_BLEND       = 0.2f;
-static const f32 TURN_SPEED       = 20.0f; // old engine's MOVE_SPEED_TURN
+static const f32 TURN_SPEED       = 40.0f; // old engine's MOVE_SPEED_TURN
 
 // ENGINE_TPOSE=1: always play the T-pose (old engine's inspect hook).
 static char engineTpose(void) {
@@ -351,6 +351,14 @@ void PlayerSystem::preUpdate() {
         }
     }
 
+    // Middle mouse click: toggle auto-run (old engine: rising edge of the
+    // middle button in the player movement input — runs W forward, any W/S
+    // cancels it, and the periodic state save is suppressed while on).
+    if (p.active && input.mousePressed == 2) {
+        p.autoRun = !p.autoRun;
+        utils::info("player: auto-run %s", p.autoRun ? "on" : "off");
+    }
+
     if (p.active) playerUpdateMouseMode();
 }
 
@@ -523,15 +531,25 @@ void PlayerSystem::update() {
         p.facingYaw     += diff * (f32)std::min(1.0f, TURN_SPEED * utils::timer.dt);
     }
 
-    // RMB held: the player's direction snaps to the camera's orbit forward
-    // (old engine: while the right button is held, moveYaw/facingYaw =
-    // cameraYaw — the model faces away from the camera). moveYaw is in the
-    // orbit convention (camera→player = −(sin, 0, cos) at that yaw); the
-    // model faces forward yaw (sin, 0, cos), so that is camYaw + π.
+    // RMB held: the movement basis snaps to the camera's orbit forward
+    // (old engine: while the right button is held, moveYaw = cameraYaw), so
+    // A/D strafes relative to the camera. The model's facing is NOT touched
+    // while moving — in the old engine transform->rot slerps toward the
+    // movement direction, so A/D still turns the character. While idle the
+    // model only follows the orbit, and only while the mouse is actually
+    // moving (otherwise a mere RMB press would snap her to face the camera
+    // in an instant); the turn is smoothed with TURN_SPEED, same as the
+    // movement-facing turn above. moveYaw is in the orbit convention
+    // (camera→player = −(sin, 0, cos) at that yaw); the model faces forward
+    // yaw (sin, 0, cos), so that is camYaw + π.
     // LMB drag rotates the camera only — the player's direction stays as is.
     if (p.active && input.mouseRight) {
-        p.moveYaw   = p.camYaw;
-        p.facingYaw = atan2f(-sinf(p.camYaw), -cosf(p.camYaw));
+        p.moveYaw = p.camYaw;
+        if (!moving && (input.mouseDx != 0.0f || input.mouseDy != 0.0f)) {
+            const f32 target = atan2f(-sinf(p.camYaw), -cosf(p.camYaw));
+            const f32 diff   = atan2f(sinf(target - p.facingYaw), cosf(target - p.facingYaw));
+            p.facingYaw     += diff * (f32)std::min(1.0f, TURN_SPEED * utils::timer.dt);
+        }
     }
     // Camera BEFORE placement: playerUpdateCamera re-derives the world anchor
     // from the orbit, and gltfPlaceAtFacing re-expresses the feet relative to
