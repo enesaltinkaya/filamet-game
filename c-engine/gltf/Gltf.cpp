@@ -25,12 +25,45 @@ bool gltfPlaceAt(f32 x, f32 y, f32 z) {
     return diligent() ? gltfPlaceAtDiligent(x, y, z) : gltfPlaceAtFilament(x, y, z);
 }
 
+bool gltfPlaceAtFacing(f32 x, f32 y, f32 z, f32 yaw) {
+    return diligent() ? gltfPlaceAtFacingDiligent(x, y, z, yaw) : gltfPlaceAtFacingFilament(x, y, z, yaw);
+}
+
 void gltfUpdate(double elapsedSeconds) {
     diligent() ? gltfUpdateDiligent(elapsedSeconds) : gltfUpdateFilament(elapsedSeconds);
 }
 
 bool gltfBoundingBox(f32 min[3], f32 max[3]) {
     return diligent() ? gltfBoundingBoxDiligent(min, max) : gltfBoundingBoxFilament(min, max);
+}
+
+bool gltfLoadAnimations(const char* pakPath) {
+    return diligent() ? gltfLoadAnimationsDiligent(pakPath) : gltfLoadAnimationsFilament(pakPath);
+}
+
+u32 gltfAnimationCount(void) {
+    return diligent() ? gltfAnimationCountDiligent() : gltfAnimationCountFilament();
+}
+
+const char* gltfAnimationName(u32 index) {
+    return diligent() ? gltfAnimationNameDiligent(index) : gltfAnimationNameFilament(index);
+}
+
+f32 gltfAnimationDuration(u32 index) {
+    return diligent() ? gltfAnimationDurationDiligent(index) : gltfAnimationDurationFilament(index);
+}
+
+bool gltfPlayAnimation(const char* name, f32 speed, bool loop) {
+    return diligent() ? gltfPlayAnimationDiligent(name, speed, loop) : gltfPlayAnimationFilament(name, speed, loop);
+}
+
+bool gltfPlayAnimationBlended(const char* name, f32 speed, bool loop, f32 blendSeconds) {
+    return diligent() ? gltfPlayAnimationBlendedDiligent(name, speed, loop, blendSeconds)
+                      : gltfPlayAnimationBlendedFilament(name, speed, loop, blendSeconds);
+}
+
+void gltfStopAnimation(void) {
+    diligent() ? gltfStopAnimationDiligent() : gltfStopAnimationFilament();
 }
 
 

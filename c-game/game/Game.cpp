@@ -758,6 +758,15 @@ namespace game {
         if (engine::gltf::gltfInit() && engine::gltf::gltfLoad("models/eve.zstd")) {
             engine::gltf::gltfPlaceAt(spawnPt[0], spawnPt[1], spawnPt[2]);
         }
+        // Animation source (the old engine's models/animations.dat): a second
+        // glb carrying eve's skeleton + all clips (no textures). Not added to
+        // the scene — gltfUpdate plays the selected clip on it and syncs the
+        // joint transforms onto the visible model. The player system drives
+        // clip selection from here on (Player.cpp state machine).
+        if (!getenv("ENGINE_NO_ANIM") &&
+            engine::gltf::gltfLoadAnimations("models/animations.zstd")) {
+            engine::gltf::gltfPlayAnimation("eve_idle1", 1.0f, true);
+        }
         utils::info("game: player spawn at (%.0f, %.0f, %.0f)", spawnPt[0], spawnPt[1], spawnPt[2]);
 
         // The playerSystem (added deferred by the menu) ground-snaps to the

@@ -16,9 +16,9 @@ SCRIPTS_TMP="$ROOT/scripts/.tmp"
 STAGE_DIR="$SCRIPTS_TMP/models"
 
 # gltfpack flags: identical to the old engine's scene export so files match
-# what the old pak shipped. -cc KTX2+UASTC textures, float positions,
-# 16-bit uv/normals, keep names/extras/materials, 30 Hz animation resample
-# with the old engine's quantization.
+# what the old pak shipped. -cc = meshopt buffer compression (not KTX2),
+# float positions, 16-bit uv/normals, keep names/extras/materials, 30 Hz
+# animation resample with the old engine's quantization.
 GLTFPACK_FLAGS=(-vpf -cc -vt 16 -vn 16 -ke -kn -kv -km -af 30 -at 24 -as 24 -ar 16)
 
 convertModel() {
@@ -52,6 +52,21 @@ convertModel() {
         return 1
     fi
     echo "$(du -sh "$glb" | cut -f1)"
+
+    # Standardize the character hierarchy (identity armature, metre-space
+    # bones) so standard glTF renderers (Filament/gltfio) place it correctly
+    # — Blender's exporter leaves the cm-authored armature transform on the
+    # node, which it then applies twice. No-op for assets without a
+    # transformed armature. See scripts/gltf-standardize.py.
+    echo -n "standardize... "
+    local std="$STAGE_DIR/${name}.std.glb"
+    if ! python3 "$ROOT/scripts/gltf-standardize.py" "$glb" "$std" >> "$log" 2>&1; then
+        echo "FAILED (log: $log)" >&2
+        tail -n 20 "$log" >&2
+        return 1
+    fi
+    echo ok
+    mv "$std" "$glb"
 
     echo -n "gltfpack... "
     export KTX_GEN_MIPMAP=1

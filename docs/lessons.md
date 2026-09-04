@@ -4,6 +4,48 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-04 — Pre-multiplying a hierarchy transform only preserves world poses for DIRECT children: skinning collapses to a point when applied to every joint
+
+**Rule:** when you rewrite a node hierarchy so that a parent's transform `A`
+gets baked into its children's LOCAL transforms (to make the parent identity),
+`A @ L` is only the pose-preserving rewrite for the parent's DIRECT children —
+for any deeper descendant the hierarchy already applies `A` once on the way
+down, so pre-multiplying `A` into its local too re-applies it at EVERY depth.
+With a uniform scale `s` the descendant's world scale becomes `s^depth`; with
+Mixamo-style `s = 0.01` that underflows to 0.0 by depth ~5, and any matrix
+derived per-depth from it (bone matrices = `W_mesh⁻¹ × W_joint × IBM`, where
+the IBM inverts the ORIGINAL single-`A` world pose) goes to zero or to
+`1/s^(depth-1)` — the mesh collapses to a point at the root joint (or
+explodes). If the parent also has a skinned-mesh holder node as a direct
+child, skip it: its transform cancels exactly in the final skinned position
+(`W_mesh × (W_mesh⁻¹ × W_j × IBM) × pos`), so leaving it authored keeps the
+asset bounding box in true units.
+
+**Incident:** "eve character animations looking good in old engine, not so
+much here." In the new engine eve rendered as a dark crumpled ball floating
+at chest height while the rest of the scene was fine. `GLTF_DEBUG_SYNC` bone
+matrices told the story in one run: `M[0]` (root joint) scale ≈ 1.0, but
+`M[5]…M[64]` scale 0.0000 — every joint below depth 1 contributed zero to
+the skin. Cause: scripts/gltf-standardize.py pre-multiplied the armature
+transform `A` (0.01 scale, 90° X) into EVERY skin joint's local TRS and every
+joint's keyframes, so all 65 joints carried 0.01 local scale (max depth 13
+→ world scale 0.01¹³ ≈ 0) while the untouched IBMs compensated exactly one
+0.01. The old engine's raw export (armature 0.01, joints 1.0) was skinning-
+correct all along under standard glTF semantics — the standardize step
+introduced the collapse. Fix: rewrite only the armature's direct children
+(and only their keyframes); the mesh holder node stays authored. Re-export
+regenerated eve.zstd + animations.zstd; idle and run (with crossfade) now
+match the old engine.
+
+**Probe:** one `ENGINE_SCREENSHOT` run + the `GLTF_DEBUG_SYNC=1` log is
+decisive for any skinning complaint: it prints the per-joint
+`boneMatrix = W_mesh⁻¹ × W_joint × IBM` scale — 1.0 everywhere = healthy,
+0.0000 below the root = compounding local scale, ~100× = a single
+uncompensated hierarchy factor. And inspecting the shipped GLB (unzip the
+pak, zstd -d, read the JSON nodes) shows every joint's local scale directly.
+
+---
+
 ## 2026-09-04 — Filament materials flip UV.y by default (`flipUV`): texture-sampling materials must set `flipUV : false` when mesh UVs are authored in image-row order
 
 **Rule:** Filament's built-in vertex stage flips `uv0.y` for EVERY material

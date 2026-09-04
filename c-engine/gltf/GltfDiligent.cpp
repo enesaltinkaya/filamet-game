@@ -128,6 +128,11 @@ bool gltfPlaceAtDiligent(f32 x, f32 y, f32 z) {
     return false;
 }
 
+bool gltfPlaceAtFacingDiligent(f32 x, f32 y, f32 z, f32 yaw) {
+    (void)yaw;
+    return gltfPlaceAtDiligent(x, y, z);
+}
+
 // ── constant-environment IBL (the fallback PBR path's "IBL" is a flat sky) ──
 // The engine's ambient (color * lux, exposure 1.2 * 2^-15, /pi) is baked into
 // two 1x1x6 RGBA8 cubes: the irradiance map and a single-mip prefiltered env
@@ -347,4 +352,25 @@ void gltfDestroyDiligent(void) {
     haveBounds = false;
     utils::info("gltf: destroyed");
 }
+
+// ── Animation: not implemented on the diligent path (filament is the active
+// render path; these keep the backend-neutral Gltf.h API compilable). ──
+bool gltfLoadAnimationsDiligent(const char* pakPath) {
+    utils::warn("gltf: animations not supported on the diligent path (%s)", pakPath);
+    return false;
+}
+
+u32 gltfAnimationCountDiligent(void) { return 0; }
+
+const char* gltfAnimationNameDiligent(u32 /*index*/) { return ""; }
+
+f32 gltfAnimationDurationDiligent(u32 /*index*/) { return 0.0f; }
+
+bool gltfPlayAnimationDiligent(const char* /*name*/, f32 /*speed*/, bool /*loop*/) { return false; }
+
+bool gltfPlayAnimationBlendedDiligent(const char* /*name*/, f32 /*speed*/, bool /*loop*/, f32 /*blendSeconds*/) {
+    return false;
+}
+
+void gltfStopAnimationDiligent(void) {}
 }  // namespace engine::gltf

@@ -33,6 +33,33 @@ static const float DIST_MIN       = 1.5f;
 static const float DIST_MAX       = 20.0f;
 static const float DIST_DEFAULT   = 10.0f;
 
+// ── Animation (old engine Player.cpp ANIM_* block; clips from the animation
+// source asset — Game.cpp loads models/animations.zstd and starts eve_idle1) ──
+static const char* ANIM_IDLE  = "eve_idle1";
+static const char* ANIM_RUN   = "eve_run1";
+static const char* ANIM_WALK  = "female_walk";
+static const char* ANIM_JUMP  = "eve_jump";
+static const char* ANIM_TPOSE = "eve_t";
+static const f32 ANIM_SPEED_IDLE  = 1.0f;
+static const f32 ANIM_SPEED_RUN   = 1.75f;
+static const f32 ANIM_SPEED_WALK  = 1.5f;
+static const f32 ANIM_SPEED_JUMP  = 1.0f;
+static const f32 ANIM_SPEED_TPOSE = 1.0f;
+static const f32 ANIM_BLEND       = 0.2f;
+static const f32 TURN_SPEED       = 20.0f; // old engine's MOVE_SPEED_TURN
+
+// ENGINE_TPOSE=1: always play the T-pose (old engine's inspect hook).
+static char engineTpose(void) {
+    static char v    = 0;
+    static char init = 0;
+    if (!init) {
+        init = 1;
+        const char* env = getenv("ENGINE_TPOSE");
+        if (env && *env && atoi(env)) v = 1;
+    }
+    return v;
+}
+
 // ENGINE_AUTO_RUN=1: auto-run forward from spawn (the old engine's temporal
 // test hook — the third-person camera follows, producing real running motion
 // for automated runs). Any W/S key cancels it, like the old engine.
@@ -55,6 +82,10 @@ static struct {
     f32 camPitch = 20.0f * (float)M_PI / 180.0f;
     f32 camDist  = DIST_DEFAULT;
     f32 spawn[3] = {0.0f, 0.0f, 0.0f};
+    f32 facingYaw = 0.0f;  // model yaw toward the movement direction
+    char animMoving  = 0; // old engine's isMoving
+    char animJumping = 0; // old engine's isJumping
+    char animTposing = 0; // T-key emote active until movement resumes
     char active  = 0;
     char spawned = 0;
     char autoRun = 0;
@@ -101,6 +132,10 @@ static void playerSpawn(void) {
     p.pos[1]               = groundY;
     p.pos[2]               = p.spawn[2];
     p.camDist              = DIST_DEFAULT;
+    p.facingYaw            = 0.0f;
+    p.animMoving           = 0;
+    p.animJumping          = 0;
+    p.animTposing          = 0;
     p.spawned               = 1;
     p.waitingForGround      = 1;  // released by the first update once the body under the spawn exists
     if (!p.character) {
@@ -226,6 +261,48 @@ static void playerUpdateCamera(void) {
     renderer::rendererCameraLookAt(eye, target, up);
 }
 
+// ── Animation state machine (port of the old engine's Player.cpp ANIM block) ──
+// One active clip + a 0.2 s crossfade into it (gltfPlayAnimationBlended).
+// Jump takes priority over ground clips; the T key holds the T-pose until
+// the character moves again.
+static void playerUpdateAnimation(char moving, char onGround) {
+    if (engineTpose()) {
+        gltf::gltfPlayAnimationBlended(ANIM_TPOSE, ANIM_SPEED_TPOSE, true, ANIM_BLEND);
+        return;
+    }
+
+    if (!onGround && !p.animJumping) {
+        gltf::gltfPlayAnimationBlended(ANIM_JUMP, ANIM_SPEED_JUMP, false, 0.25f);
+        p.animJumping = 1;
+        return;
+    }
+    if (onGround && p.animJumping) {
+        p.animJumping = 0;
+        if (moving) {
+            gltf::gltfPlayAnimationBlended(input.shift ? ANIM_WALK : ANIM_RUN,
+                                          input.shift ? ANIM_SPEED_WALK : ANIM_SPEED_RUN, true, 0.2f);
+        } else {
+            gltf::gltfPlayAnimationBlended(ANIM_IDLE, ANIM_SPEED_IDLE, true, 0.2f);
+        }
+    }
+    if (p.animJumping) return;
+
+    if (input.pressed == SDL_SCANCODE_T && !moving && !p.animTposing) {
+        gltf::gltfPlayAnimationBlended(ANIM_TPOSE, ANIM_SPEED_TPOSE, true, 0.3f);
+        p.animTposing = 1;
+    }
+    if (moving && p.animTposing) p.animTposing = 0;
+
+    if (moving && !p.animMoving) {
+        gltf::gltfPlayAnimationBlended(input.shift ? ANIM_WALK : ANIM_RUN,
+                                      input.shift ? ANIM_SPEED_WALK : ANIM_SPEED_RUN, true, ANIM_BLEND);
+        p.animMoving = 1;
+    } else if (!moving && p.animMoving) {
+        gltf::gltfPlayAnimationBlended(ANIM_IDLE, ANIM_SPEED_IDLE, true, ANIM_BLEND);
+        p.animMoving = 0;
+    }
+}
+
 void PlayerSystem::update() {
     if (!p.spawned || !p.character) return;
 
@@ -266,7 +343,18 @@ void PlayerSystem::update() {
     p.pos[1] = charPos[1];
     p.pos[2] = charPos[2];
 
-    gltf::gltfPlaceAt(p.pos[0], p.pos[1], p.pos[2]);
+    const char moving   = desiredVel[0] != 0.0f || desiredVel[2] != 0.0f;
+    const char onGround = joltCharacterGetGroundState(p.character) == JOLT_GROUND_STATE_ON_GROUND;
+
+    // Face the model toward the movement direction (old engine's animFacingYaw
+    // smoothed by MOVE_SPEED_TURN). The model keeps its last facing at rest.
+    if (moving) {
+        const f32 target = atan2f(desiredVel[0], desiredVel[2]);
+        const f32 diff   = atan2f(sinf(target - p.facingYaw), cosf(target - p.facingYaw));
+        p.facingYaw     += diff * (f32)std::min(1.0f, TURN_SPEED * utils::timer.dt);
+    }
+    gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.facingYaw);
+    playerUpdateAnimation(moving, onGround);
     if (p.active) playerUpdateCamera();
 }
 }  // namespace engine

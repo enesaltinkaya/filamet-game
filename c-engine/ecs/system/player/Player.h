@@ -4,8 +4,8 @@
 
 namespace engine {
 // Third-person player (port of the old engine's player controls —
-// game-001-cpp c-game/game/player/Player.cpp, movement + character physics
-// only: no abilities, no animation, no DB yet).
+// game-001-cpp c-game/game/player/Player.cpp, movement + character physics +
+// locomotion animation: no abilities, no DB yet).
 //
 //   C      toggle player mode (mouse orbit + WASD)
 //   F      fly camera (takes over from player mode, ESC back to the camera)
