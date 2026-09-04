@@ -4,6 +4,57 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-04 — Fragment `getWorldPosition()` is ALSO camera-shifted: world-anchored shading must use `getUserWorldPosition()`
+
+**Rule:** `Engine.debug.view.camera_at_origin` (default true in this build) shifts
+the shader frame for the whole pipeline, not just the vertex stage: the
+fragment's `getWorldPosition()` is CAMERA-RELATIVE too. Any world-anchored
+fragment math — world-space texture tiling, procedural noise fields,
+sea-level/beach bands (`worldPos.y`), altitude/snow bands, mapBounds UVs —
+swims with the camera unless it uses `getUserWorldPosition()` (fragment-only
+API returning the API-level position; metre-scale features at ±20–40 km are
+fine in f32). Directions (`getWorldViewVector`, normals) are
+translation-invariant and stay on the shifted frame. Geometry is NOT
+affected: baked world-space vertices with an identity transform ride the
+shift correctly, which is exactly why the bug hides — trees approach, ridge
+silhouettes hold still, only the SHADING detaches from the ground and reads
+as a treadmill.
+
+**Probe (one run, unambiguous):** `ENGINE_TERRAIN_DEBUG=ramp` +
+`ENGINE_CAMERA_DOLLY="0,12,0"`, two runs differing only in
+`ENGINE_SCREENSHOT_FRAME` (420 vs 1020). Pre-fix: the ENTIRE ground flipped
+hue (green at camY 85.6 → magenta at camY 209.4) — the height ramp swept
+with camera altitude. Post-fix: identical ground hue in both frames, with
+the magenta band appearing only on the higher distant terrain. A uniform
+full-screen hue change under pure camera translation IS the signature of a
+camera-shifted `worldPos` (ramp keyed to `groundY - camY` is constant per
+terrain point, so only the shift explains it).
+
+**Incident:** "camera is moving towards the trees but terrain looks the same
+— doesn't look like terrain is standing there and we are flying above it."
+Streaming/lattice/props/camera were all correct (see the 2026-09-04
+worldPosition entry above — same root, fragment side). Every look layer in
+`terrain.mat` was keyed to the camera-shifted `getWorldPosition()`: grass
+tiling, dry-turf noise (12/48 m), beach band, snow line, altitude rock,
+biome `mapUV`. At near-constant flight altitude all of them stayed glued to
+the camera frame while geometry moved, so the ground read as an infinite
+sliding sheet.
+
+**Fix:** `terrain.mat` fragment stage: `vec3 worldPos =
+getUserWorldPosition();` (one line — every field derives from it).
+
+**Second find in the same incident:** the default camera framing in
+`Game::loadWorld` computed + logged `worldHighestLandPoint` but the actual
+`rendererCameraLookAt` call still used the `{1,1,1}/{0,0,0}` placeholder —
+every normal boot spawned 1 m above sea level at the map origin (open
+sea/beach on Chilerel), the exact degraded vantage the "Flying doesn't look
+like flying" lesson was supposed to have fixed. Completed per the comment:
+eye 250 m above the peak, level gaze at the peak's XZ. When a fix's comment
+describes behaviour, grep that the call site actually consumes the computed
+values — a correct log line is not a correct implementation.
+
+---
+
 ## 2026-09-04 — "Flying doesn't look like flying": verify the world scrolls, then blame the content
 
 **Rule:** before suspecting the camera/view path when motion "does nothing",

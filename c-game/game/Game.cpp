@@ -44,8 +44,9 @@ namespace game {
     struct PropsPushRecord {
         i32 tileX = 0, tileZ = 0;
         u64 readyStamp = 0;
-        u32 buildSeq = 0;
+        u32 buildSeq   = 0;
     };
+
     static std::vector<PropsPushRecord> s_propsPushed;
 
     // Register the props render state once per world load (merged mesh +
@@ -60,27 +61,28 @@ namespace game {
         // The merged array uploads verbatim (AzgaarPropVertex is 13 floats /
         // 52 B, the pass' expected layout).
         engine::propsRenderSetMesh(reinterpret_cast<const float*>(mesh->vertices.data()),
-                (u32)mesh->vertices.size(), mesh->indices.data(),
-                (u32)mesh->indices.size());
+                                   (u32)mesh->vertices.size(),
+                                   mesh->indices.data(),
+                                   (u32)mesh->indices.size());
 
         std::vector<engine::PropsRenderMeshVariant> variants;
         variants.reserve(mesh->ranges.size());
         for (const auto& r : mesh->ranges) {
             engine::PropsRenderMeshVariant v = {};
-            v.species     = r.species;
-            v.variant     = r.variant;
-            v.indexOffset = r.indexOffset;
-            v.indexCount  = r.indexCount;
+            v.species                        = r.species;
+            v.variant                        = r.variant;
+            v.indexOffset                    = r.indexOffset;
+            v.indexCount                     = r.indexCount;
             for (u32 c = 0; c < 3; c++) {
                 v.boundsMin[c] = r.aabbMin[c];
                 v.boundsMax[c] = r.aabbMax[c];
             }
             v.swayFactor = azgaarPropsSpeciesSway(r.species);
             v.flags      = azgaarPropsSpeciesRenderFlags(r.species);
-            v.texturePath = (r.species == AZGAAR_PROP_GRASS_TUFT &&
-                                       r.variant < azgaarPropsGrassVariantCount())
-                                  ? azgaarPropsGrassVariant(r.variant)->path
-                                  : nullptr;
+            v.texturePath =
+                (r.species == AZGAAR_PROP_GRASS_TUFT && r.variant < azgaarPropsGrassVariantCount())
+                    ? azgaarPropsGrassVariant(r.variant)->path
+                    : nullptr;
             variants.push_back(v);
         }
         engine::propsRenderSetVariants(variants.data(), (u32)variants.size());
@@ -90,7 +92,9 @@ namespace game {
         const char* noProps = getenv("ENGINE_NO_PROPS");
         engine::propsRenderSetEnabled(!noProps || noProps[0] != '1');
         utils::info("game: props render registered (%zu variants, mesh %zu verts / %zu idx)",
-                variants.size(), mesh->vertices.size(), mesh->indices.size());
+                    variants.size(),
+                    mesh->vertices.size(),
+                    mesh->indices.size());
     }
 
     // Per-frame props bridge: advance the scatter worker, then forward any
@@ -101,11 +105,11 @@ namespace game {
     // cost/memory line prints under ENGINE_PROPS_PERF=1 (dolly runs watch
     // this one), and a one-shot acceptance log lands at frame 1120 — the
     // terrain pass' phase-5 convention (120-frame warmup, then averages).
-    static constexpr u32 kPropsPerfFrames = 120;
-    static constexpr double kPropsCpuBudgetMs = 1.5;  // phase-5 per-pass budget
+    static constexpr u32 kPropsPerfFrames     = 120;
+    static constexpr double kPropsCpuBudgetMs = 1.5;    // phase-5 per-pass budget
     static constexpr double kPropsGpuBudgetMB = 150.0;  // phase-5 resident-window
                                                         // budget (terrain + props)
-    static u32 s_propsFrame = 0;
+    static u32 s_propsFrame                   = 0;
     static double s_propsMs[kPropsPerfFrames] = {};
 
     static void propsBridgeUpdateWork(void) {
@@ -152,25 +156,29 @@ namespace game {
 
             std::vector<engine::PropsRenderRange> ranges(t->ranges.size());
             for (u32 i = 0; i < t->ranges.size(); i++) {
-                ranges[i].species   = t->ranges[i].species;
-                ranges[i].variant   = t->ranges[i].variant;
-                ranges[i].start     = t->ranges[i].start;
-                ranges[i].count     = t->ranges[i].count;
+                ranges[i].species = t->ranges[i].species;
+                ranges[i].variant = t->ranges[i].variant;
+                ranges[i].start   = t->ranges[i].start;
+                ranges[i].count   = t->ranges[i].count;
                 for (u32 c = 0; c < 3; c++) {
                     ranges[i].aabbMin[c] = t->ranges[i].aabbMin[c];
                     ranges[i].aabbMax[c] = t->ranges[i].aabbMax[c];
                 }
             }
 
-            engine::propsRenderSetTile(t->tileX, t->tileZ, t->readyStamp, insts.data(),
-                    (u32)insts.size(), ranges.data(), (u32)ranges.size());
+            engine::propsRenderSetTile(t->tileX,
+                                       t->tileZ,
+                                       t->readyStamp,
+                                       insts.data(),
+                                       (u32)insts.size(),
+                                       ranges.data(),
+                                       (u32)ranges.size());
 
             if (rec) {
                 rec->readyStamp = t->readyStamp;
                 rec->buildSeq   = t->buildSeq;
             } else {
-                s_propsPushed.push_back(
-                        {t->tileX, t->tileZ, t->readyStamp, t->buildSeq});
+                s_propsPushed.push_back({t->tileX, t->tileZ, t->readyStamp, t->buildSeq});
             }
         }
     }
@@ -181,9 +189,9 @@ namespace game {
         s_propsMs[s_propsFrame % kPropsPerfFrames] = utils::elapsedEnd(t0);
         s_propsFrame++;
 
-        const AzgaarPropsStats ps          = azgaarPropsStats();
+        const AzgaarPropsStats ps         = azgaarPropsStats();
         const engine::PropsRenderStats rs = engine::propsRenderStats();
-        const u32   n   = s_propsFrame < kPropsPerfFrames ? s_propsFrame : kPropsPerfFrames;
+        const u32 n  = s_propsFrame < kPropsPerfFrames ? s_propsFrame : kPropsPerfFrames;
         double sumMs = 0.0;
         for (u32 i = 0; i < n; i++) sumMs += s_propsMs[i];
         const double gameAvgMs = n ? sumMs / n : 0.0;
@@ -191,46 +199,74 @@ namespace game {
         static const bool perfLine = getenv("ENGINE_PROPS_PERF") != nullptr;
         if (perfLine && s_propsFrame % kPropsPerfFrames == 0) {
             utils::info(
-                    "props perf f=%u: game %.3f ms + pass %.3f ms (apply %.3f) avg/%u; "
-                    "%u/%u tiles built, %u inst, %u draws, %u queued, "
-                    "claims %u (rescatter %u, stamp %u), evictions %u; "
-                    "cpu %.1f MB, gpu %.1f MB, staging %.1f MB, worker %.1f ms/tile",
-                    s_propsFrame, gameAvgMs, rs.renderAvgMs, rs.applyAvgMs, n,
-                    ps.built, ps.resident, ps.instances, rs.gpuDraws, ps.queueDepth,
-                    ps.claims, ps.rescatters, ps.stampRebuilds, ps.evictions,
-                    (double)ps.cpuBytes / (1024.0 * 1024.0),
-                    (double)rs.gpuBytes / (1024.0 * 1024.0),
-                    (double)rs.cpuStagingBytes / (1024.0 * 1024.0), ps.workerAvgMs);
+                "props perf f=%u: game %.3f ms + pass %.3f ms (apply %.3f) avg/%u; "
+                "%u/%u tiles built, %u inst, %u draws, %u queued, "
+                "claims %u (rescatter %u, stamp %u), evictions %u; "
+                "cpu %.1f MB, gpu %.1f MB, staging %.1f MB, worker %.1f ms/tile",
+                s_propsFrame,
+                gameAvgMs,
+                rs.renderAvgMs,
+                rs.applyAvgMs,
+                n,
+                ps.built,
+                ps.resident,
+                ps.instances,
+                rs.gpuDraws,
+                ps.queueDepth,
+                ps.claims,
+                ps.rescatters,
+                ps.stampRebuilds,
+                ps.evictions,
+                (double)ps.cpuBytes / (1024.0 * 1024.0),
+                (double)rs.gpuBytes / (1024.0 * 1024.0),
+                (double)rs.cpuStagingBytes / (1024.0 * 1024.0),
+                ps.workerAvgMs);
         }
 
         // One-shot phase-7 acceptance: steady-state cost + memory vs budget
         // (the verification screenshot runs land well before this frame —
         // perf runs use a later ENGINE_SCREENSHOT_FRAME).
-        static constexpr u32 kAcceptFrame  = 1120;  // 120 warmup + 1000
-        static bool acceptanceLogged = false;
+        static constexpr u32 kAcceptFrame = 1120;  // 120 warmup + 1000
+        static bool acceptanceLogged      = false;
         if (!acceptanceLogged && s_propsFrame == kAcceptFrame) {
-            acceptanceLogged = true;
+            acceptanceLogged                             = true;
             const engine::HeightmapTerrainRenderStats ts = engine::heightmapTerrainRenderStats();
-            const double cpuMB  = (double)ps.cpuBytes / (1024.0 * 1024.0);
-            const double gpuMB  = (double)rs.gpuBytes / (1024.0 * 1024.0);
+            const double cpuMB                           = (double)ps.cpuBytes / (1024.0 * 1024.0);
+            const double gpuMB                           = (double)rs.gpuBytes / (1024.0 * 1024.0);
             const double stagMB = (double)rs.cpuStagingBytes / (1024.0 * 1024.0);
             const double totMB  = gpuMB + (double)ts.gpuBytes / (1024.0 * 1024.0);
             const double passMs = gameAvgMs + rs.renderAvgMs;
             utils::info(
-                    "props: steady cost f=%u: game %.3f ms + render pass %.3f ms "
-                    "(apply %.3f) = %.3f ms/frame (rolling %u-frame avg; worker "
-                    "%.1f ms/tile, %u builds) — %.2f ms budget",
-                    s_propsFrame, gameAvgMs, rs.renderAvgMs, rs.applyAvgMs, passMs, n,
-                    ps.workerAvgMs, ps.workerBuilds, kPropsCpuBudgetMs);
+                "props: steady cost f=%u: game %.3f ms + render pass %.3f ms "
+                "(apply %.3f) = %.3f ms/frame (rolling %u-frame avg; worker "
+                "%.1f ms/tile, %u builds) — %.2f ms budget",
+                s_propsFrame,
+                gameAvgMs,
+                rs.renderAvgMs,
+                rs.applyAvgMs,
+                passMs,
+                n,
+                ps.workerAvgMs,
+                ps.workerBuilds,
+                kPropsCpuBudgetMs);
             utils::info(
-                    "props: memory: cpu %.1f MB (%u/%u tiles built, %u instances) + "
-                    "gpu %.1f MB (%u tex tiles, %u draws, %u inst) + %.1f MB staging; "
-                    "terrain gpu %.1f MB -> window %.1f MB of %.0f MB budget (props "
-                    "instance count vs the old engine's 5M cap: %.2f%%)",
-                    cpuMB, ps.built, ps.resident, ps.instances, gpuMB, rs.gpuTiles,
-                    rs.gpuDraws, rs.gpuInstances, stagMB,
-                    (double)ts.gpuBytes / (1024.0 * 1024.0), totMB, kPropsGpuBudgetMB,
-                    100.0 * (double)ps.instances / 5.0e6);
+                "props: memory: cpu %.1f MB (%u/%u tiles built, %u instances) + "
+                "gpu %.1f MB (%u tex tiles, %u draws, %u inst) + %.1f MB staging; "
+                "terrain gpu %.1f MB -> window %.1f MB of %.0f MB budget (props "
+                "instance count vs the old engine's 5M cap: %.2f%%)",
+                cpuMB,
+                ps.built,
+                ps.resident,
+                ps.instances,
+                gpuMB,
+                rs.gpuTiles,
+                rs.gpuDraws,
+                rs.gpuInstances,
+                stagMB,
+                (double)ts.gpuBytes / (1024.0 * 1024.0),
+                totMB,
+                kPropsGpuBudgetMB,
+                100.0 * (double)ps.instances / 5.0e6);
         }
     }
 
@@ -254,8 +290,11 @@ namespace game {
     // an adjacent READY pair exist, so a partial window never fails it).
     static bool heightmapAcceptanceLog() {
         static const f32 probes[5][2] = {
-            {400.0f, 2600.0f}, {500.0f, 2700.0f}, {560.0f, 2740.0f},
-            {340.0f, 2820.0f}, {620.0f, 2580.0f},
+            {400.0f, 2600.0f},
+            {500.0f, 2700.0f},
+            {560.0f, 2740.0f},
+            {340.0f, 2820.0f},
+            {620.0f, 2580.0f},
         };
         const engine::HeightmapSource* src = &s_terrain.source;
         bool allOk                         = true;
@@ -290,15 +329,21 @@ namespace game {
         // 1 + 2: fixed-point determinism and sample-vs-source agreement.
         for (const auto& p : probes) {
             const f32 wx = p[0], wz = p[1];
-            const f32 a  = src->heightAt(src->userData, wx, wz);
-            const f32 b    = src->heightAt(src->userData, wx, wz);
+            const f32 a        = src->heightAt(src->userData, wx, wz);
+            const f32 b        = src->heightAt(src->userData, wx, wz);
             const bool twiceOk = (memcmp(&a, &b, sizeof(a)) == 0);
             const f32 sampled  = engine::heightmapTerrainSample(&s_terrain, wx, wz);
             const f32 diff     = fabsf(sampled - a);
-            allOk = allOk && twiceOk && (diff < 1.0f);
-            utils::info("heightmap acceptance: probe (%.0f, %.0f): heightAt %.6f twice %s, "
-                        "sample %.6f diff %.4f m",
-                        wx, wz, a, twiceOk ? "bit-identical" : "MISMATCH", sampled, diff);
+            allOk              = allOk && twiceOk && (diff < 1.0f);
+            utils::info(
+                "heightmap acceptance: probe (%.0f, %.0f): heightAt %.6f twice %s, "
+                "sample %.6f diff %.4f m",
+                wx,
+                wz,
+                a,
+                twiceOk ? "bit-identical" : "MISMATCH",
+                sampled,
+                diff);
         }
 
         // 3: adjacent READY tiles share a bit-identical border.
@@ -308,28 +353,33 @@ namespace game {
                 if (i == j) continue;
                 const engine::HeightmapTileView& a = views[i];
                 const engine::HeightmapTileView& b = views[j];
-                bool ok                            = false, found = false;
+                bool ok = false, found = false;
                 if (b.tileX == a.tileX + 1 && b.tileZ == a.tileZ) {
                     // shared column: a.x = TEX-1 vs b.x = 0 (grid is [z*dim + x])
                     found = true;
                     for (u32 z = 0; z < HEIGHTMAP_TEX && ok; ++z)
-                        ok = (a.heights[z * HEIGHTMAP_TEX + (HEIGHTMAP_TEX - 1)] == b.heights[z * HEIGHTMAP_TEX]);
+                        ok = (a.heights[z * HEIGHTMAP_TEX + (HEIGHTMAP_TEX - 1)] ==
+                              b.heights[z * HEIGHTMAP_TEX]);
                 } else if (b.tileZ == a.tileZ + 1 && b.tileX == a.tileX) {
                     // shared row: a.z = TEX-1 vs b.z = 0
                     found = true;
-                    ok = (memcmp(a.heights + (HEIGHTMAP_TEX - 1) * HEIGHTMAP_TEX,
-                                 b.heights, sizeof(float) * HEIGHTMAP_TEX) == 0);
+                    ok    = (memcmp(a.heights + (HEIGHTMAP_TEX - 1) * HEIGHTMAP_TEX,
+                                    b.heights,
+                                    sizeof(float) * HEIGHTMAP_TEX) == 0);
                 }
                 if (found) {
                     borderChecked = true;
                     allOk         = allOk && ok;
                     utils::info("heightmap acceptance: border tiles (%d,%d)/(%d,%d): %s",
-                                a.tileX, a.tileZ, b.tileX, b.tileZ,
+                                a.tileX,
+                                a.tileZ,
+                                b.tileX,
+                                b.tileZ,
                                 ok ? "bit-identical" : "MISMATCH");
                 }
             }
         }
-        if (!borderChecked) allOk = false; // unreachable: gated above
+        if (!borderChecked) allOk = false;  // unreachable: gated above
 
         utils::info("heightmap acceptance: %s", allOk ? "PASS" : "FAIL");
         return true;
@@ -375,11 +425,11 @@ namespace game {
         char path[1024];
         snprintf(path, sizeof(path), "%s/biome_color.ppm", dir);
         dumpPpm(path, look.biomeColorPixels, look.biomeColorW, look.biomeColorH, true);
-        snprintf(path, sizeof(path), "%s/climate_temp.ppm", dir);   // R = temp + 64
+        snprintf(path, sizeof(path), "%s/climate_temp.ppm", dir);  // R = temp + 64
         dumpPpm(path, look.climatePixels, look.climateW, look.climateH, false);
     }
 
-        // Build the terrain pass' per-world look from the loaded Azgaar world
+    // Build the terrain pass' per-world look from the loaded Azgaar world
     // (packed biome-colour + climate textures, map bounds, thresholds) and
     // register it with the active render backend.
     static void terrainRegisterWorldLook(const AzgaarWorld* world) {
@@ -389,35 +439,35 @@ namespace game {
         std::vector<u8> biomePixels = azgaarWorldPackBiomeColorTexture(world, &w, &h);
         if (!biomePixels.empty()) {
             look.biomeColorPixels = biomePixels.data();
-            look.biomeColorW = w;
-            look.biomeColorH = h;
+            look.biomeColorW      = w;
+            look.biomeColorH      = h;
         }
-        w = 0;
-        h = 0;
+        w                             = 0;
+        h                             = 0;
         std::vector<u8> climatePixels = azgaarWorldPackClimateTexture(world, &w, &h);
         if (!climatePixels.empty()) {
             look.climatePixels = climatePixels.data();
-            look.climateW = w;
-            look.climateH = h;
+            look.climateW      = w;
+            look.climateH      = h;
         }
         look.climateEnabled = look.biomeColorPixels != nullptr && look.climatePixels != nullptr;
 
         // Map bounds in world metres (azgaarMapToWorld centres the map at
         // the world origin).
-        const f32 halfW = (f32)world->widthPx * 0.5f * (f32)world->metersPerPixel;
-        const f32 halfH = (f32)world->heightPx * 0.5f * (f32)world->metersPerPixel;
-        look.mapMinX = -halfW;
-        look.mapMinZ = -halfH;
-        look.mapMaxX = halfW;
-        look.mapMaxZ = halfH;
+        const f32 halfW     = (f32)world->widthPx * 0.5f * (f32)world->metersPerPixel;
+        const f32 halfH     = (f32)world->heightPx * 0.5f * (f32)world->metersPerPixel;
+        look.mapMinX        = -halfW;
+        look.mapMinZ        = -halfH;
+        look.mapMaxX        = halfW;
+        look.mapMaxZ        = halfH;
         look.maxLandHeightM = world->maxLandHeightM;
 
-        look.snowLoC = azgaarEnvFloat("ENGINE_AZGAAR_SNOW_LO", -1.0f);
-        look.snowHiC = azgaarEnvFloat("ENGINE_AZGAAR_SNOW_HI", 3.0f);
+        look.snowLoC      = azgaarEnvFloat("ENGINE_AZGAAR_SNOW_LO", -1.0f);
+        look.snowHiC      = azgaarEnvFloat("ENGINE_AZGAAR_SNOW_HI", 3.0f);
         look.beachHeightM = azgaarEnvFloat("ENGINE_AZGAAR_BEACH_H", 2.5f);
         if (getenv("ENGINE_AZGAAR_CLIMATE_DISABLED")) {
             look.snowLoC = look.snowHiC = look.beachHeightM = 0.0f;
-            look.climateEnabled = false;
+            look.climateEnabled                             = false;
         }
 
         dumpWorldLook(look);
@@ -427,7 +477,7 @@ namespace game {
         // periodic hue per 256 m of height, biome = raw biome-colour
         // texture through the map-space UV).
         const char* dbg = getenv("ENGINE_TERRAIN_DEBUG");
-        u32 debugMode = 0;
+        u32 debugMode   = 0;
         if (dbg && utils::strequals(dbg, "ramp")) {
             debugMode = 1;
         } else if (dbg && utils::strequals(dbg, "biome")) {
@@ -483,26 +533,30 @@ namespace game {
     // total-density score). Falls back to total density when the map has no
     // tree species anywhere. Returns false when the grids or the props
     // tables are unavailable (the caller then falls back to the peak).
-    static bool worldDensestPropsPoint(const AzgaarWorld* world, f32 out[3],
-                                       f32* outTreeDensity, f32* outTotalDensity,
-                                       i32* outTileX, i32* outTileZ) {
+    static bool worldDensestPropsPoint(const AzgaarWorld* world,
+                                       f32 out[3],
+                                       f32* outTreeDensity,
+                                       f32* outTotalDensity,
+                                       i32* outTileX,
+                                       i32* outTileZ) {
         if (!world || world->heightGrid.empty() || world->biomeGrid.empty() ||
             !world->climateGridWidth || !world->climateGridHeight ||
             world->heightGridWidth != world->climateGridWidth ||
             world->heightGridHeight != world->climateGridHeight) {
             return false;
         }
-        const u32 gw = world->climateGridWidth;
-        const u32 gh = world->climateGridHeight;
-        const f32 seaY = azgaarSeaLevelMeters(world);
+        const u32 gw      = world->climateGridWidth;
+        const u32 gh      = world->climateGridHeight;
+        const f32 seaY    = azgaarSeaLevelMeters(world);
         const u64 kNoTile = ~(u64)0;
 
         // Pass 1: per-tile density sums (expected instances = density x area).
         // texTile caches each land texel's tile key so pass 2 stays O(tile).
         struct TileAcc {
-            f64 sumTree = 0.0;
+            f64 sumTree  = 0.0;
             f64 sumTotal = 0.0;
         };
+
         std::unordered_map<u64, TileAcc> tiles;
         tiles.reserve(256);
         std::vector<u64> texTile((size_t)gw * gh, kNoTile);
@@ -511,28 +565,32 @@ namespace game {
                 const size_t gi = (size_t)gy * gw + gx;
                 if (azgaarHeightToMeters(world, world->heightGrid[gi]) < seaY + 0.5f)
                     continue;  // water
-                const u32 biome = world->biomeGrid[gi];
+                const u32 biome  = world->biomeGrid[gi];
                 const f32 dTree  = azgaarPropsBiomeDensity(world, biome, true);
                 const f32 dTotal = azgaarPropsBiomeDensity(world, biome, false);
                 if (dTotal <= 0.0f) continue;
                 f32 wx, wz;
-                azgaarMapToWorld(world, ((f32)gx + 0.5f) * (f32)world->widthPx / (f32)gw,
-                                 ((f32)gy + 0.5f) * (f32)world->heightPx / (f32)gh, &wx, &wz);
-                const i32 tx = (i32)floorf(wx / HEIGHTMAP_TILE_SIZE_M);
-                const i32 tz = (i32)floorf(wz / HEIGHTMAP_TILE_SIZE_M);
+                azgaarMapToWorld(world,
+                                 ((f32)gx + 0.5f) * (f32)world->widthPx / (f32)gw,
+                                 ((f32)gy + 0.5f) * (f32)world->heightPx / (f32)gh,
+                                 &wx,
+                                 &wz);
+                const i32 tx  = (i32)floorf(wx / HEIGHTMAP_TILE_SIZE_M);
+                const i32 tz  = (i32)floorf(wz / HEIGHTMAP_TILE_SIZE_M);
                 const u64 key = ((u64)(u32)tx << 32) | (u32)tz;
                 texTile[gi]   = key;
                 TileAcc& acc  = tiles[key];
-                acc.sumTree  += dTree;
+                acc.sumTree += dTree;
                 acc.sumTotal += dTotal;
             }
         }
         if (tiles.empty()) return false;
 
-        const bool treeScored = std::any_of(tiles.begin(), tiles.end(),
-                                            [](const auto& kv) { return kv.second.sumTree > 0.0; });
-        u64 bestKey = 0;
-        f64 bestScore = -1.0;
+        const bool treeScored = std::any_of(tiles.begin(), tiles.end(), [](const auto& kv) {
+            return kv.second.sumTree > 0.0;
+        });
+        u64 bestKey           = 0;
+        f64 bestScore         = -1.0;
         for (const auto& kv : tiles) {
             f64 score = treeScored ? kv.second.sumTree : kv.second.sumTotal;
             if (score > bestScore) {
@@ -545,7 +603,7 @@ namespace game {
 
         // Pass 2: interior texel of that tile with the best 5x5 mean density
         // (same scorer), so the camera does not land on a biome-border sliver.
-        f64 bestSum = -1.0;
+        f64 bestSum   = -1.0;
         size_t bestGi = (size_t)-1;
         for (u32 gy = 2; gy + 2 < gh; gy++) {
             for (u32 gx = 2; gx + 2 < gw; gx++) {
@@ -574,11 +632,14 @@ namespace game {
 
         const u32 bgx = (u32)(bestGi % gw);
         const u32 bgy = (u32)(bestGi / gw);
-        azgaarMapToWorld(world, ((f32)bgx + 0.5f) * (f32)world->widthPx / (f32)gw,
-                         ((f32)bgy + 0.5f) * (f32)world->heightPx / (f32)gh, &out[0], &out[2]);
-        out[1] = azgaarHeightToMeters(world, world->heightGrid[bestGi]);
+        azgaarMapToWorld(world,
+                         ((f32)bgx + 0.5f) * (f32)world->widthPx / (f32)gw,
+                         ((f32)bgy + 0.5f) * (f32)world->heightPx / (f32)gh,
+                         &out[0],
+                         &out[2]);
+        out[1]          = azgaarHeightToMeters(world, world->heightGrid[bestGi]);
         const u32 biome = world->biomeGrid[bestGi];
-        if (outTreeDensity)  *outTreeDensity  = azgaarPropsBiomeDensity(world, biome, true);
+        if (outTreeDensity) *outTreeDensity = azgaarPropsBiomeDensity(world, biome, true);
         if (outTotalDensity) *outTotalDensity = azgaarPropsBiomeDensity(world, biome, false);
         if (outTileX) *outTileX = btx;
         if (outTileZ) *outTileZ = btz;
@@ -590,10 +651,10 @@ namespace game {
     // ENGINE_SCREENSHOT_FRAME it screenshots a camera that has actually moved,
     // so a headless run exercises the terrain pass' follow/evict/re-upload path.
     static void updateCameraDolly() {
-        static f32 vel[3] = {};
+        static f32 vel[3]  = {};
         static bool parsed = false;
         if (!parsed) {
-            parsed = true;
+            parsed        = true;
             const char* v = getenv("ENGINE_CAMERA_DOLLY");
             if (v && v[0]) {
                 char buf[128];
@@ -610,11 +671,10 @@ namespace game {
 
         f32 pos[3], fwd[3];
         engine::renderer::rendererCameraGet(pos, fwd);
-        const f32 step = (f32)utils::timer.dt;
-        const f32 eye[3] = {pos[0] + vel[0] * step, pos[1] + vel[1] * step,
-                pos[2] + vel[2] * step};
+        const f32 step   = (f32)utils::timer.dt;
+        const f32 eye[3] = {pos[0] + vel[0] * step, pos[1] + vel[1] * step, pos[2] + vel[2] * step};
         const f32 target[3] = {eye[0] + fwd[0], eye[1] + fwd[1], eye[2] + fwd[2]};
-        const f32 up[3] = {0.0f, 1.0f, 0.0f};
+        const f32 up[3]     = {0.0f, 1.0f, 0.0f};
         engine::renderer::rendererCameraLookAt(eye, target, up);
     }
 
@@ -657,8 +717,10 @@ namespace game {
         // picks the active instance up on its next update.
         const AzgaarHeightmapSource* src = loadingAzgaarGetHeightmapSource();
         if (src) {
-            engine::heightmapTerrainInit(&s_terrain, &src->vtable,
-                                         HEIGHTMAP_TILE_SIZE_M, HEIGHTMAP_WINDOW_SIZE);
+            engine::heightmapTerrainInit(&s_terrain,
+                                         &src->vtable,
+                                         HEIGHTMAP_TILE_SIZE_M,
+                                         HEIGHTMAP_WINDOW_SIZE);
             engine::heightmapTerrainSetActive(&s_terrain);
 
             // Terrain render pass: per-world look (biome/climate textures +
@@ -696,8 +758,10 @@ namespace game {
                 peak[0] = center[0];
                 peak[2] = center[2];
             }
-            utils::info("game: camera framing highest land point (%.0f, %.0f, %.0f)", peak[0],
-                        peak[1], peak[2]);
+            utils::info("game: camera framing highest land point (%.0f, %.0f, %.0f)",
+                        peak[0],
+                        peak[1],
+                        peak[2]);
             f32 eye[3] = {peak[0] + 2600.0f, peak[1] + 900.0f, peak[2] + 2600.0f};
             f32 up[3]  = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, peak, up);
@@ -721,18 +785,29 @@ namespace game {
             // species: 63k instances, every one grass). The scatter-time
             // cull caps are XZ ground-plane distances (trees 840 m, grass
             // 440 m), so the camera must sit inside the tile it judges.
-            f32 p[3] = {center[0], 0.0f, center[2]};
+            f32 p[3]  = {center[0], 0.0f, center[2]};
             f32 treeD = 0.0f, totalD = 0.0f;
             i32 tileX = 0, tileZ = 0;
-            if (!worldDensestPropsPoint(loadingAzgaarGetWorld(), p, &treeD, &totalD,
-                                        &tileX, &tileZ) &&
+            if (!worldDensestPropsPoint(loadingAzgaarGetWorld(),
+                                        p,
+                                        &treeD,
+                                        &totalD,
+                                        &tileX,
+                                        &tileZ) &&
                 !worldHighestLandPoint(loadingAzgaarGetWorld(), p)) {
                 p[0] = center[0];
                 p[2] = center[2];
             }
-            utils::info("game: props camera over densest tile(%d,%d) point "
-                        "(%.0f, %.0f, %.0f): tree density %.5f, total %.5f instances/m^2",
-                        tileX, tileZ, p[0], p[1], p[2], treeD, totalD);
+            utils::info(
+                "game: props camera over densest tile(%d,%d) point "
+                "(%.0f, %.0f, %.0f): tree density %.5f, total %.5f instances/m^2",
+                tileX,
+                tileZ,
+                p[0],
+                p[1],
+                p[2],
+                treeD,
+                totalD);
             f32 eye[3]    = {p[0] + 55.0f, p[1] + 70.0f, p[2] + 55.0f};
             f32 lookAt[3] = {p[0], p[1] + 5.0f, p[2]};
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
@@ -744,44 +819,38 @@ namespace game {
             // vantage-to-vantage from eye height over the same densest-props
             // point. Absolute density still differs: the reference's dry-turf
             // savanna is a sparser biome than this woodland tile.
-            f32 p[3] = {center[0], 0.0f, center[2]};
+            f32 p[3]  = {center[0], 0.0f, center[2]};
             f32 treeD = 0.0f, totalD = 0.0f;
             i32 tileX = 0, tileZ = 0;
-            if (!worldDensestPropsPoint(loadingAzgaarGetWorld(), p, &treeD, &totalD,
-                                        &tileX, &tileZ) &&
+            if (!worldDensestPropsPoint(loadingAzgaarGetWorld(),
+                                        p,
+                                        &treeD,
+                                        &totalD,
+                                        &tileX,
+                                        &tileZ) &&
                 !worldHighestLandPoint(loadingAzgaarGetWorld(), p)) {
                 p[0] = center[0];
                 p[2] = center[2];
             }
-            utils::info("game: props ground camera at densest tile(%d,%d) point "
-                        "(%.0f, %.0f, %.0f): eye height 7 m, tree density %.5f, "
-                        "total %.5f instances/m^2",
-                        tileX, tileZ, p[0], p[1], p[2], treeD, totalD);
+            utils::info(
+                "game: props ground camera at densest tile(%d,%d) point "
+                "(%.0f, %.0f, %.0f): eye height 7 m, tree density %.5f, "
+                "total %.5f instances/m^2",
+                tileX,
+                tileZ,
+                p[0],
+                p[1],
+                p[2],
+                treeD,
+                totalD);
             f32 eye[3]    = {p[0] + 14.0f, p[1] + 7.0f, p[2] + 14.0f};
             f32 lookAt[3] = {p[0] + 114.0f, p[1] + 3.0f, p[2] + 114.0f};
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
         } else {
-            // Default framing: over LAND, not the world origin — on Chilerel
-            // the map centre is open sea (~-33 m seabed), and until phase 8
-            // ships the water plane there is nothing there to see: no water,
-            // no props, no relief. Flying from that vantage reads as a static
-            // beige void (horizontal motion has no in-frame cue; only the
-            // altitude change of vertical motion reads). Frame over the
-            // highest land point instead, low (250 m above the peak) with a
-            // level gaze: the ridge lines around the peak are close enough to
-            // sweep past under forward flight, and the level pitch keeps W
-            // from diving into the ground within seconds.
-            f32 peak[3] = {center[0], 0.0f, center[2]};
-            if (!worldHighestLandPoint(loadingAzgaarGetWorld(), peak)) {
-                peak[0] = center[0];
-                peak[2] = center[2];
-            }
-            utils::info("game: camera framing highest land point (%.0f, %.0f, %.0f)", peak[0],
-                        peak[1], peak[2]);
-            f32 eye[3] = {peak[0] + 1200.0f, peak[1] + 250.0f, peak[2] + 1200.0f};
-            f32 lookAt[3] = {peak[0] - 2000.0f, peak[1] + 250.0f, peak[2] - 2000.0f};
-            f32 up[3]    = {0.0f, 1.0f, 0.0f};
+            f32 eye[3]    = {-100, 2, -100};
+            f32 lookAt[3] = {-101, 1.5, -101};
+            f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
         }
 
@@ -812,7 +881,6 @@ namespace game {
         f32 fogDensity  = 0.00035f;
         if (const char* fd = getenv("ENGINE_FOG_DENSITY")) fogDensity = (f32)atof(fd);
         engine::renderer::rendererSetFog(fogColor, fogDensity);
-
     }
 
     void GameSystem::preUpdate() {

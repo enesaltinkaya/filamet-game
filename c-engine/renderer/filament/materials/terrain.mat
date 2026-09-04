@@ -182,7 +182,16 @@ fragment {
     }
 
     void material(inout MaterialInputs material) {
-        vec3 worldPos = getWorldPosition();
+        // getUserWorldPosition(), NOT getWorldPosition(): this Filament build
+        // renders with the view origin shifted to the camera (Engine.debug.
+        // view.camera_at_origin defaults true), so getWorldPosition() is
+        // CAMERA-RELATIVE and every world-anchored field below (world-space
+        // tiling, dry-turf noise, sea-level/beach/snow/rock bands, mapBounds
+        // UV) would swim with the camera — the ground reads as a treadmill
+        // that never stays put under flight. getUserWorldPosition() is the
+        // API-level (absolute) world position; directions (V, normals) stay
+        // on the shifted frame, which is fine (translation-invariant).
+        vec3 worldPos = getUserWorldPosition();
         vec3 V        = getWorldViewVector();
         vec3 geomNormal = normalize(getWorldGeometricNormalVector());
 
