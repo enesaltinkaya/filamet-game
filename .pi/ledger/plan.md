@@ -1,16 +1,8 @@
-# plan
+# Plan
 
-## Strategy
+The attached screenshot (reproduced headless at camera (-100,2,-100)→(-101,1.5,-101), the default in-game framing) shows the ground covered with correct 3D grass tufts but also scattered FLAT, striped, teal/cyan-green rectangular patches — billboard grass cards that render as unrotated, un-alpha-tested quads lying in the ground plane (or wrong orientation/tint) instead of upright blades. The defect is in the azgaar props/grass pipeline: c-game/game/azgaar/AzgaarProps.cpp (+AzgaarPropMesh.*) scatters instances into instance textures, and c-engine/renderer/filament/PropsRenderFilament.cpp draws them (grass card textures are loaded as sRGB RGBA8; thin double-sided vegetation is handled specially around line 432; the "look matches the old engine" comment at ~149 is the intent).
 
-Port the sound subsystem from the old engine (/home/enes/Projects/c/game-001-cpp/c-engine/ecs/system/sound/SoundSystem.{h,cpp}) into the new engine. The new engine already has: the ECS System base class (c-engine/ecs/Ecs.h), the SoLoud prebuilt lib (/home/enes/Projects/c/cpp-thirdparty/soloud/git/build-linux/libsoloud.a — same pattern as the old engine's `${thirdparty}/soloud/git/${platform_dir}/libsoloud.a`), the ogg assets already packed in c-engine/data/pak_0_engine/sound/ (click.ogg, error.ogg, whipstick.ogg), and utils::dataManagerRead in c-utils.
+Strategy: first reproduce with a headless screenshot and confirm which instances are wrong (compare against the user's screenshot). Inspect the grass card mesh (AzgaarPropMesh: per-variant meshes, billboard vs fixed orientation), the instance attribute packing (rotation/position/scale in the RGBA32F instance textures), and the props vertex/fragment shaders (azgaar_props.vert/frag) to find why some cards render flat/teal instead of upright. Check the old engine (/home/enes/Projects/c/game-001-cpp) grass rendering for the intended behavior. Fix the orientation/alpha/tint handling so every grass instance renders like the good tufts, re-verify with the headless screenshot, and confirm the flat patches are gone while the good tufts are unchanged.
 
-Approach:
-1. Add c-engine/ecs/system/sound/SoundSystem.{h,cpp} mirroring the old SoundSystem (SoLoud C API: Soloud_create/init, Wav via dataManagerRead, soundPlay/soundStop, hover/click/error helpers). Adapt to new-engine idioms: use the new `System` base, `systemAdd(3, &soundSystem)` in Ecs.cpp (old engine used order 3), and whatever the new engine uses for delayed tasks/signals (or drop `settingsSaved`/`futureTaskAdd` hooks if they don't exist here — keep it minimal but functionally equivalent).
-2. Link libsoloud.a (check c-engine/c-game CMakeLists; old engine linked it in c-game's CMakeLists with ${thirdparty} + ${platform_dir}) and add its include path.
-3. Wire at least one real use site (e.g. UI hover/click in the new engine's gui, or a debug hotkey in c-game) so the sound path is exercised end to end.
-4. Build; if a headless audio run is possible verify no crash on startup/teardown.
-
-Scope guard: do NOT port old-engine lua, music-level hooks, or device enumeration logging — keep it lean. Do not touch diligent/ or unrelated files.
-
-Verification: bash /media/extra/Projects/c/filament-game/scripts/build.sh
-Baseline commit: 4f386199cce818d3c3256049078dcb29a40aa615 (dirty)
+Verification: ./scripts/build.sh && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json ENGINE_AUTOTEST=enter ENGINE_SCREENSHOT_FRAME=400 ENGINE_SCREENSHOT=/tmp/verify_grass.jpg ./build/c-game/c-game  (then inspect /tmp/verify_grass.jpg: no flat striped teal/green rectangular grass patches on the ground; upright grass tufts as in good reference)
+Baseline commit: ae67685ad711a3ddeb53b504039efb15f2dae7f0 (clean)

@@ -141,8 +141,17 @@ filament::TextureSampler const samplerNearestClamp = {
         filament::TextureSampler::MinFilter::NEAREST,
         filament::TextureSampler::MagFilter::NEAREST,
         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE};
-filament::TextureSampler const samplerLinearMipmapClamp = {
-        filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+// Grass card sampler: LINEAR magnification (smooth close-up edges) +
+// NEAREST minification. The min filter must NOT be LINEAR: the cards are
+// 1-level (.levels(1)) sparse alpha-CUTOUT SRGB8_A8 textures, and RADV
+// (Mesa, observed on NAVI31 26.2.1) returns a corrupted OPAQUE alpha for
+// LINEAR-minified samples of sRGB images — every mid-distance card then
+// renders as a solid striped tinted rectangle because the fragment's
+// 0.5-alpha discard never fires (docs/lessons.md "RADV" entry, A/B matrix
+// in .pi/ledger/notes.md round 2). NEAREST minification of a 1-level image
+// is exactly "level-0 only", which is the intended look.
+filament::TextureSampler const samplerCardClamp = {
+        filament::TextureSampler::MinFilter::NEAREST,
         filament::TextureSampler::MagFilter::LINEAR,
         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE};
 
@@ -419,7 +428,7 @@ bool buildTile(GpuTile& t, const PendingTile& p) {
                 return false;
             }
             mi->setParameter("instanceData", t.instanceTex, samplerNearestClamp);
-            mi->setParameter("cardTex", v->tex ? v->tex : fallbackTex, samplerLinearMipmapClamp);
+            mi->setParameter("cardTex", v->tex ? v->tex : fallbackTex, samplerCardClamp);
             mi->setParameter("meshA", filament::math::float4(
                     v->boundsMin[0], v->boundsMin[1], v->boundsMin[2], v->swayFactor));
             mi->setParameter("meshB", filament::math::float4(
@@ -832,8 +841,8 @@ void propsRenderFilamentStats(PropsRenderStats* out) {
 
     // GPU footprint, analytic (Filament exposes no allocator query): the
     // RGBA32F instance textures are width*height*16 B exactly, the grass
-    // cards are SRGB8_A8 with a generated full mip chain (x4/3), the mesh
-    // is the 52 B-vertex VBO + u32 IBO.
+    // cards are 1-LEVEL SRGB8_A8 (width*height*4 B), the mesh is the
+    // 52 B-vertex VBO + u32 IBO.
     auto accountInstanceTex = [&](const filament::Texture* tex, const std::vector<float>& staging) {
         if (!tex) return;
         out->gpuBytes += (size_t)tex->getWidth() * (size_t)tex->getHeight() * 16u;
@@ -857,7 +866,7 @@ void propsRenderFilamentStats(PropsRenderStats* out) {
     if (meshIbo) out->gpuBytes += (size_t)meshIdxCount * sizeof(u32);
     for (const VariantDef& v : variants) {
         if (v.tex)
-            out->gpuBytes += (size_t)v.tex->getWidth() * v.tex->getHeight() * 4u * 4u / 3u;
+            out->gpuBytes += (size_t)v.tex->getWidth() * v.tex->getHeight() * 4u;
     }
 }
 
