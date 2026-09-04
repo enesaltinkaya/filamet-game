@@ -15,6 +15,7 @@
 #include "loadingAzgaar/LoadingAzgaar.h"
 #include "mainMenu/MainMenuGui.h"
 #include "cameraGui/CameraGui.h"
+#include "playerActionsGui/PlayerActionsGui.h"
 #include "azgaar/AzgaarPropMesh.h"
 #include "azgaar/AzgaarProps.h"
 #include "azgaar/AzgaarSettlements.h"
@@ -970,6 +971,7 @@ namespace game {
             propsRelease();
             engine::gui::guiAdd(&mainMenuGui);
             engine::gui::guiRemove(&cameraGui);
+            engine::gui::guiRemove(&playerActionsGui);
         }
     }
 

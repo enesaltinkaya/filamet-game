@@ -89,6 +89,7 @@ static struct {
     char active  = 0;
     char spawned = 0;
     char autoRun = 0;
+    char dragging = 0; // LMB/RMB drag in flight — relative mouse mode is ours
 } p = {};
 
 void playerSetSpawn(f32 x, f32 y, f32 z) {
@@ -99,6 +100,16 @@ void playerSetSpawn(f32 x, f32 y, f32 z) {
 }
 
 char playerMode(void) { return p.active; }
+
+char playerTeleportTo(f32 x, f32 y, f32 z) {
+    if (!p.spawned || !p.character) return 0;
+    p.pos[0] = x;
+    p.pos[1] = y;
+    p.pos[2] = z;
+    joltCharacterSetPosition(p.character, p.pos);
+    p.autoRun = 0;  // old engine: a teleport cancels auto-run
+    return 1;
+}
 
 // ── Player DB (persist position + orbit camera state across runs —
 // port of the old engine's Player.cpp PlayerDb; the old engine split this
@@ -169,12 +180,37 @@ static void playerSetActive(char on) {
     if (p.active == on) return;
     p.active = on;
     if (on) {
-        windowSetRelativeMouseMode(1);
+        p.dragging = 0;
         syncOrbitFromCamera(&p.camYaw, &p.camPitch);
-        utils::info("player: mode on — WASD/SPACE move, mouse orbit, wheel zoom (C off, F fly)");
+        utils::info("player: mode on — WASD/SPACE move, LMB/RMB drag orbit, wheel zoom (C off, F fly)");
     } else {
-        windowSetRelativeMouseMode(0);
+        // Release the capture if a drag was in flight when the mode ended
+        if (p.dragging) {
+            p.dragging = 0;
+            windowSetRelativeMouseMode(0);
+        }
         utils::info("player: mode off (C on, F fly)");
+    }
+}
+
+// Cursor show/hide on drag transitions (the old engine's behaviour —
+// windowSystemHideCursor on press / ShowCursor on release): the cursor is
+// shown normally while idle; pressing LMB or RMB enters relative mouse mode
+// for the orbit drag, releasing restores the normal cursor. No button held,
+// no camera rotation.
+static void playerUpdateMouseMode(void) {
+    char drag = input.mouseLeft || input.mouseRight;
+    if (drag && !p.dragging) {
+        p.dragging = 1;
+        windowSetRelativeMouseMode(1);
+        // drop the warp-to-center delta, like FlyingCamera::setFlying
+        float dx, dy;
+        SDL_GetRelativeMouseState(&dx, &dy);
+        input.mouseDx = 0.0f;
+        input.mouseDy = 0.0f;
+    } else if (!drag && p.dragging) {
+        p.dragging = 0;
+        windowSetRelativeMouseMode(0);
     }
 }
 
@@ -250,6 +286,7 @@ void PlayerSystem::preUpdate() {
     // captured the mouse): yield without touching the mouse mode.
     if (p.active && flyingCameraFlying()) {
         p.active = 0;
+        p.dragging = 0;  // fly owns the capture now
         return;
     }
 
@@ -273,6 +310,8 @@ void PlayerSystem::preUpdate() {
             playerSetActive(0);
         }
     }
+
+    if (p.active) playerUpdateMouseMode();
 }
 
 // Camera-relative movement basis: forward = away from the camera (W), right =
@@ -305,7 +344,9 @@ static void movementInput(f32* outHx, f32* outHz) {
 }
 
 static void playerUpdateCamera(void) {
-    if (input.mouseDx != 0.0f || input.mouseDy != 0.0f) {
+    // Orbit only while a camera button is held (old engine: deltas were
+    // accumulated only during an ongoing drag).
+    if (p.dragging && (input.mouseDx != 0.0f || input.mouseDy != 0.0f)) {
         p.camYaw -= input.mouseDx * CAM_SENS;
         p.camPitch += input.mouseDy * CAM_SENS;  // mouse up lowers the camera (looks up), like the old engine
         if (p.camPitch < PITCH_MIN) p.camPitch = PITCH_MIN;
@@ -425,6 +466,13 @@ void PlayerSystem::update() {
         const f32 target = atan2f(desiredVel[0], desiredVel[2]);
         const f32 diff   = atan2f(sinf(target - p.facingYaw), cosf(target - p.facingYaw));
         p.facingYaw     += diff * (f32)std::min(1.0f, TURN_SPEED * utils::timer.dt);
+    }
+
+    // RMB drag rotates the character with the camera (old engine: while the
+    // right button is held, moveYaw/facingYaw = cameraYaw — the model faces
+    // away from the camera, i.e. the orbit forward (−sin, −cos) of camYaw).
+    if (p.active && input.mouseRight) {
+        p.facingYaw = atan2f(-sinf(p.camYaw), -cosf(p.camYaw));
     }
     gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.facingYaw);
     playerUpdateAnimation(moving, onGround);

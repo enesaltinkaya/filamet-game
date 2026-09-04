@@ -43,6 +43,46 @@ static float originalYaw;
 static float originalPitch;
 static Vec3 originalPos;
 
+// Camera DB (persist the free camera's location + rotation across runs —
+// same pattern as the player DB; the orbit camera is already persisted via
+// the player system, this covers the fly/free view).
+struct CameraDb {
+    float pos[3];
+    float yaw;
+    float pitch;
+};
+
+static void cameraDbInit(void) {
+    if (!utils::sqliteTableExists("camera")) {
+        utils::sqliteExecute(
+            "CREATE TABLE IF NOT EXISTS camera ("
+            "name TEXT PRIMARY KEY, "
+            "data BLOB);");
+    }
+}
+
+static void cameraDbSave(const char* name, CameraDb* data) {
+    void* stmt = utils::sqliteStatement("REPLACE INTO camera (name, data) VALUES (?, ?);");
+    utils::sqliteBindText(stmt, 1, name);
+    utils::sqliteBindBlob(stmt, 2, data, sizeof(CameraDb));
+    utils::sqliteStep(stmt);
+    utils::sqliteFinalize(stmt);
+}
+
+static bool cameraDbLoad(const char* name, CameraDb* data) {
+    void* stmt = utils::sqliteStatement("SELECT data, length(data) FROM camera WHERE name = ?;");
+    bool result = false;
+    utils::sqliteBindText(stmt, 1, name);
+    if (utils::sqliteStep(stmt)) {
+        void* blob   = utils::sqliteGetBlob(stmt, 0);
+        int blobSize = utils::sqliteGetInt(stmt, 1);
+        memcpy(data, blob, std::min(static_cast<size_t>(blobSize), sizeof(CameraDb)));
+        result = true;
+    }
+    utils::sqliteFinalize(stmt);
+    return result;
+}
+
 // camera looks along local -Z
 static Vec3 forwardDir(void) {
     float cp = std::cos(pitch);
@@ -95,6 +135,22 @@ void FlyingCameraSystem::added() {
     originalYaw   = yaw;
     originalPitch = pitch;
     originalPos   = pos;
+
+    // Restore the last saved free-camera view; R (reset) then returns to
+    // this same state rather than the scripted startup camera.
+    cameraDbInit();
+    CameraDb saved = {};
+    if (cameraDbLoad("camera", &saved)) {
+        pos   = {saved.pos[0], saved.pos[1], saved.pos[2]};
+        yaw   = saved.yaw;
+        pitch = saved.pitch;
+        originalPos   = pos;
+        originalYaw   = yaw;
+        originalPitch = pitch;
+        applyCamera();
+        utils::info("flying camera: loaded saved state pos (%.1f, %.1f, %.1f) yaw %.0f\u00b0 pitch %.0f\u00b0",
+                    pos.x, pos.y, pos.z, yaw * 180.0f / (float)M_PI, pitch * 180.0f / (float)M_PI);
+    }
 }
 
 void FlyingCameraSystem::removed() {
@@ -145,6 +201,20 @@ void FlyingCameraSystem::update() {
         pos += move;
     }
     applyCamera();
+
+    // Periodic save like the player's (automated runs never fly, so a
+    // scripted camera — dolly, framing — is never persisted).
+    static double lastSave = 0.0;
+    const double now = utils::millies();
+    if (now > lastSave + 1000.0) {
+        lastSave = now;
+        CameraDb data = {
+            .pos   = {pos.x, pos.y, pos.z},
+            .yaw   = yaw,
+            .pitch = pitch,
+        };
+        cameraDbSave("camera", &data);
+    }
 }
 
 FlyingCameraSystem flyingCameraSystem;
