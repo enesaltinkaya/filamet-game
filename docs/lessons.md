@@ -4,6 +4,45 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-04 — Filament materials flip UV.y by default (`flipUV`): texture-sampling materials must set `flipUV : false` when mesh UVs are authored in image-row order
+
+**Rule:** Filament's built-in vertex stage flips `uv0.y` for EVERY material
+unless the material sets `flipUV : false` (default is true — `MaterialBuilder::mFlipUV = true`,
+shaders/src/surface_material_inputs.vs: `material.uv0 = vec2(mesh_uv0.x, 1.0 - mesh_uv0.y)`).
+Textures uploaded via `Texture::setImage` from stb_image data (row 0 = image
+top) put the image top at V=0, so a mesh whose UVs are authored in raw
+image-row order (V=0 = image top) renders vertically MIRROR-FLIPPED under the
+default flip. Any material that samples a texture through `getUV0()`/the
+built-in samplers and whose mesh UVs were ported from the old engine (Vulkan,
+no such flip) must declare `flipUV : false`. Flip-invariant uses (radial/disk
+alpha tests centred on 0.5, procedural geometry) are unaffected; explicit
+texel fetches (instance-data textures) bypass the flip entirely.
+
+**Incident:** "grass objects are upside down." The ported `buildGrassCard`
+UVs (top of the crossed card = V 0 = image top = tuft tips; card base =
+V bottomV = tuft base, trimming the texture's empty bottom band) were
+authored against the raw upload convention — correct for the old Vulkan
+engine, which never flipped UVs. `props.mat` never set `flipUV`, so the
+Filament vertex stage mirrored every card vertically: tuft tips at the
+ground, dense base at the card top. The old-engine A/B (rebuild the material
+with the default flip, screenshot `ENGINE_CAMERA=propsground`):
+pre-fix the dark dense tuft base sits at the TOP of each card with thin tips
+hanging DOWN into the ground; post-fix the base is grounded and tips point
+up. `grassMeasureBottomV`'s trim was silently cutting the wrong end (tips
+instead of padding) as part of the same flip.
+
+**Fix:** `flipUV : false` in the `material {}` block of
+c-engine/renderer/filament/materials/props.mat (+ comment), rebuilt via the
+CMake matc step (matc -a vulkan -l 2 → pak_1/materials/props.filamat). Only
+the grass card ranges sample `cardTex` through `getUV0()` in this material —
+all other species ranges are vertex-coloured (flag bit0 off), the flower
+radial test is Y-flip invariant, and `instanceData` is fetched with explicit
+UVs — so the flag has no side effects. Check the sibling material
+(heightmap_terrain) only if it ever samples image textures through
+`getUV0()`; its heightmap is procedural and its look is already validated.
+
+---
+
 ## 2026-09-04 — Fragment `getWorldPosition()` is ALSO camera-shifted: world-anchored shading must use `getUserWorldPosition()`
 
 **Rule:** `Engine.debug.view.camera_at_origin` (default true in this build) shifts

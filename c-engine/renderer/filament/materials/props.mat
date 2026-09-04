@@ -44,6 +44,16 @@ material {
     doubleSided : true,
     instanced : true,
     blending : opaque,
+    // The grass card mesh UVs are authored in raw image-row order: V=0 is the
+    // image top (tuft tips, stb row 0, uploaded unflipped via setImage) and
+    // V=bottomV trims the texture's empty bottom band at the card's base.
+    // Filament's built-in vertex stage flips uv0.y by default (flipUV, see
+    // MaterialBuilder), which would mirror the card vertically — tuft tips at
+    // the ground, base at the top (the upside-down-grass bug). Disable it so
+    // getUV0() returns the mesh UVs as authored. The flower radial test
+    // (length(getUV0()-0.5)) is flip-invariant, and instanceData is fetched
+    // with explicit UVs, so nothing else in this material is affected.
+    flipUV : false,
     requires : [
         tangents,
         uv0,
