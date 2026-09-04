@@ -68,6 +68,16 @@ convertModel() {
     echo ok
     mv "$std" "$glb"
 
+    echo -n "singlekey fix... "
+    local skf="$STAGE_DIR/${name}.skf.glb"
+    if ! python3 "$ROOT/scripts/gltf-singlekey-fix.py" "$glb" "$skf" >> "$log" 2>&1; then
+        echo "FAILED (log: $log)"
+        tail -n 20 "$log"
+        return 1
+    fi
+    echo ok
+    mv "$skf" "$glb"
+
     echo -n "gltfpack... "
     export KTX_GEN_MIPMAP=1
     "$GLTFPACK" "${GLTFPACK_FLAGS[@]}" -i "$glb" -o "$STAGE_DIR/${name}.pack.glb"

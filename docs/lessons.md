@@ -4,6 +4,18 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-04 — gltfio skips single-keyframe animation channels, so a joint's transform from the PREVIOUS clip survives forever; constant channels that don't match the node's static TRS then corrupt the pose
+
+**Rule:** a glTF sampler with fewer than 2 keys must still be applied — gltfio's `Animator::applyAnimation` historically did `if (sampler->times.size() < 2) continue;`, which silently never writes such a joint, leaving whatever transform it had from the last clip that DID animate it (stale-pose leak between clips). And a "constant" channel is only safe if its constant equals the node's static TRS — otherwise applying it corrupts the pose (e.g. a Head scale channel of 0.01 shrinks the head to 1%).
+
+**Incident:** "after running (W) and releasing, the left arm stays in the run pose instead of returning to idle." Mixamo/Blender collapse constant channels to 1 key (idle's `LeftForeArm rotation` etc.); gltfio skipped them, so after run→idle the arm kept the run clip's bend. The first fix (apply single-key samplers too — patch in `cpp-thirdparty/filament/git/libs/gltfio/src/Animator.cpp`, now `if (sampler->times.empty()) continue;`, **must be kept and rebuilt into `libgltfio_core.a`**) then made the head vanish: the idle action's `Head scale` channel is constant 0.01 (the cm factor) in the asset itself, so writing it every frame shrank the head.
+
+**Fix (both kept):** (1) the gltfio patch; (2) `scripts/gltf-singlekey-fix.py`, wired into `scripts/export-models.sh` between `gltf-standardize.py` and `gltfpack` (plain GLB, pre-quantization). It rewrites every channel whose keyframes are constant (single key, or identical keys within 1e-5) to the target node's static TRS component — a strict no-op that makes constant channels harmless and forces any joint not animated by the active clip back to rest each frame. 3000 channels rewritten on animations.blend, incl. the 0.01 Head scales.
+
+**gltfpack/glb gotchas hit along the way:** (a) gltfpack's loader rejects a GLB whose sampler **output** accessor count differs from the **input** (times) count — copied single-key outputs must duplicate the key (count = input count), and a count-1 output on a count-2 input fails with a bare "invalid GLTF"; (b) when appending data to a GLB's BIN chunk you must update `buffers[].byteLength` or gltfpack says "buffer too short"; (c) if you rewrite accessor values, update its `min`/`max` to match, and rewrite ALL keys of a shared accessor, not just the first; (d) gltfpack's "invalid GLTF" gives no detail — bisect with minimal variant files (cgltf is more lenient than gltfpack and will NOT catch this class of error).
+
+---
+
 ## 2026-09-04 — A yaw-pivot matrix must anchor the point that should stay fixed: gltfPlaceAtFacingFilament pivoted on the AABB corner, swinging the visible model ~1.3 m off the camera target when the facing yaw differed from the camera's
 
 **Rule:** when building a placement matrix as `T(anchor) * R(yaw) * S(comp)`, the point that stays put under the yaw is the LOCAL point that the pre-rotation transforms send to the origin — verify which local point that is, not which point you meant to anchor. In `T(off) * R * S * T(minc)`, the yaw-fixed point is local `-minc` (wherever `S*(p+minc) = 0`), NOT the origin/feet you intended; the origin then orbits a `|minc|`-radius arc around the target as yaw changes.
