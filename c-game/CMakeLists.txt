@@ -53,6 +53,10 @@ target_link_libraries(c-game PRIVATE
     # physics (Jolt, same prebuilt wrapper + core the old engine linked)
     ${thirdparty}/jolt/wrapper/${platform_dir}/libcjolt.a
     ${thirdparty}/jolt/git/${platform_dir}/libJolt.a
+
+    # audio (SoLoud — must stay inside the --start-group: its symbols
+    # reference each other and SDL/X11 symbols resolved by the group)
+    ${thirdparty}/soloud/git/${platform_dir}/libsoloud.a
     -Wl,--end-group
 )
 

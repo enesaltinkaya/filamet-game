@@ -1,17 +1,16 @@
 # plan
 
-Phase 7 of plans/azgaar-terrain.md is Props / vegetation: port the old engine's (game-001-cpp) `AzgaarProps` scatter plus a Filament-only billboard/instanced render pass (Diligent deferred with phase 6).
+## Strategy
 
-Current on-disk state: the prior session already wrote the full stack — `c-game/game/azgaar/AzgaarProps.{h,cpp}` (deterministic per-tile CPU scatter on a background worker, physics-grid Y), `AzgaarPropMesh.{h,cpp}` (12 procedural species + 7 grass card variants, merged VBO/IBO, per-(species,variant) ranges), `c-engine/renderer/PropsRender.{h,cpp}` + `filament/PropsRenderFilament.cpp` + `props.mat` (matrix-packed `instanceTransform` instancing), and the Game.cpp wiring (init/update/destroy bridge, `ENGINE_CAMERA=props` land camera). None of it has been run through the Verification command in a ledgered round yet. Strategy: (1) run the pinned verification command and fix build/runtime issues until the props-camera screenshot shows scattered vegetation sitting exactly on the ground; (2) check the shot against `docs/azgaar-terrain/old-engine-reference.jpg` for density/distribution and check follow/evict under a dolly run; (3) clean up temp scaffolding (the "TEMP: ISO1600 test" exposure hack in FilamentRenderer.cpp) and land phase-7 acceptance notes.
+Port the sound subsystem from the old engine (/home/enes/Projects/c/game-001-cpp/c-engine/ecs/system/sound/SoundSystem.{h,cpp}) into the new engine. The new engine already has: the ECS System base class (c-engine/ecs/Ecs.h), the SoLoud prebuilt lib (/home/enes/Projects/c/cpp-thirdparty/soloud/git/build-linux/libsoloud.a — same pattern as the old engine's `${thirdparty}/soloud/git/${platform_dir}/libsoloud.a`), the ogg assets already packed in c-engine/data/pak_0_engine/sound/ (click.ogg, error.ogg, whipstick.ogg), and utils::dataManagerRead in c-utils.
 
-Carry-over invariants: the surface is a pure function of (x,z); prop instance Y comes ONLY from the 256² physics grid (`heightmapGridBilinear` over `heightmapTerrainCopyPhysicsTile`) — never the finer CPU grid; scatter is bit-identical per (mapSeed, tile, build-time camera); Filament path only.
+Approach:
+1. Add c-engine/ecs/system/sound/SoundSystem.{h,cpp} mirroring the old SoundSystem (SoLoud C API: Soloud_create/init, Wav via dataManagerRead, soundPlay/soundStop, hover/click/error helpers). Adapt to new-engine idioms: use the new `System` base, `systemAdd(3, &soundSystem)` in Ecs.cpp (old engine used order 3), and whatever the new engine uses for delayed tasks/signals (or drop `settingsSaved`/`futureTaskAdd` hooks if they don't exist here — keep it minimal but functionally equivalent).
+2. Link libsoloud.a (check c-engine/c-game CMakeLists; old engine linked it in c-game's CMakeLists with ${thirdparty} + ${platform_dir}) and add its include path.
+3. Wire at least one real use site (e.g. UI hover/click in the new engine's gui, or a debug hotkey in c-game) so the sound path is exercised end to end.
+4. Build; if a headless audio run is possible verify no crash on startup/teardown.
 
-Known gotchas (learned in the prior session — read before fighting the renderer):
-- This Filament is the **1.x bridge API**, not 1.4: `VertexAttribute` has no NORMAL/TEXCOORD0 (use CUSTOM slots, float4-only); lit shading models force TANGENTS — the props pass reconstructs the yaw basis from `instanceTransform` in the vertex stage instead; materials must be prebuilt `.filamat` (matc at /home/enes/Projects/c/cpp-thirdparty/filament/git/build-linux/tools/matc/matc, `-a vulkan -l 2`); `RenderableManager::Builder::geometry(type, vbo, ibo, indexOffset, minIndex, maxIndex, count)` where the offset is the INDEX-buffer start; transforms are a TransformManager component; engine teardown panics if any material instance is still alive — destroy props GPU state in `FilamentRenderer::destroy` before the engine.
-- `instanceTransform` packing (16 floats): colX[0..2]=s·(cos yaw,0,−sin yaw), colZ[4..6]=s·(sin yaw,0,cos yaw), pos[8..10], color[12..14] (may exceed 1.0 — do not clamp), wind phase[15]; species/variant is the draw-call identity (one InstancedDraw per (tile,species,variant) range).
-- Cull distance caps are **XZ ground-plane** distance, not 3D — the validation cameras fly high, and a 3D cap culls everything from aerial views.
-- The default validation camera looks at the map centre, which is open sea — use `ENGINE_CAMERA=props` (close framing over the highest land point) for props shots.
-- `scripts/run.sh` fails when TERM is unset (runs `clear`); use `scripts/build.sh` + the binary directly, as the Verification line does.
+Scope guard: do NOT port old-engine lua, music-level hooks, or device enumeration logging — keep it lean. Do not touch diligent/ or unrelated files.
 
-Verification: cd /media/extra/Projects/c/filament-game && ./scripts/build.sh && ENGINE_AUTOTEST=enter ENGINE_CAMERA=props ENGINE_SCREENSHOT_FRAME=600 ENGINE_SCREENSHOT=/tmp/phase7-shot.jpg ./build/c-game/c-game
-Baseline commit: ddc1aa70a230a9bcad7e5fa38165fe4093754e90 (dirty — the tree already contains the in-flight phase-7 work this run continues; untracked files are tarred at /tmp/phase7-wip-backup-20260903.tar. git restore only covers the tracked files: Game.cpp, c-engine/CMakeLists.txt, FilamentRenderer.cpp, plans, ledger)
+Verification: bash /media/extra/Projects/c/filament-game/scripts/build.sh
+Baseline commit: 4f386199cce818d3c3256049078dcb29a40aa615 (dirty)

@@ -24,6 +24,9 @@ target_include_directories(c-engine PUBLIC ${thirdparty}/entt/git/single_include
 # the lib itself is linked by c-game — same pattern as the old engine)
 target_include_directories(c-engine PRIVATE ${thirdparty}/zstd/git/lib)
 
+# ── SoLoud (audio, prebuilt — libsoloud.a linked by c-game) ─────────────────
+target_include_directories(c-engine PUBLIC ${thirdparty}/soloud/git/include)
+
 # ── imgui + filagui (GUI, prebuilt — see c-game link line) ────────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git)
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git/backends)  # imgui_impl_vulkan

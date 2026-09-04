@@ -156,15 +156,26 @@ void guiInit(void) {
     // fontTools (scripts and provenance in plans/azgaar-terrain.md phase-7
     // cleanup). If a static instance is ever missing, loadPakFont falls back
     // to ImGui's default font (deliberate: cosmetic, must not crash).
-    fontBody = loadPakFont("fonts/montserratLight.ttf", 18.0f);
-    fontTitle = loadPakFont("fonts/montserrat.ttf", 42.0f);
+    // Rasterized 3x then drawn scaled back down: FontScaleMain
+    // (= window.height/720, window defaults to 75% of the display) magnifies
+    // the baked glyphs at draw time, and a linearly-magnified 14px glyph is
+    // what made the new engine's text look fuzzy next to the old
+    // RMLUI/freetype pipeline, which rasterized at the exact on-screen size.
+    // 3x oversampling keeps the on-screen size identical while sampling a
+    // 3x-resolution raster. ImGui bakes the atlas at the requested px and
+    // applies ImFont::Scale to glyph metrics at draw time.
+    static constexpr float kFontOversample = 3.0f;
+    fontBody  = loadPakFont("fonts/montserratLight.ttf", 18.0f * kFontOversample);
+    fontTitle = loadPakFont("fonts/montserrat.ttf", 42.0f * kFontOversample);
     // The old rcss menu requested font-weight 900; RMLUI's freetype font
     // engine registered one face per named instance, so the old menu
     // rendered Montserrat Black (900) for menu rows and Light (300) for
     // body text — the static instances above reproduce that.
-    fontMenu = loadPakFont("fonts/montserratBlack.ttf", 18.0f);
+    fontMenu = loadPakFont("fonts/montserratBlack.ttf", 18.0f * kFontOversample);
     // Sometype Mono: the old engine's debug-readout face (camera/stats gui)
-    fontMono = loadPakFont("fonts/SometypeMono-SemiBold.ttf", 14.0f);
+    fontMono = loadPakFont("fonts/SometypeMono-SemiBold.ttf", 14.0f * kFontOversample);
+    for (ImFont* f : {fontBody, fontTitle, fontMenu, fontMono})
+        if (f) f->Scale = 1.0f / kFontOversample;
 
     diligent ? guiBackendInitDiligent() : guiBackendInitFilament();
 

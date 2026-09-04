@@ -1,5 +1,6 @@
 #include "Ecs.h"
 #include "Utils.h"
+#include "system/sound/SoundSystem.h"
 
 namespace engine {
 struct Ecs ecs;
@@ -7,6 +8,7 @@ struct Ecs ecs;
 void ecsInit(System* gameSystem) {
     utils::info("ecs: initializing");
     systemAdd(0, gameSystem);
+    systemAdd(3, &soundSystem);
 }
 
 void ecsDestroy(void) {

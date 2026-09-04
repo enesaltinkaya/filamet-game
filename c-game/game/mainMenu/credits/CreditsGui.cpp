@@ -1,6 +1,7 @@
 #include "CreditsGui.h"
 #include "gui/GuiManager.h"
 #include "gameState/GameState.h"
+#include "ecs/system/sound/SoundSystem.h"
 #include "Utils.h"
 
 #include <imgui.h>
@@ -36,7 +37,11 @@ void CreditsGui::draw() {
     ImGui::Spacing();
 
     if (ImGui::Button("CLOSE", ImVec2(110.0f, 0.0f))) {
+        engine::soundPlayClick();
         engine::gui::guiRemove(&creditsGui);
+    }
+    if (ImGui::IsItemHovered()) {
+        engine::soundPlayHover();
     }
     ImGui::End();
 }

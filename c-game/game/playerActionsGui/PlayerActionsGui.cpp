@@ -2,6 +2,7 @@
 #include "Utils.h"
 #include "azgaar/AzgaarWorld.h"
 #include "ecs/system/player/Player.h"
+#include "ecs/system/sound/SoundSystem.h"
 #include "gameState/GameState.h"
 #include "gui/GuiManager.h"
 #include "loadingAzgaar/LoadingAzgaar.h"
@@ -99,7 +100,8 @@ void PlayerActionsGui::draw() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(232, 196, 74, 90));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(232, 196, 74, 120));
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 196, 74, 255));
-    if (ImGui::Button("Player Actions")) collapsed = !collapsed;
+    if (ImGui::Button("Player Actions")) { engine::soundPlayClick(); collapsed = !collapsed; }
+    if (ImGui::IsItemHovered()) engine::soundPlayHover();
     ImGui::PopStyleColor(4);
 
     if (!collapsed) {
@@ -110,11 +112,13 @@ void PlayerActionsGui::draw() {
         ImGui::InputInt("##cellId", &cellId, 1, 0);
         ImGui::PopStyleColor(2);
         ImGui::SameLine(0.0f, 4.0f * s);
-        if (ImGui::Button("Teleport")) teleportToCell();
+        if (ImGui::Button("Teleport")) { engine::soundPlayClick(); teleportToCell(); }
+        if (ImGui::IsItemHovered()) engine::soundPlayHover();
         ImGui::PopItemWidth();
 
         ImGui::TextUnformatted("Teleport to coordinates");
-        if (ImGui::Button("Teleport to 0, 0, 0")) teleportToOrigin();
+        if (ImGui::Button("Teleport to 0, 0, 0")) { engine::soundPlayClick(); teleportToOrigin(); }
+        if (ImGui::IsItemHovered()) engine::soundPlayHover();
 
         // hint: small grey status line
         ImGui::Spacing();

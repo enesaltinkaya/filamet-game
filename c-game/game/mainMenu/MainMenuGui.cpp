@@ -9,6 +9,7 @@
 #include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "ecs/system/player/Player.h"
 #include "ecs/system/physics/PhysicsSystem.h"
+#include "ecs/system/sound/SoundSystem.h"
 #include "Engine.h"
 #include "Utils.h"
 
@@ -85,6 +86,7 @@ static ImTextureID pngToImGuiTexture(const char* pakPath) {
 static ImTextureID logoTex = ImTextureID_Invalid;
 static ImTextureID barTex  = ImTextureID_Invalid;
 static int focusIdx = 0;  // old menu: first button autofocus, nav-up/down wraps
+static int lastFocusIdx = 0;  // hover sfx when the focus row changes
 
 void MainMenuGui::added() {
     if (logoTex == ImTextureID_Invalid) logoTex = pngToImGuiTexture("images/logo.png");
@@ -186,6 +188,7 @@ void MainMenuGui::draw() {
         char id[16];
         snprintf(id, sizeof(id), "##menu%d", i);
         if (ImGui::InvisibleButton(id, ImVec2(panelW, rowH))) {
+            engine::soundPlayClick();
             if (i == 0) enterWorld();
             else if (i == 1) utils::info("mainMenu: SETTINGS (todo)");
             else if (i == 2) engine::gui::guiAdd(&creditsGui);
@@ -202,10 +205,16 @@ void MainMenuGui::draw() {
     else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) focusIdx = (focusIdx + 1) % 4;
     if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Space) ||
         ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
+        engine::soundPlayClick();
         if (focusIdx == 0) enterWorld();
         else if (focusIdx == 1) utils::info("mainMenu: SETTINGS (todo)");
         else if (focusIdx == 2) engine::gui::guiAdd(&creditsGui);
         else exitGame();
+    }
+
+    if (focusIdx != lastFocusIdx) {
+        lastFocusIdx = focusIdx;
+        engine::soundPlayHover();
     }
 
     ImGui::End();
