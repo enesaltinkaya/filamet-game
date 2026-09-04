@@ -10,6 +10,7 @@ namespace engine::gltf {
 // ── filament (GltfFilament.cpp) ──
 bool gltfInitFilament(void);
 bool gltfLoadFilament(const char* pakPath);
+bool gltfPlaceAtFilament(f32 x, f32 y, f32 z);
 void gltfUpdateFilament(double elapsedSeconds);
 void gltfDestroyFilament(void);
 bool gltfBoundingBoxFilament(float min[3], float max[3]);
@@ -17,6 +18,7 @@ bool gltfBoundingBoxFilament(float min[3], float max[3]);
 // ── diligent (GltfDiligent.cpp) ──
 bool gltfInitDiligent(void);
 bool gltfLoadDiligent(const char* pakPath);
+bool gltfPlaceAtDiligent(f32 x, f32 y, f32 z);
 void gltfUpdateDiligent(double elapsedSeconds);
 void gltfIblUpdateDiligent(const f32 color[3], f32 intensity);
 void gltfDestroyDiligent(void);

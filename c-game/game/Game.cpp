@@ -733,6 +733,16 @@ namespace game {
             propsRegisterRender();
         }
 
+        // Player character (eve): a zstd-compressed glb exported by
+        // scripts/export-models.sh, stood at the old engine's player spawn
+        // (playerGetSpawn in the old Player.cpp) so the "character" camera
+        // vantage matches the reference.
+        // gltfInit is idempotent — this re-creates the loader after the
+        // menu-return gltfDestroy on re-entry.
+        if (engine::gltf::gltfInit() && engine::gltf::gltfLoad("models/eve.zstd")) {
+            engine::gltf::gltfPlaceAt(-881.88f, 511.55f, 1691.46f);
+        }
+
         // Camera framing: ENGINE_CAMERA selects a validation vantage; the
         // default frames the world's highest land point (see the else branch).
         f32 center[3] = {0.0f, 0.0f, 0.0f};
@@ -847,6 +857,30 @@ namespace game {
             f32 lookAt[3] = {p[0] + 114.0f, p[1] + 3.0f, p[2] + 114.0f};
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
+        } else if (cameraMode && utils::strequals(cameraMode, "character")) {
+            // Portrait of the player character (eve at the old spawn point):
+            // ~1 character-height diagonal back, eye slightly above chest,
+            // looking at chest height — close enough for a texture/material
+            // check, far enough that the whole silhouette is in frame.
+            f32 bmin[3], bmax[3];
+            if (engine::gltf::gltfBoundingBox(bmin, bmax)) {
+                f32 cx       = (bmin[0] + bmax[0]) * 0.5f;
+                f32 cz       = (bmin[2] + bmax[2]) * 0.5f;
+                f32 h        = bmax[1] - bmin[1];
+                f32 chest[3] = {cx, bmin[1] + h * 0.6f, cz};
+                f32 eye[3]   = {chest[0] + h, chest[1] + h * 0.2f, chest[2] + h};
+                f32 up[3]    = {0.0f, 1.0f, 0.0f};
+                utils::info("game: character camera — bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
+                            bmin[0],
+                            bmin[1],
+                            bmin[2],
+                            bmax[0],
+                            bmax[1],
+                            bmax[2]);
+                engine::renderer::rendererCameraLookAt(eye, chest, up);
+            } else {
+                utils::warn("game: character camera — no gltf bounds, keeping default camera");
+            }
         } else {
             f32 eye[3]    = {-100, 2, -100};
             f32 lookAt[3] = {-101, 1.5, -101};

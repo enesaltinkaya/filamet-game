@@ -21,6 +21,10 @@ bool gltfLoad(const char* pakPath) {
     return diligent() ? gltfLoadDiligent(pakPath) : gltfLoadFilament(pakPath);
 }
 
+bool gltfPlaceAt(f32 x, f32 y, f32 z) {
+    return diligent() ? gltfPlaceAtDiligent(x, y, z) : gltfPlaceAtFilament(x, y, z);
+}
+
 void gltfUpdate(double elapsedSeconds) {
     diligent() ? gltfUpdateDiligent(elapsedSeconds) : gltfUpdateFilament(elapsedSeconds);
 }

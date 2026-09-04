@@ -120,6 +120,14 @@ bool gltfLoadDiligent(const char* pakPath) {
     return true;
 }
 
+bool gltfPlaceAtDiligent(f32 x, f32 y, f32 z) {
+    (void)x;
+    (void)y;
+    (void)z;
+    utils::warn("gltf: gltfPlaceAt not implemented on the diligent path");
+    return false;
+}
+
 // ── constant-environment IBL (the fallback PBR path's "IBL" is a flat sky) ──
 // The engine's ambient (color * lux, exposure 1.2 * 2^-15, /pi) is baked into
 // two 1x1x6 RGBA8 cubes: the irradiance map and a single-mip prefiltered env

@@ -20,6 +20,10 @@ target_include_directories(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # ── entt (header only) ──────────────────────────────────────────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/entt/git/single_include)
 
+# zstd headers (models are zstd-compressed glbs, loaded as <name>.zstd;
+# the lib itself is linked by c-game — same pattern as the old engine)
+target_include_directories(c-engine PRIVATE ${thirdparty}/zstd/git/lib)
+
 # ── imgui + filagui (GUI, prebuilt — see c-game link line) ────────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git)
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git/backends)  # imgui_impl_vulkan
