@@ -899,7 +899,7 @@ namespace game {
                 f32 cz       = (bmin[2] + bmax[2]) * 0.5f;
                 f32 h        = bmax[1] - bmin[1];
                 f32 chest[3] = {cx, bmin[1] + h * 0.6f, cz};
-                f32 eye[3]   = {chest[0] + h, chest[1] + h * 0.2f, chest[2] + h};
+                f32 eye[3]   = {chest[0] + h, chest[1] + h * 0.2f, chest[2] - h};
                 f32 up[3]    = {0.0f, 1.0f, 0.0f};
                 utils::info("game: character camera — bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
                             bmin[0],

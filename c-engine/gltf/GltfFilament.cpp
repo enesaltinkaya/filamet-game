@@ -400,21 +400,26 @@ bool gltfPlaceAtFacingFilament(f32 x, f32 y, f32 z, f32 yaw) {
     if (!asset || !instance || !engine) {
         return false;
     }
-    // The asset AABB is in instance-local space (node hierarchy only); the
-    // gltfio root transform is applied on top. Pivot the yaw on the local AABB
-    // min corner (feet for character assets) so the character rotates in place:
-    // M = T(spawn) * R(-yaw, +Y) * S(comp) * T(-aabbMin). R uses -yaw because
-    // mat4f::rotation maps +Z to (-sin r, 0, cos r), and the model's forward
-    // must land on (sin yaw, 0, cos yaw) — the old engine's convention.
+    // Pivot the yaw on the model's local origin (feet / body centre for
+    // character assets — eve's AABB is [-0.64,-0.01,-0.13]..[0.64,1.39,0.12],
+    // origin at the feet) so the character rotates in place under the orbit
+    // camera's look-at target: M = T(anchor) * R(yaw, +Y) * S(comp). Anchoring
+    // the origin (not an AABB corner) is what keeps the body centre on
+    // (x, z) for every yaw — corner pivoting swings the body up to ~0.9 m off
+    // the camera target as soon as the model yaw differs from the camera.
+    // mat4f::rotation(r, +Y) maps +Z to (sin r, 0, cos r), and the asset's front
+    // is local +Z (Mixamo/Blender characters face the viewer), so the world
+    // front is (sin yaw, 0, cos yaw) — the old engine's facing convention.
     // S(comp) restores metre scale for cm-authored assets (s_compScale, 1.0
-    // otherwise) — it sits inside the yaw pivot so the character turns in
-    // place at its true size.
+    // otherwise); the anchor shifts by (comp-1)*aabbMin so the yaw-0 placement
+    // matches the pre-pivot-fix transform exactly (origin lands at
+    // spawn + (comp-1)*min in both).
     filament::Aabb box = asset->getBoundingBox();
-    const filament::math::float3 off{x - box.min.x, y - box.min.y, z - box.min.z};  // T(spawn) * T(-min)
+    const filament::math::float3 off{x - box.min.x, y - box.min.y, z - box.min.z};
     const filament::math::float3 up{0.0f, 1.0f, 0.0f};
     const filament::math::float3 minc{box.min.x, box.min.y, box.min.z};
     filament::math::mat4f m = filament::math::mat4f::translation(off)
-            * filament::math::mat4f::rotation(-yaw, up)
+            * filament::math::mat4f::rotation(yaw, up)
             * filament::math::mat4f::scaling(filament::math::float3{s_compScale, s_compScale, s_compScale})
             * filament::math::mat4f::translation(minc);
     filament::TransformManager& tcm = engine->getTransformManager();

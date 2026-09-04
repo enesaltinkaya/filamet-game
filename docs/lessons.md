@@ -4,6 +4,52 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-04 — eve's front is local +Z and mat4f::rotation(r, +Y) maps +Z → (sin r, 0, cos r): gltfPlaceAtFacingFilament must use R(+yaw)
+
+**Rule:** never assume a character asset's front axis from "the glTF
+convention", and never trust the sign of a library rotation from memory —
+both assumptions in the previous version of this entry were wrong. Two
+verified facts (filament's mat4f::rotation compiled and evaluated
+standalone; eve's facing verified by autorun screenshot):
+
+1. `mat4f::rotation(r, +Y)` is right-handed: **+Z → (sin r, 0, cos r)**,
+   +X → (cos r, 0, −sin r). (A "−sin r" reading of it makes a wrong
+   −yaw−π formula look exactly right — self-consistent but false.)
+2. eve's front (Mixamo/Blender, characters face the viewer) is **local
+   +Z**. To land the front on (sin yaw, 0, cos yaw) — the old engine's
+   convention that the player's W-forward and RMB facing are both derived
+   from — `gltfPlaceAtFacingFilament` uses `mat4f::rotation(+yaw, +Y)`.
+
+If you ever see "the character runs toward the camera / faces her
+third-person camera", suspect the placement matrix first — the yaw math
+upstream (orbit camera, movement basis, RMB facing = camYaw+π) is
+self-consistent and was correct. Verify any facing change with
+`ENGINE_AUTOTEST=enter ENGINE_AUTO_RUN=1 ENGINE_SCREENSHOT=/tmp/x.jpg
+ENGINE_SCREENSHOT_FRAME=400` (expect her BACK at frame ~400); also re-verify
+whenever models/eve.zstd is re-exported. The portrait vantage
+(`ENGINE_CAMERA=character`, eye at chest + (h, ·, −h)) frames the back
+with the corrected model, unchanged.
+
+**Incident:** "when running W + RMB orbit I see her face, I should see her
+back." An earlier same-day entry had fixed this to R(−yaw−π) on the
+assumptions "front = −Z" and "+Z → (−sin r, cos r)" and claimed a
+before/after screenshot proof — but the identical repro (autorun +
+screenshot) still showed her face, so that proof was flawed. Recomputed
+from the actual matrices: R(−yaw−π)·+Z = (sin yaw, 0, −cos yaw), a
+frontal mirror of the target (sin yaw, 0, cos yaw), which at the saved
+yaw (−152°) points straight at the orbit camera — exactly the reported
+symptom. Fix: the one rotation in GltfFilament.cpp to R(+yaw) (+ comment);
+before = face, after = back, proven by the autorun repro. (GltfDiligent.cpp
+is a stub and ignored for now.)
+
+**Superseded:** an earlier same-day entry claimed "front = local −Z" and
+"mat4f::rotation maps +Z → (−sin r, cos r)" and fixed this to R(−yaw−π);
+both assumptions were wrong and that "fix" was the live bug. (It also
+flipped the portrait-camera Z offset to compensate — with the corrected
+model the current (−h) offset is the correct one, so it stays.)
+
+---
+
 ## 2026-09-04 — Pre-multiplying a hierarchy transform only preserves world poses for DIRECT children: skinning collapses to a point when applied to every joint
 
 **Rule:** when you rewrite a node hierarchy so that a parent's transform `A`
