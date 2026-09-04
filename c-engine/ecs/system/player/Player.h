@@ -28,6 +28,7 @@ public:
     void removed() override;
     void preUpdate() override;
     void update() override;
+    void postUpdate() override;
 };
 
 extern PlayerSystem playerSystem;

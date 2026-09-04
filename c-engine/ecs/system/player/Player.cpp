@@ -100,6 +100,59 @@ void playerSetSpawn(f32 x, f32 y, f32 z) {
 
 char playerMode(void) { return p.active; }
 
+// ── Player DB (persist position + orbit camera state across runs —
+// port of the old engine's Player.cpp PlayerDb; the old engine split this
+// into transformDb("player") + playerDb("player"), we use one blob) ──────
+struct PlayerDb {
+    f32 pos[3];
+    f32 facingYaw;
+    f32 camYaw;
+    f32 camPitch;
+    f32 camDist;
+};
+
+static void playerDbInit(void) {
+    if (!utils::sqliteTableExists("player")) {
+        utils::sqliteExecute(
+            "CREATE TABLE IF NOT EXISTS player ("
+            "name TEXT PRIMARY KEY, "
+            "data BLOB);");
+    }
+}
+
+static void playerDbSave(const char* name, PlayerDb* data) {
+    void* stmt = utils::sqliteStatement("REPLACE INTO player (name, data) VALUES (?, ?);");
+    utils::sqliteBindText(stmt, 1, name);
+    utils::sqliteBindBlob(stmt, 2, data, sizeof(PlayerDb));
+    utils::sqliteStep(stmt);
+    utils::sqliteFinalize(stmt);
+}
+
+static bool playerDbLoad(const char* name, PlayerDb* data) {
+    void* stmt = utils::sqliteStatement("SELECT data, length(data) FROM player WHERE name = ?;");
+    bool result = false;
+    utils::sqliteBindText(stmt, 1, name);
+    if (utils::sqliteStep(stmt)) {
+        void* blob   = utils::sqliteGetBlob(stmt, 0);
+        int blobSize = utils::sqliteGetInt(stmt, 1);
+        memcpy(data, blob, std::min(static_cast<size_t>(blobSize), sizeof(PlayerDb)));
+        result = true;
+    }
+    utils::sqliteFinalize(stmt);
+    return result;
+}
+
+static void playerDbSaveState(void) {
+    PlayerDb data = {
+        .pos       = {p.pos[0], p.pos[1], p.pos[2]},
+        .facingYaw = p.facingYaw,
+        .camYaw    = p.camYaw,
+        .camPitch  = p.camPitch,
+        .camDist   = p.camDist,
+    };
+    playerDbSave("player", &data);
+}
+
 // Orbit angles of the current renderer camera, in this system's convention
 // (pitch > 0 = camera above the target, looking down). Same yaw math as
 // FlyingCamera::syncStateFromCamera; the pitch sign is flipped because there
@@ -138,6 +191,26 @@ static void playerSpawn(void) {
     p.animTposing          = 0;
     p.spawned               = 1;
     p.waitingForGround      = 1;  // released by the first update once the body under the spawn exists
+
+    // Load the last saved player + camera state (old engine's scene-load
+    // transformDbLoad + playerDbLoad) — overwrites spawn position and the
+    // orbit camera angles. The waitingForGround gate drops the character
+    // onto the heightmap under the loaded position.
+    playerDbInit();
+    PlayerDb saved = {};
+    if (playerDbLoad("player", &saved)) {
+        p.pos[0]   = saved.pos[0];
+        p.pos[1]   = saved.pos[1];
+        p.pos[2]   = saved.pos[2];
+        p.facingYaw = saved.facingYaw;
+        p.camYaw    = saved.camYaw;
+        p.camPitch  = saved.camPitch;
+        p.camDist   = saved.camDist;
+        utils::info("player: loaded saved state pos (%.1f, %.1f, %.1f) cam (%.0f°, %.0f°, %.1f m)",
+                    p.pos[0], p.pos[1], p.pos[2], p.camYaw * 180.0f / (float)M_PI,
+                    p.camPitch * 180.0f / (float)M_PI, p.camDist);
+    }
+
     if (!p.character) {
         p.character = joltCharacterCreate(CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS, p.pos, MAX_SLOPE_ANGLE);
         if (!p.character) utils::warn("player: Jolt character creation failed");
@@ -356,5 +429,22 @@ void PlayerSystem::update() {
     gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.facingYaw);
     playerUpdateAnimation(moving, onGround);
     if (p.active) playerUpdateCamera();
+}
+
+void PlayerSystem::postUpdate() {
+    if (!p.spawned) return;
+
+    static double lastSave = 0.0;
+    const double now = utils::millies();
+
+    // The old engine suppressed these periodic saves while ENGINE_AUTO_RUN
+    // was running (the test character runs around and must not clobber the
+    // parked state).
+    if (p.autoRun) return;
+
+    if (now > lastSave + 1000.0) {
+        lastSave = now;
+        playerDbSaveState();
+    }
 }
 }  // namespace engine
