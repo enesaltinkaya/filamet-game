@@ -27,7 +27,12 @@ static const float JUMP_SPEED          = 4.0f; // vertical jump velocity
 static const float SPRINT_MULT         = 40.0f; // alt-sprint (old MOVE_SPEED_SPRINT_MULT)
 
 // ── Third-person orbit camera (old engine's ThirdPersonCamera.cpp) ───────────
-static const float CAM_SENS  = 0.15f; // old tpCameraSensitivity — yaw += dx * sens * dt
+// rad per pixel. Old engine: `yaw += dx * 0.15 * dt` where dt is the fixed
+// 1/60 sim tick — inlined as 0.15/60 (utils::timer.dt is constant, so do not
+// multiply by it again). dx accumulates across rendered frames and is zeroed
+// by the consuming tick (see windowPollEvents), which is what keeps the look
+// frame-rate independent.
+static const float CAM_SENS  = 0.15f / 60.0f;
 static const float PITCH_MIN = -20.0f * (float)M_PI / 180.0f;
 static const float PITCH_MAX = 60.0f * (float)M_PI / 180.0f;
 static const float DIST_MIN  = 1.5f;
@@ -461,13 +466,13 @@ static void movementInput(f32* outHx, f32* outHz) {
 // Port of the old engine's ThirdPersonCamera.cpp: spherical orbit around
 // feet + TP_LOOK_AT_HEIGHT, 5-ray obstacle clamp (sphere approximation),
 // smooth distance recovery after a clamp, and the sky-look tilt at max
-// pitch. dt-scaled sensitivity (old: yaw += dx * 0.15 * dt).
+// pitch.
 static void playerUpdateCamera(char moving) {
     // Orbit only while a camera button is held (old engine: deltas were
     // accumulated only during an ongoing drag).
     if (p.dragging && (input.mouseDx != 0.0f || input.mouseDy != 0.0f)) {
-        p.camYaw   -= input.mouseDx * CAM_SENS * utils::timer.dt;
-        p.camPitch += input.mouseDy * CAM_SENS * utils::timer.dt;
+        p.camYaw   -= input.mouseDx * CAM_SENS;
+        p.camPitch += input.mouseDy * CAM_SENS;
         if (p.camPitch < PITCH_MIN) p.camPitch = PITCH_MIN;
         if (p.camPitch > PITCH_MAX) p.camPitch = PITCH_MAX;
     }
@@ -593,7 +598,7 @@ static void playerUpdateCamera(char moving) {
         const char pitchAtMax    = (p.camPitch >= PITCH_MAX - 0.01f);
         const char pushingUp     = (input.mouseDy > 0.0f);
         if (!moving && cameraClipped && pitchAtMax && pushingUp && p.dragging) {
-            p.skyPitchOffset += input.mouseDy * CAM_SENS * utils::timer.dt;
+            p.skyPitchOffset += input.mouseDy * CAM_SENS;
             p.skyPitchOffset = std::max(0.0f, std::min(p.skyPitchOffset, 0.44f * (float)M_PI));
         } else {
             if (moving || !cameraClipped || p.camPitch < PITCH_MAX - 0.05f) {
@@ -602,6 +607,14 @@ static void playerUpdateCamera(char moving) {
                 if (p.skyPitchOffset < 0.001f) p.skyPitchOffset = 0.0f;
             }
         }
+    }
+
+    // Consume the accumulated look delta: windowPollEvents keeps adding to it
+    // across rendered frames until the tick zeroes it (frame-rate independence —
+    // see the note in windowPollEvents). No delta is lost at any render fps.
+    if (p.dragging) {
+        input.mouseDx = 0.0f;
+        input.mouseDy = 0.0f;
     }
 
     const double eye[3] = {desired[0], desired[1], desired[2]};

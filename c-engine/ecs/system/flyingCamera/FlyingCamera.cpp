@@ -204,6 +204,10 @@ void FlyingCameraSystem::update() {
         const float pitchLimit = 88.0f * (float)M_PI / 180.0f;
         pitch = pitch > pitchLimit ? pitchLimit : pitch < -pitchLimit ? -pitchLimit : pitch;
     }
+    // Consume the accumulated look delta (windowPollEvents adds across
+    // rendered frames; this tick zeroes it — see the note there).
+    input.mouseDx = 0.0f;
+    input.mouseDy = 0.0f;
 
     float speedMult = input.shift ? 10.0f : (input.ctrl ? 0.25f : 1.0f);
     double step     = (double)(flySpeed * speedMult) * utils::timer.dt;

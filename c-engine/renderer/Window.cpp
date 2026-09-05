@@ -132,11 +132,10 @@ void* windowNativeHandle(void) {
 }
 
 void windowPollEvents(void) {
-// one-shot input fields: fresh per frame
+// one-shot input fields: fresh per frame (mouseDx/mouseDy deliberately NOT
+// reset here — see the accumulation block below)
     input.pressed = 0;
     input.released = 0;
-    input.mouseDx = 0.0f;
-    input.mouseDy = 0.0f;
     input.scrollY = 0.0f;
     input.mousePressed = -1;
     input.mouseReleased = -1;
@@ -242,7 +241,12 @@ void windowPollEvents(void) {
     }
 
     // relative mouse delta: read it as a whole here (not from motion events —
-    // the warp-to-center on entering relative mode emits one bogus event)
+    // the warp-to-center on entering relative mode emits one bogus event).
+    // Accumulates ACROSS rendered frames (no per-frame reset): the consumer
+    // (player / flying-camera system, fixed 60 Hz step) reads and zeroes it.
+    // Resetting per rendered frame instead lost every delta except the last
+    // frame's whenever the render fps exceeded the 60 Hz tick, making mouse
+    // look N-times slower at N*60 fps.
     if (relativeMouse) {
         float rx, ry;
         SDL_GetRelativeMouseState(&rx, &ry);
@@ -273,6 +277,13 @@ void windowPollEvents(void) {
 void windowSetRelativeMouseMode(char on) {
     if (relativeMouse == on) return;
     relativeMouse = on;
+    if (!on) {
+        // The camera consumer is done (drag ended): discard whatever
+        // accumulated since its last tick so it can't linger in the buffer
+        // and fire into the next drag.
+        input.mouseDx = 0.0f;
+        input.mouseDy = 0.0f;
+    }
     if (window.handle) {
         SDL_SetWindowRelativeMouseMode(window.handle, on);
         if (on) {

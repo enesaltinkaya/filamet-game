@@ -14,8 +14,8 @@ struct Input {
     i32 released = 0;     // scancode released this frame
     char ctrl = 0, shift = 0, alt = 0;
 
-    float mouseDx = 0.0f;  // relative mouse delta accumulated this frame
-    float mouseDy = 0.0f;
+    float mouseDx = 0.0f;  // relative mouse delta, accumulated across rendered frames;
+    float mouseDy = 0.0f;  // consumed + zeroed by the fixed-step camera system (not per frame)
     float scrollY = 0.0f;
 
     // absolute mouse + buttons + text (drives the GUI / ImGui)
