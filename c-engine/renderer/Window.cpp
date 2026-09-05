@@ -143,6 +143,27 @@ void windowPollEvents(void) {
     input.text[0] = 0;
     int textLen = 0;
 
+    // TEMP VERIFY (removed after): synthetic one-shot ESC presses on the
+    // rendered frames in ENGINE_FAKE_ESC_FRAMES="300,400,500" — simulates
+    // physical presses (one event each; holds are now just a single
+    // press, SDL repeat filtered below).
+    static unsigned long fakeEsc[16];
+    static int fakeEscN = -1;
+    if (fakeEscN < 0) {
+        fakeEscN = 0;
+        if (const char* v = getenv("ENGINE_FAKE_ESC_FRAMES")) {
+            char buf[128];
+            snprintf(buf, sizeof buf, "%s", v);
+            for (char* c = strtok(buf, ","); c && fakeEscN < 16; c = strtok(nullptr, ","))
+                fakeEsc[fakeEscN++] = strtoull(c, nullptr, 10);
+        }
+    }
+    for (int i = 0; i < fakeEscN; i++)
+        if (fakeEsc[i] == utils::timer.frameCounter) {
+            input.pressed = (i32)SDL_SCANCODE_ESCAPE;
+            utils::debug("ESC-DEBUG fake esc injected frame=%llu", (unsigned long long)utils::timer.frameCounter);
+        }
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -150,6 +171,14 @@ void windowPollEvents(void) {
                 engineStop();
                 break;
             case SDL_EVENT_KEY_DOWN:
+                // SDL delivers repeated KEY_DOWNs while a key is held. Those
+                // are not presses: every input.pressed / input.events
+                // KEY_DOWN consumer is edge-triggered (the pause menu used to
+                // reopen and re-close on every repeat of a held ESC), so only
+                // the initial press counts.
+                if (event.key.repeat) break;
+                if (event.key.scancode == SDL_SCANCODE_ESCAPE)
+                    utils::debug("ESC-DEBUG SDL KEY_DOWN esc (non-repeat) frame=%llu", (unsigned long long)utils::timer.frameCounter);
                 input.pressed = (i32)event.key.scancode;
                 // Alt+E exits the game
                 if (event.key.scancode == SDL_SCANCODE_E &&

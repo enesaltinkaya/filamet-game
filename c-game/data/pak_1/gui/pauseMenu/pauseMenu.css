@@ -1,0 +1,67 @@
+/* Port of the old engine's pauseMenu.css (the in-game "Game Menu" slide-over). */
+body {
+  position: absolute;
+  width: 450dp;
+  height: 100%;
+  right: 0;
+  z-index: 30;
+  flex-direction: column;
+  opacity: 1;
+  display: flex;
+  background-color: #0000009f;
+  color: white;
+}
+
+.main {
+  width: 100%;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.top {
+  background-color: #212121;
+  width: 100%;
+  display: flex;
+  height: 70dp;
+  align-items: center;
+  justify-content: center;
+  font-size: 25dp;
+  font-weight: bold;
+  color: #ffd700;
+}
+
+.middle {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.middle .buttonContainer {
+  max-width: 380dp;
+}
+
+.spacer {
+  height: 1.5rem;
+}
+
+.spacer-large {
+  height: 3rem;
+}
+
+#first {
+  nav-up: "#last";
+}
+
+#last {
+  nav-down: "#first";
+}
+
+/* The engine's milligram.css points the active-button decorator at the
+ * ktx2 original; this engine's rmlui texture loader only decodes PNG/JPG,
+ * so the menu overrides it with the PNG twin (same as mainMenu.css). */
+button.active {
+  decorator: image("/gui/images/button.png");
+}

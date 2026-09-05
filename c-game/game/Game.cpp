@@ -15,9 +15,11 @@
 #include "gameState/GameState.h"
 #include "loadingAzgaar/LoadingAzgaar.h"
 #include "mainMenu/MainMenuGui.h"
+#include "pauseMenu/PauseMenuGui.h"
 #include "cameraGui/CameraGui.h"
 #include "playerGui/PlayerGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
+#include "settingsGui/SettingsGui.h"
 #include "azgaar/AzgaarPropMesh.h"
 #include "azgaar/AzgaarProps.h"
 #include "azgaar/AzgaarSettlements.h"
@@ -969,33 +971,52 @@ namespace game {
     }
 
     void GameSystem::preUpdate() {
-        // In the world and not flying: ESC returns to the main menu.
-        // ENGINE_NO_RMLUI: no menu to return to — ignore ESC.
+        // In the world and not flying: ESC opens the in-game menu — a
+        // separate document from the main menu (the old engine's pauseMenu).
+        // Its MAIN MENU button returns to the main menu; ESC while it is
+        // showing closes it (the focused document's onkeydown, pauseKeyDown
+        // in pauseMenu.lua). ENGINE_NO_RMLUI: no menu to show — ignore ESC.
         if (engine::rmluiDisabled()) return;
+        if (engine::input.pressed == SDL_SCANCODE_ESCAPE)
+            utils::debug("ESC-DEBUG preUpdate sees esc press (state=%d pause=%d settings=%d) frame=%llu",
+                         (int)gameStateCurrent(), (int)pauseMenuGuiIsShowing(), (int)settingsGuiIsShowing(),
+                         (unsigned long long)utils::timer.frameCounter);
         if (gameStateCurrent() == STATE_PLAYING && !engine::flyingCameraFlying() &&
             engine::input.pressed == SDL_SCANCODE_ESCAPE) {
-            utils::info("game: back to main menu");
-            gameStateSet(STATE_MAIN_MENU);
-            engine::ecsSystemRemoveDeferred(&engine::playerSystem);
-            engine::ecsSystemRemoveDeferred(&engine::flyingCameraSystem);
-            engine::ecsSystemRemoveDeferred(&engine::heightmapTerrainSystem);
-            engine::ecsSystemRemoveDeferred(&engine::physicsSystem);
-            // Drop the terrain's tile data + render look while the menu is
-            // up (world and source stay retained; re-entering the world
-            // re-inits the terrain and re-registers the look). The
-            // settlement plateau grid is cleared only at world release — it
-            // is valid as long as the world is.
-            engine::heightmapTerrainRenderReleaseLook();
-            engine::heightmapTerrainDestroyData(&s_terrain);
-            engine::heightmapTerrainSetActive(nullptr);
-            // Drop the props scatter + its GPU state while the menu is up
-            // (the world stays retained; re-entering re-inits both).
-            propsRelease();
-            engine::guiManagerAddGuiNextFrame(&mainMenuGui);
-            engine::guiManagerRemoveGuiNextFrame(&cameraGui);
-            engine::guiManagerRemoveGuiNextFrame(&playerGui);
-            engine::guiManagerRemoveGuiNextFrame(&playerActionsGui);
+            // Guarded like the old engine: while the pause document or the
+            // settings slide-over is focused, ESC belongs to that document
+            // (re-adding here would race the deferred removal).
+            if (!pauseMenuGuiIsShowing() && !settingsGuiIsShowing())
+                engine::guiManagerAddGuiNextFrame(&pauseMenuGui);
         }
+    }
+
+    void GameSystem::backToMainMenu() {
+        utils::info("game: back to main menu");
+        gameStateSet(STATE_MAIN_MENU);
+        engine::ecsSystemRemoveDeferred(&engine::playerSystem);
+        engine::ecsSystemRemoveDeferred(&engine::flyingCameraSystem);
+        engine::ecsSystemRemoveDeferred(&engine::heightmapTerrainSystem);
+        engine::ecsSystemRemoveDeferred(&engine::physicsSystem);
+        // Drop the terrain's tile data + render look while the menu is
+        // up (world and source stay retained; re-entering the world
+        // re-inits the terrain and re-registers the look). The
+        // settlement plateau grid is cleared only at world release — it
+        // is valid as long as the world is.
+        engine::heightmapTerrainRenderReleaseLook();
+        engine::heightmapTerrainDestroyData(&s_terrain);
+        engine::heightmapTerrainSetActive(nullptr);
+        // Drop the props scatter + its GPU state while the menu is up
+        // (the world stays retained; re-entering re-inits both).
+        propsRelease();
+        // A settings panel left open over the in-game menu must not ride
+        // along into the main menu (the same guard as enterWorld).
+        if (settingsGuiIsShowing())
+            engine::guiManagerRemoveGuiNextFrame(&settingsGui);
+        engine::guiManagerAddGuiNextFrame(&mainMenuGui);
+        engine::guiManagerRemoveGuiNextFrame(&cameraGui);
+        engine::guiManagerRemoveGuiNextFrame(&playerGui);
+        engine::guiManagerRemoveGuiNextFrame(&playerActionsGui);
     }
 
     void GameSystem::removed() {

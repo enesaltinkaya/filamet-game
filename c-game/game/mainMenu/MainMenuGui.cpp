@@ -1,6 +1,7 @@
 #include "MainMenuGui.h"
 #include "Game.h"
 #include "cameraGui/CameraGui.h"
+#include "pauseMenu/PauseMenuGui.h"
 #include "playerGui/PlayerGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
 #include "settingsGui/SettingsGui.h"
@@ -116,14 +117,20 @@ void MainMenuGui::added() {
     rmlShowDocument(document);
 
     // Headless action testing (mirrors the ENGINE_SCREENSHOT/ENGINE_LOG_TIMEOUT
-    // automated-run pattern): ENGINE_AUTOTEST=enter|settings|credits|exit fires
-    // once.
+    // automated-run pattern): ENGINE_AUTOTEST=enter|pause|settings|credits|exit
+    // fires once. "pause" enters the world and opens the in-game menu (the
+    // pause menu screenshot run; its own actions live in
+    // ENGINE_PAUSE_AUTOTEST=back|mainmenu).
     static char autotestRan = 0;
     if (!autotestRan) {
         const char* at = getenv("ENGINE_AUTOTEST");
         if (at && at[0]) {
             autotestRan = 1;
             if (utils::strequals(at, "enter")) enterWorld();
+            else if (utils::strequals(at, "pause")) {
+                enterWorld();
+                engine::guiManagerAddGuiNextFrame(&pauseMenuGui);
+            }
             else if (utils::strequals(at, "settings")) openSettings();
             else if (utils::strequals(at, "credits")) engine::gui::guiAdd(&creditsGui);
             else if (utils::strequals(at, "exit")) exitGame();
