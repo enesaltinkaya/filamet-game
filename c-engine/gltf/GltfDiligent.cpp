@@ -53,25 +53,45 @@ static BoundBox localBounds;
 static bool haveBounds = false;
 
 // ── Placement (gltfPlaceAt / gltfPlaceAtFacing) ─────────────────────────────
-// The feet anchor is the min corner of the LOCAL AABB (the header contract:
-// "min corner lands at (x, y, z)", yaw pivoted on the feet). Root matrix
-// (row-vector convention, applied left to right):
-//     p_local → (p - minc) → yaw → +(pos - minc_as_double)
-// so minc lands exactly at pos for every yaw (lessons 2026-09-04: a pivot on
-// any other local point swings the visible model around the target).
+// The anchor is the model's LOCAL ORIGIN (the feet for character assets —
+// eve's AABB min corner sits 0.64 m to the origin's left, so the min corner
+// is NOT the feet). Root matrix (row-vector convention, applied left to
+// right):
+//     p_local → yaw + (pos − worldAnchor)
+// so the origin lands exactly at pos for every yaw. The yaw-fixed point must
+// BE the feet (lessons 2026-09-04: pinning any other local point swings the
+// visible model around the orbit target — the first diligent form pinned the
+// AABB min corner and rendered the character ~0.65 m off-centre).
+//
+// The translation is ANCHOR-RELATIVE: the renderer re-anchors the world to
+// the camera eye every frame (docs/lessons.md, the 2026-09-04 f32 entry — at
+// |pos| ~ 4e4 m an absolute f32 translation sits on a 3.9 mm grid and the
+// animated skeleton shimmers). The subtraction happens in double on the
+// CPU, so the f32 result is a small number with sub-mm precision. Because
+// the anchor moves every frame, the matrix is re-derived when the anchor
+// changes, not only on explicit placement.
 static double placePos[3] = {0.0, 0.0, 0.0};
 static f32 placeYaw = 0.0f;
 static char placementDirty = true;
 static float4x4 placementMatrix = float4x4::Identity();
+static double placementAnchor[3] = {0.0, 0.0, 0.0};
+static char placementRebuilt = 0;
 
 static const float4x4& placementRootMatrix(void) {
-    if (placementDirty && haveBounds) {
+    placementRebuilt = 0;
+    f64 anchor[3];
+    engine::renderer::diligent::diligentWorldAnchor(anchor);
+    if (placementDirty || anchor[0] != placementAnchor[0] || anchor[1] != placementAnchor[1] ||
+            anchor[2] != placementAnchor[2]) {
         placementDirty = false;
-        const float3 minc = localBounds.Min;
-        const float3 offset{(float)(placePos[0] - minc.x), (float)(placePos[1] - minc.y),
-                (float)(placePos[2] - minc.z)};
-        placementMatrix = float4x4::Translation(-minc) * float4x4::RotationY(placeYaw) *
-                          float4x4::Translation(offset);
+        placementAnchor[0] = anchor[0];
+        placementAnchor[1] = anchor[1];
+        placementAnchor[2] = anchor[2];
+        placementMatrix = float4x4::RotationY(placeYaw) *
+                          float4x4::Translation((f32)(placePos[0] - anchor[0]),
+                                               (f32)(placePos[1] - anchor[1]),
+                                               (f32)(placePos[2] - anchor[2]));
+        placementRebuilt = 1;
     }
     return placementMatrix;
 }
@@ -542,6 +562,18 @@ void gltfUpdateDiligent(double elapsedSeconds) {
         }
         const float4x4& root = placementRootMatrix();
         posePipeline(*model, *transforms, animPoseA.get(), poseB, w, root);
+        if (getenv("ENGINE_JITTER_PROBE")) {
+            // Per-frame render-space position of the mesh node (anchor-space
+            // translation): with the f32 absolute-placement bug this sits on
+            // a 3.9 mm grid (a multiple of 2^-8 m) at |pos| ~ 4e4 m; fixed, it
+            // is a small value moving at sub-mm resolution.
+            static int jn = 0;
+            if ((jn++ % 5) == 0) {
+                const GLTF::Node* meshNode = model->Scenes[sceneIndex].LinearNodes[1];
+                const float4x4& mg = transforms->NodeGlobalMatrices[meshNode->Index];
+                utils::info("jitg: mesh node anchor-space %.9f %.9f %.9f", mg._41, mg._42, mg._43);
+            }
+        }
         static int dbgFrames = 0;
         if (getenv("ENGINE_GLTF_DEBUG") && dbgFrames++ < 3) {
             utils::info("pose: root row4 %.2f %.2f %.2f %.2f", root._41, root._42, root._43, root._44);
@@ -575,10 +607,14 @@ void gltfUpdateDiligent(double elapsedSeconds) {
             const float4x4& mg = transforms->NodeGlobalMatrices[model->Scenes[sceneIndex].LinearNodes[1]->Index];
             utils::info("pose: mesh node global row4 %.2f %.2f %.2f %.2f", mg._41, mg._42, mg._43, mg._44);
         }
-    } else if (placementDirty) {
-        // no clip playing: re-derive the pose from the last applied TRS so a
-        // placement change (teleport / facing) still rebuilds the matrices
-        posePipeline(*model, *transforms, nullptr, nullptr, 1.0f, placementRootMatrix());
+    } else {
+        // no clip playing: a camera move re-anchors the world, so the pose
+        // matrices must track the anchor even for a static pose (a placement
+        // change — teleport / facing — also lands here via placementDirty)
+        const float4x4& root = placementRootMatrix();
+        if (placementRebuilt) {
+            posePipeline(*model, *transforms, nullptr, nullptr, 1.0f, root);
+        }
     }
 }
 
@@ -586,13 +622,18 @@ bool gltfBoundingBoxDiligent(float min[3], float max[3]) {
     if (!haveBounds) {
         return false;
     }
+    // The placed box is anchor-relative (render space); hand callers back
+    // absolute world coords — the re-addition in double stays exact to the
+    // 3.9 mm grid of the f32 box at 39 km.
     const BoundBox placed = localBounds.Transform(placementRootMatrix());
-    min[0] = placed.Min.x;
-    min[1] = placed.Min.y;
-    min[2] = placed.Min.z;
-    max[0] = placed.Max.x;
-    max[1] = placed.Max.y;
-    max[2] = placed.Max.z;
+    f64 anchor[3];
+    engine::renderer::diligent::diligentWorldAnchor(anchor);
+    min[0] = (f32)(placed.Min.x + anchor[0]);
+    min[1] = (f32)(placed.Min.y + anchor[1]);
+    min[2] = (f32)(placed.Min.z + anchor[2]);
+    max[0] = (f32)(placed.Max.x + anchor[0]);
+    max[1] = (f32)(placed.Max.y + anchor[1]);
+    max[2] = (f32)(placed.Max.z + anchor[2]);
     return true;
 }
 
@@ -739,6 +780,10 @@ void gltfDestroyDiligent(void) {
     blendFrom = ClipPlay{};
     blendDuration = 0.0f;
     placementDirty = true;
+    placementAnchor[0] = 0.0;
+    placementAnchor[1] = 0.0;
+    placementAnchor[2] = 0.0;
+    placementRebuilt = 0;
     haveBounds = false;
     frameAttribsCB.Release();
     iblIrradiance.Release();

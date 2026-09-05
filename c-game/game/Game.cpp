@@ -900,10 +900,11 @@ namespace game {
                 const f32 feetY = engine::heightmapTerrainGetActive()
                         ? engine::heightmapTerrainSample(engine::heightmapTerrainGetActive(), spawnPt[0], spawnPt[2])
                         : spawnPt[1];
-                // placement pins the bbox MIN corner at the spawn point, so the
-                // body centre sits at spawn + (centre - min), not spawn + centre
-                const double cx   = spawnPt[0] + (lmax[0] - lmin[0]) * 0.5;
-                const double cz   = spawnPt[2] + (lmax[2] - lmin[2]) * 0.5;
+                // placement pins the local ORIGIN (feet) at the spawn point, so
+                // the body centre sits at spawn + (centre - origin) — the
+                // local centre relative to the origin, not relative to min
+                const double cx   = spawnPt[0] + (lmax[0] + lmin[0]) * 0.5;
+                const double cz   = spawnPt[2] + (lmax[2] + lmin[2]) * 0.5;
                 const double h    = lmax[1] - lmin[1];
                 const double chest[3] = {cx, feetY + h * 0.6, cz};
                 const double eye[3]   = {chest[0] + h, chest[1] + h * 0.2, chest[2] - h};

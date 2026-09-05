@@ -10,15 +10,18 @@ void gltfUpdate(double elapsedSeconds);
 void gltfFrameCamera(void);
 void gltfDestroy(void);
 
-// Move the loaded instance so the min corner of its local-space AABB (feet for
-// character assets) lands at ABSOLUTE world (x, y, z). double precision: the
-// placement is re-expressed relative to the world anchor internally so far-
-// from-origin positions keep sub-mm precision. false if nothing is loaded.
+// Move the loaded instance so its LOCAL ORIGIN (the feet for character
+// assets) lands at ABSOLUTE world (x, y, z). The local origin is the pivot,
+// NOT the AABB min corner (eve's min corner sits 0.64 m to the origin's
+// left). double precision: the placement is re-expressed relative to the
+// world anchor internally so far-from-origin positions keep sub-mm precision.
+// false if nothing is loaded.
 bool gltfPlaceAt(double x, double y, double z);
 
-// Same, plus a yaw (radians) around world +Y, pivoted on the feet. The model's
-// local +Z is its forward at yaw 0, so the character faces (sin yaw, 0, cos yaw)
-// — the old engine's (moveDir.x, moveDir.z) -> atan2(x, z) convention.
+// Same, plus a yaw (radians) around world +Y, pivoted on the local origin
+// (the feet). The model's local +Z is its forward at yaw 0, so the character
+// faces (sin yaw, 0, cos yaw) — the old engine's (moveDir.x, moveDir.z) ->
+// atan2(x, z) convention.
 bool gltfPlaceAtFacing(double x, double y, double z, f32 yaw);
 
 // Local-space (unplaced) bounding box of the asset, true metres (compensated

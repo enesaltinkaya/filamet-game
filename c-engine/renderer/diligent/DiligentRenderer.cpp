@@ -129,23 +129,39 @@ public:
     }
 
     float4x4 viewMatrix(void) const {
+        // Camera-anchored: the matrix carries ONLY the basis rotation — the
+        // translation row is zero because every renderable is placed relative
+        // to the anchor (the camera eye; see diligentWorldAnchor), so the eye
+        // is the origin of the rendered space. Baking the eye into the
+        // matrix re-introduces the f32 cancellation at |eye| ~ 4e4 m: at
+        // 39 km f32 sits on a 3.9 mm grid and view-space positions quantize,
+        // so the character animation and the ground shimmer (docs/lessons.md,
+        // the 2026-09-04 f32 entry — the old engine fixed exactly this with
+        // the relative-to-anchor rework this mirrors).
+        //
         // Diligent uses the D3D (left-handed) matrix convention: the camera
         // looks towards view +Z (GLTF_PBR_Renderer / GLTFViewer expect it), and
         // the projection maps the near plane at view-z = +near to NDC 0. With z
         // forward the screen-right axis is f × up (the GL cross(up, f) gives the
         // left vector and horizontally mirrors the whole scene).
-        float3 f = normalize(float3(camCenter[0] - camEye[0], camCenter[1] - camEye[1],
-                camCenter[2] - camEye[2]));  // forward, maps to view +Z
-        float3 up(camUp[0], camUp[1], camUp[2]);
-        float3 x = normalize(cross(f, up));  // right
-        float3 y = cross(x, f);              // up (re-orthogonalized)
+        //
+        // The basis is built in double (the eye/center magnitudes are ~4e4 m;
+        // f32 differences there would quantize the aim to millimetres).
+        double fx = camCenter[0] - camEye[0], fy = camCenter[1] - camEye[1], fz = camCenter[2] - camEye[2];
+        const double fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+        fx /= fl; fy /= fl; fz /= fl;  // forward, maps to view +Z
+        double xx = fy * camUp[2] - fz * camUp[1];
+        double xy = fz * camUp[0] - fx * camUp[2];
+        double xz = fx * camUp[1] - fy * camUp[0];  // right = f × up
+        const double xl = std::sqrt(xx * xx + xy * xy + xz * xz);
+        xx /= xl; xy /= xl; xz /= xl;
+        double yx = xy * fz - xz * fy;
+        double yy = xz * fx - xx * fz;
+        double yz = xx * fy - xy * fx;  // up = x × f (re-orthogonalized)
         float4x4 view = float4x4::Identity();
-        view._11 = x.x; view._12 = y.x; view._13 = f.x;
-        view._21 = x.y; view._22 = y.y; view._23 = f.y;
-        view._31 = x.z; view._32 = y.z; view._33 = f.z;
-        view._41 = -dot(x, float3(camEye[0], camEye[1], camEye[2]));
-        view._42 = -dot(y, float3(camEye[0], camEye[1], camEye[2]));
-        view._43 = -dot(f, float3(camEye[0], camEye[1], camEye[2]));
+        view._11 = (f32)xx; view._12 = (f32)yx; view._13 = (f32)fx;
+        view._21 = (f32)xy; view._22 = (f32)yy; view._23 = (f32)fy;
+        view._31 = (f32)xz; view._32 = (f32)yz; view._33 = (f32)fz;
         return view;
     }
 
@@ -298,21 +314,37 @@ public:
     }
 
     void cameraLookAt(const double eye[3], const double center[3], const double up[3]) override {
-        // Absolute f32 camera, no world anchor (worldAnchorX/Z report 0).
+        // The camera is the world anchor: world state stays f64 here, the
+        // view matrix is rotation-only, and f32 render space never carries
+        // the ~4e4 m absolute magnitude (docs/lessons.md, the 2026-09-04
+        // f32 entry). Passes subtract the (f64) anchor from their own world
+        // state and round the SMALL difference to f32 once — a f32 anchor
+        // copy would re-quantize to the 3.9 mm grid and shimmer on every
+        // camera ULP crossing.
         for (int i = 0; i < 3; i++) {
-            camEye[i] = (f32)eye[i];
-            camCenter[i] = (f32)center[i];
-            camUp[i] = (f32)up[i];
+            camEye[i] = eye[i];
+            camCenter[i] = center[i];
+            camUp[i] = up[i];
         }
     }
 
+    double worldAnchorX() override {
+        return camEye[0];
+    }
+
+    double worldAnchorZ() override {
+        return camEye[2];
+    }
+
     void cameraGet(f32 pos[3], f32 forward[3]) override {
-        memcpy(pos, camEye, sizeof(camEye));
-        float3 f = normalize(float3(camCenter[0] - camEye[0], camCenter[1] - camEye[1],
-                camCenter[2] - camEye[2]));
-        forward[0] = f.x;
-        forward[1] = f.y;
-        forward[2] = f.z;
+        pos[0] = (f32)camEye[0];
+        pos[1] = (f32)camEye[1];
+        pos[2] = (f32)camEye[2];
+        double fx = camCenter[0] - camEye[0], fy = camCenter[1] - camEye[1], fz = camCenter[2] - camEye[2];
+        const double fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+        forward[0] = (f32)(fx / fl);
+        forward[1] = (f32)(fy / fl);
+        forward[2] = (f32)(fz / fl);
     }
 
     void setSun(const f32 direction[3], const f32 color[3], f32 intensity) override {
@@ -337,6 +369,7 @@ public:
 public:
     float4x4 frameView;
     float4x4 proj;
+    f64 camEye[3] = {0.0, 0.0, 5.0};  // public: the world anchor (diligentWorldAnchor)
     f32 sunDirection[3] = {-0.6f, -1.0f, -0.5f};
     f32 sunColor[3] = {1.0f, 0.97f, 0.92f};
     f32 sunIntensity = 0.0f;
@@ -344,9 +377,8 @@ public:
     f32 ambientIntensity = 0.0f;
 
 private:
-    f32 camEye[3] = {0.0f, 0.0f, 5.0f};
-    f32 camCenter[3] = {0.0f, 0.0f, 0.0f};
-    f32 camUp[3] = {0.0f, 1.0f, 0.0f};
+    f64 camCenter[3] = {0.0, 0.0, 0.0};
+    f64 camUp[3] = {0.0, 1.0, 0.0};
 };
 
 static DiligentBackend* gDiligentBackend = nullptr;
@@ -366,6 +398,16 @@ namespace engine::renderer::diligent {
 
 const float4x4& diligentFrameView(void) {
     return gDiligentBackend->frameView;
+}
+
+// The world anchor (f64 camera eye): the origin of the render space. The view
+// matrix is rotation-only; passes subtract this from their own f64 world
+// state and round the small difference to f32 (the glTF placement on the
+// CPU, the per-tile terrain translation in the instance buffer).
+void diligentWorldAnchor(f64 out[3]) {
+    out[0] = gDiligentBackend->camEye[0];
+    out[1] = gDiligentBackend->camEye[1];
+    out[2] = gDiligentBackend->camEye[2];
 }
 const float4x4& diligentFrameProj(void) {
     return gDiligentBackend->proj;

@@ -754,6 +754,24 @@ void fillFrameAttribs(void) {
     camera.f4ExtraData[1] = float4{look.snowLoC, look.snowHiC, look.beachHeightM,
             look.climateEnabled ? 1.0f : 0.0f};
     camera.f4ExtraData[2] = float4{look.maxLandHeightM, debugView, 0.0f, 0.0f};
+    // [3]/[4] = the world anchor split into f32 high + residual (the camera
+    // eye, the render-space origin — docs/lessons.md, the 2026-09-04 f32
+    // entry). The VS subtracts BOTH from the absolute position: the first
+    // subtraction is exact (both operands in the same binade — Sterbenz) and
+    // the residual (sub-mm) removes the f32(anchor) ULP step, so the ground
+    // does not re-shimmer by 3.9 mm on every camera ULP crossing. The PS
+    // uses the same split for the anchor-relative view direction.
+    {
+        f64 anchorF64[3];
+        engine::renderer::diligent::diligentWorldAnchor(anchorF64);
+        f32 ah[3], al[3];
+        for (int i = 0; i < 3; i++) {
+            ah[i] = (f32)anchorF64[i];
+            al[i] = (f32)(anchorF64[i] - (f64)ah[i]);
+        }
+        camera.f4ExtraData[3] = float4{ah[0], ah[1], ah[2], 0.0f};
+        camera.f4ExtraData[4] = float4{al[0], al[1], al[2], 0.0f};
+    }
 
     HLSL::PBRRendererShaderParameters& renderer = frame->Renderer;
     renderer.OcclusionStrength = 1.0f;

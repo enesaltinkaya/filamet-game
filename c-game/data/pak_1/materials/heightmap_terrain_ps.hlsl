@@ -221,7 +221,13 @@ float3x3 buildTerrainTBN(float3 geomNormal)
 PSTerrainOut main(in PSTerrainIn vs)
 {
     float3 worldPos   = vs.WorldPos;
-    float3 V          = normalize(g_Frame.Camera.f4Position.xyz - worldPos);
+    // The camera sits at the anchor origin (rotation-only view), so the view
+    // direction comes from the ANCHOR-RELATIVE position — the absolute one
+    // would point speculars at the world origin, 39 km away. The anchor is
+    // the same split the VS subtracted (f4ExtraData[3]/[4]).
+    float3 rel        = worldPos - g_Frame.Camera.f4ExtraData[3].xyz
+                              - g_Frame.Camera.f4ExtraData[4].xyz;
+    float3 V          = normalize(g_Frame.Camera.f4Position.xyz - rel);
     float3 geomNormal = normalize(vs.Normal);
 
     // World-space tiled UV for the grass texture (stable across tiles).

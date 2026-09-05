@@ -34,6 +34,11 @@ void guiOnBackendDestroy(void);  // release gui resources before device dies
 // Current frame camera/light state (updated by the frame loop before worldDraw)
 const Diligent::float4x4& diligentFrameView(void);
 const Diligent::float4x4& diligentFrameProj(void);
+
+// The world anchor (f64 camera eye): the origin of the render space. The view
+// matrix is rotation-only; passes subtract this from their f64 world state
+// and round the small difference to f32.
+void diligentWorldAnchor(f64 out[3]);
 const f32* diligentSunDirection(void);
 const f32* diligentSunColor(void);
 f32 diligentSunIntensity(void);
