@@ -4,6 +4,8 @@
 
 #include "crmlui.h"
 
+#include "renderer/diligent/DiligentRenderer.h"
+
 namespace engine {
 
 RmluiShowFpsGui rmluiShowFpsGui;
@@ -11,9 +13,9 @@ RmluiShowFpsGui rmluiShowFpsGui;
 static void* document = nullptr;
 static void* model    = nullptr;
 
-// This engine has no per-frame GPU time (no VulkanProfile /
-// rendererElapsedGpu in the Diligent backend); the old engine bound
-// renderer.rendererElapsedGpu here.
+// GPU time of the last completed frame (ns, like utils::timer.elapsed):
+// a QUERY_TYPE_DURATION query in the Diligent backend — the old engine
+// derived this from its own draw-command timestamps.
 static double gpuTime = 0.0;
 
 RmluiShowFpsGui::RmluiShowFpsGui() : System("showFpsGui") {}
@@ -46,6 +48,7 @@ void RmluiShowFpsGui::update() {
     double now = utils::nanos();
     if (now > lastShown + BILLION / 2.) {  // twice per second
         lastShown = now;
+        gpuTime = renderer::diligent::diligentGpuTimeNs();
         rmlUpdateDirtyAll(model);
     }
 }

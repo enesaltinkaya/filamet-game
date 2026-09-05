@@ -25,6 +25,14 @@ extern Diligent::ISwapChain* swapChain;
 bool diligentWorldDrew(void);
 void setWorldDrew(bool drew);
 
+// GPU time of the last COMPLETED frame in ns: a QUERY_TYPE_DURATION query
+// (two bottom-of-pipe timestamps, see DiligentRenderer.cpp) spans draw()
+// begin->Present, so it is the whole-frame GPU time, like the old engine's
+// rendererElapsedGpu. Results arrive ~1 frame late; 0 until the first
+// sample, and forever 0 when the driver lacks timestamp support.
+double diligentGpuTimeNs(void);
+bool diligentGpuTimeSupported(void);
+
 // Hooks invoked by the frame loop between pass begin and present
 // (implemented in GltfDiligent.cpp / GuiDiligent.cpp; safe to be no-ops).
 void worldDraw(Diligent::IDeviceContext* ctx);

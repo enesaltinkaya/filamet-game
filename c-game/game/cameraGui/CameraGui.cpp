@@ -1,18 +1,22 @@
 #include "CameraGui.h"
 #include "Utils.h"
-#include "gameState/GameState.h"
-#include "gui/GuiManager.h"
 #include "renderer/Renderer.h"
 
-#include <imgui.h>
+#include "crmlui.h"
 
 #include <cmath>
 #include <cstdio>
 
 namespace game {
+
 CameraGui cameraGui;
 
-CameraGui::CameraGui() : engine::Gui("cameraGui") {}
+CameraGui::CameraGui() : engine::System("cameraGui") {}
+
+static void* document = nullptr;
+static void* model    = nullptr;
+static float posX, posY, posZ;
+static float rotX, rotY, rotZ, rotW;
 
 // The renderer only exposes the camera as lookAt state (position + forward
 // vector), so rebuild the look rotation the same way the backends do: a
@@ -80,76 +84,52 @@ static void lookQuaternion(const float f[3], float q[4]) {
     }
 }
 
-// Last read values (refreshed on the 50ms tick, like the old rmlui model)
-static float posX, posY, posZ;
-static float rotX, rotY, rotZ, rotW;
-static double lastShown;
+void CameraGui::added() {
+    document = rmlNewDocument("gui/camera/camera.html");
+    model    = rmlCreateModel("camera");
+    rmlBindFloat(model, "posX", &posX);
+    rmlBindFloat(model, "posY", &posY);
+    rmlBindFloat(model, "posZ", &posZ);
+    rmlBindFloat(model, "rotX", &rotX);
+    rmlBindFloat(model, "rotY", &rotY);
+    rmlBindFloat(model, "rotZ", &rotZ);
+    rmlBindFloat(model, "rotW", &rotW);
 
-void CameraGui::draw() {
-    if (gameStateCurrent() != STATE_PLAYING) return;
-
-    // The old gui refreshed its data model every 50ms; keep that cadence so
-    // the numbers stay readable while flying.
-    double now = utils::millies();
-    if (now > lastShown + 50.0) {
-        lastShown = now;
-        f32 pos[3], fwd[3];
-        engine::renderer::rendererCameraGet(pos, fwd);
-        posX = pos[0];
-        posY = pos[1];
-        posZ = pos[2];
-        float q[4];
-        lookQuaternion(fwd, q);
-        rotX = q[0];
-        rotY = q[1];
-        rotZ = q[2];
-        rotW = q[3];
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    const float W = io.DisplaySize.x;
-    const float H = io.DisplaySize.y;
-    const float s = engine::gui::guiScale();
-
-    char posLine[96];
-    char rotLine[96];
-    snprintf(posLine, sizeof(posLine), "Position : %.2f %.2f %.2f", posX, posY, posZ);
-    snprintf(rotLine, sizeof(rotLine), "Rotation : %.2f %.2f %.2f %.2f", rotX, rotY, rotZ, rotW);
-    const char* lines[3] = { "Camera", posLine, rotLine };
-
-    // Old rcss: a content-sized translucent black box (rgba(0,0,0,120))
-    // flush against the bottom-right corner, 1rem padding, pointer-events
-    // none. Pivot (1,1) at the framebuffer corner reproduces the anchor.
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 120));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f * s, 16.0f * s));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::SetNextWindowPos(ImVec2(W, H), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
-    ImGui::Begin("CameraGui", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
-                    ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
-                    ImGuiWindowFlags_NoFocusOnAppearing);
-
-    // Old font-effect: glow(3px black) — approximated with a 4-way black
-    // halo pass behind each line, then the white text on top.
-    ImGui::PushFont(engine::gui::guiGetMonoFont());
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float lineH = ImGui::GetTextLineHeight() * 1.6f;  // old line-height
-    const float halo  = 2.0f * s;
-    for (const char* line : lines) {
-        const float lw = ImGui::CalcTextSize(line).x;
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        const ImVec2 o0(-halo, 0.0f), o1(halo, 0.0f), o2(0.0f, -halo), o3(0.0f, halo);
-        dl->AddText(ImVec2(p.x + o0.x, p.y + o0.y), IM_COL32(0, 0, 0, 255), line);
-        dl->AddText(ImVec2(p.x + o1.x, p.y + o1.y), IM_COL32(0, 0, 0, 255), line);
-        dl->AddText(ImVec2(p.x + o2.x, p.y + o2.y), IM_COL32(0, 0, 0, 255), line);
-        dl->AddText(ImVec2(p.x + o3.x, p.y + o3.y), IM_COL32(0, 0, 0, 255), line);
-        dl->AddText(p, IM_COL32(255, 255, 255, 255), line);
-        ImGui::Dummy(ImVec2(lw, lineH));
-    }
-    ImGui::PopFont();
-    ImGui::End();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(1);
+    rmlLoadDocument(document);
+    rmlShowDocument(document);
 }
+
+void CameraGui::removed() {
+    if (document) {
+        rmlUnloadDocument(document);
+        document = nullptr;
+    }
+    if (model) {
+        rmlUnloadModel(model);
+        model = nullptr;
+    }
+}
+
+void CameraGui::update() {
+    static double lastShown;
+    double now = utils::millies();
+    if (now <= lastShown + 50) return;  // 50ms, like the old gui
+
+    f32 pos[3], fwd[3];
+    engine::renderer::rendererCameraGet(pos, fwd);
+    posX = pos[0];
+    posY = pos[1];
+    posZ = pos[2];
+
+    float q[4];
+    lookQuaternion(fwd, q);
+    rotX = q[0];
+    rotY = q[1];
+    rotZ = q[2];
+    rotW = q[3];
+
+    lastShown = now;
+    rmlUpdateDirtyAll(model);
+}
+
 }  // namespace game

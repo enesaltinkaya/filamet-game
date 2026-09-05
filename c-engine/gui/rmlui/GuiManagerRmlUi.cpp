@@ -104,7 +104,19 @@ void GuiManagerRmlUi::postUpdate() {
     // these through futureTaskAdd(0, ...); this engine never runs
     // futureTaskRun, so the queue is local and applied here, before the
     // guis' own update() below sees the new set).
-    for (System* gui : pendingAdds) {
+    //
+    // Iterate a COPY of the adds: a gui's added() runs inside this loop and
+    // may queue more add/remove (the main menu's ENTER WORLD action does)
+    // — a push_back into the live vector would reallocate it under the
+    // range-for's captured end() (dangling iterator, crash). Queued-during-
+    // this-frame items stay in the live queues: new adds apply on the NEXT
+    // frame (the header contract), new removes are applied by the removes
+    // loop below, and the free functions' cancel logic (an add erases a
+    // pending remove of the same gui) keeps working on the live
+    // pendingRemoves.
+    std::vector<System*> adds = pendingAdds;
+    pendingAdds.clear();
+    for (System* gui : adds) {
         if (std::find(pendingRemoves.begin(), pendingRemoves.end(), gui) != pendingRemoves.end()) {
             continue;  // cancelled by a remove queued after it
         }
@@ -112,7 +124,6 @@ void GuiManagerRmlUi::postUpdate() {
         rmluiGuis.push_back(gui);
         gui->added();
     }
-    pendingAdds.clear();
     for (System* gui : pendingRemoves) {
         for (size_t i = 0; i < rmluiGuis.size(); i++) {
             if (gui == rmluiGuis[i]) {

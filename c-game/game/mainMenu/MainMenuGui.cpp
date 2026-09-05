@@ -1,6 +1,7 @@
 #include "MainMenuGui.h"
 #include "Game.h"
 #include "cameraGui/CameraGui.h"
+#include "playerGui/PlayerGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
 #include "settingsGui/SettingsGui.h"
 #include "gui/GuiManager.h"
@@ -48,9 +49,10 @@ static void enterWorld(void) {
     // model is already placed there) and takes the camera in player mode.
     engine::ecsSystemAddDeferred(100, &engine::playerSystem);
     engine::guiManagerRemoveGuiNextFrame(&mainMenuGui);
-    // the old engine showed the camera debug readout + player actions panel
-    // while in the world
-    engine::gui::guiAdd(&cameraGui);
+    // the old engine showed the camera + player debug readouts + player
+    // actions panel while in the world
+    engine::guiManagerAddGuiNextFrame(&cameraGui);
+    engine::guiManagerAddGuiNextFrame(&playerGui);
     engine::gui::guiAdd(&playerActionsGui);
 }
 

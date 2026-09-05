@@ -16,8 +16,9 @@ namespace engine {
 // Port of the old engine's StatsGui. The old document
 // (pak_0_engine/gui/stats/stats.html) is unchanged. Bindings that had no
 // equivalent in this engine are stubs:
-//   - totalGpuTime / overallRendererGpu / per-pass gpu times: no GPU
-//     profiling in the Diligent backend -> 0;
+//   - totalGpuTime / overallRendererGpu: whole-frame GPU time from the
+//     Diligent QUERY_TYPE_DURATION query (diligentGpuTimeNs); per-pass
+//     gpu times stay 0;
 //   - drawCalls/instanceCount/triangleCount: the new renderer doesn't count
 //     them -> 0;
 //   - heap: utils::memoryUsage() doesn't exist here -> 0;
@@ -34,7 +35,7 @@ static void* model    = nullptr;
 static double lastUpdate;
 
 static u64 heap = 0;
-static float totalGpuTime = 0.0f;  // stub: no per-pass GPU timing
+static float totalGpuTime = 0.0f;  // seconds; whole frame (see update)
 static size_t systemSize;
 static size_t passSize = 0;  // stub: no renderer.passes in this engine
 
@@ -56,7 +57,7 @@ static char* gpuNamePtr          = gpuName;
 static int framesInFlight = 1;  // stub: single-flight backend
 static int swapchainImageCount;
 static double rendererCpu         = 0.0;  // stub: no per-phase timing
-static double overallRendererGpu  = 0.0;  // stub: no GPU timing
+static double overallRendererGpu  = 0.0;  // ns; whole frame (see update)
 static double swapchainCpuElapsed = 0.0;  // stub: no per-phase timing
 static double ecsCpu              = 0.0;  // sum of system cpu times
 
@@ -133,8 +134,12 @@ void StatsGui::removed() {
 void StatsGui::update() {
     double now = utils::nanos();
     if (now > lastUpdate + BILLION / 2.) {  // twice per second
-        // No per-pass GPU timing in this engine — the total stays 0.
-        totalGpuTime = 0.0f;
+        // Whole-frame GPU time from the Diligent duration query (arrives ~1
+        // frame late); per-pass times are untracked, so the total IS the
+        // whole frame.
+        const double gpuNs = renderer::diligent::diligentGpuTimeNs();
+        totalGpuTime      = (float)(gpuNs / 1e9);
+        overallRendererGpu = gpuNs;
 
         systemSize = static_cast<i32>(ecs.systems.size());
         passSize   = 0;

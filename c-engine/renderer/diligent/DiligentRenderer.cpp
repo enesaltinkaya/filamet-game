@@ -3,6 +3,7 @@
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Engine.h"
 #include "Graphics/GraphicsEngine/interface/DeviceContext.h"
+#include "Graphics/GraphicsEngine/interface/Query.h"
 #include "Graphics/GraphicsEngine/interface/RenderDevice.h"
 #include "Graphics/GraphicsEngine/interface/SwapChain.h"
 #include "Platforms/interface/NativeWindow.h"
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 // vulkan types for the Diligent Vk interfaces below (resolved through volk,
 // which Diligent initializes inside its engine factory)
@@ -52,6 +54,41 @@ static RefCntAutoPtr<IRenderDevice> deviceRef;
 static RefCntAutoPtr<IDeviceContext> contextRef;
 static RefCntAutoPtr<ISwapChain> swapChainRef;
 static RefCntAutoPtr<IEngineFactoryVk> factoryRef;
+
+// Whole-frame GPU time (the FPS HUD's gpu row): one QUERY_TYPE_DURATION
+// query. The Vulkan backend implements it as two vkCmdWriteTimestamps at
+// VK_PIPELINE_STAGE_BOTTOM_OF_PIPE — begin and end — so BeginQuery at the
+// top of draw() + EndQuery before Present measures the entire frame's GPU
+// work (clear + all passes + screenshot copy). This is the same number the
+// old engine derived from its own draw-command timestamps.
+static RefCntAutoPtr<IQuery> gpuTimeQuery;
+static double gpuTimeNs = 0.0;  // last COMPLETED frame; 0 until first result
+
+// The driver must expose GPU timestamps; otherwise Diligent never creates
+// the timestamp query pool and BeginQuery would submit with a null pool.
+// Mirrors QueryManagerVk's check (a graphics queue with timestampValidBits
+// > 0). Safe to call once volk is loaded (it is, after the device exists).
+static bool vulkanTimestampsSupported(void) {
+    // The driver rejects a null instance here, so pass the instance volk
+    // loaded when the Diligent factory created it
+    VkInstance instance = volkGetLoadedInstance();
+    uint32_t physCount = 0;
+    if (!instance || vkEnumeratePhysicalDevices(instance, &physCount, nullptr) != VK_SUCCESS || physCount == 0)
+        return true;  // cannot check; assume supported
+    std::vector<VkPhysicalDevice> phys(physCount);
+    vkEnumeratePhysicalDevices(instance, &physCount, phys.data());
+    std::vector<VkQueueFamilyProperties> fams;
+    for (uint32_t i = 0; i < physCount; i++) {
+        uint32_t famCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &famCount, nullptr);
+        fams.resize(famCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &famCount, fams.data());
+        for (const auto& f : fams)
+            if ((f.queueFlags & VK_QUEUE_GRAPHICS_BIT) && f.timestampValidBits > 0)
+                return true;
+    }
+    return false;
+}
 
 class DiligentBackend final : public RenderBackend {
 public:
@@ -110,6 +147,18 @@ public:
             return false;
         }
         swapChain = swapChainRef;
+
+        // GPU-time query for the HUD (see gpuTimeQuery above);
+        // ENGINE_NO_GPU_TIME=1 disables it (A/B timing overhead)
+        if (getenv("ENGINE_NO_GPU_TIME") == nullptr) {
+            if (vulkanTimestampsSupported()) {
+                QueryDesc qt{QUERY_TYPE_DURATION};
+                qt.Name = "frame gpu time";
+                device->CreateQuery(qt, &gpuTimeQuery);
+            } else {
+                utils::warn("renderer: no GPU timestamps on this driver; gpu time HUD stays 0");
+            }
+        }
 
         const double eye[3] = {0.0, 0.0, 5.0};
         const double center[3] = {0.0, 0.0, 0.0};
@@ -170,6 +219,10 @@ public:
 
     void draw() override {
         worldDrewThisFrame = false;
+
+        if (gpuTimeQuery) {
+            context->BeginQuery(gpuTimeQuery);
+        }
 
         auto* rtv = swapChain->GetCurrentBackBufferRTV();
         auto* dsv = swapChain->GetDepthBufferDSV();
@@ -233,7 +286,22 @@ public:
             captureScreenshot();
         }
 
+        if (gpuTimeQuery) {
+            context->EndQuery(gpuTimeQuery);
+        }
+
         swapChain->Present();
+
+        // Harvest the PREVIOUS frame's result: Vulkan fills the pool after the
+        // command buffer completes, so GetData returns true ~1 frame late.
+        // AutoInvalidate is fine — we re-begin the query every frame.
+        if (gpuTimeQuery) {
+            QueryDataDuration qd{};
+            if (gpuTimeQuery->GetData(&qd, sizeof(qd), true)) {
+                gpuTimeNs = qd.Frequency ? 1e9 * (double)qd.Duration / (double)qd.Frequency : 0.0;
+            }
+        }
+
         (void)uiDrew;  // the gui pass flushed + invalidated its own state
     }
 
@@ -327,6 +395,7 @@ public:
         device = nullptr;
         context = nullptr;
 
+        gpuTimeQuery.Release();
         swapChainRef.Release();
         contextRef.Release();
         deviceRef.Release();
@@ -418,6 +487,14 @@ namespace engine::renderer::diligent {
 
 const float4x4& diligentFrameView(void) {
     return gDiligentBackend->frameView;
+}
+
+double diligentGpuTimeNs(void) {
+    return gpuTimeNs;
+}
+
+bool diligentGpuTimeSupported(void) {
+    return gpuTimeQuery != nullptr;
 }
 
 // The world anchor (f64 camera eye): the origin of the render space. The view

@@ -16,6 +16,7 @@
 #include "loadingAzgaar/LoadingAzgaar.h"
 #include "mainMenu/MainMenuGui.h"
 #include "cameraGui/CameraGui.h"
+#include "playerGui/PlayerGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
 #include "azgaar/AzgaarPropMesh.h"
 #include "azgaar/AzgaarProps.h"
@@ -991,7 +992,8 @@ namespace game {
             // (the world stays retained; re-entering re-inits both).
             propsRelease();
             engine::guiManagerAddGuiNextFrame(&mainMenuGui);
-            engine::gui::guiRemove(&cameraGui);
+            engine::guiManagerRemoveGuiNextFrame(&cameraGui);
+            engine::guiManagerRemoveGuiNextFrame(&playerGui);
             engine::gui::guiRemove(&playerActionsGui);
         }
     }
