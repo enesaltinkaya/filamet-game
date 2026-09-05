@@ -24,6 +24,7 @@
 #include "Graphics/GraphicsEngine/interface/Texture.h"
 #include "Graphics/GraphicsEngine/interface/TextureView.h"
 #include "Graphics/GraphicsTools/interface/GraphicsUtilities.h"
+#include "Graphics/GraphicsTools/interface/MapHelper.hpp"
 
 #include <GLTFLoader.hpp>
 #include <GLTF_PBR_Renderer.hpp>
@@ -741,11 +742,19 @@ bool rangeAabbValid(const GpuRange& r) {
 
 // ── Frame attribs (terrain fillFrameAttribs, props f4ExtraData) ───────────
 
-u8 frameAttribsStaging[sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs)];
-
 void fillFrameAttribs(void) {
     const size_t cbSize = sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs);
-    u8* base = frameAttribsStaging;
+    // Exclusive per-frame dynamic-heap region via MapBuffer (the glTF
+    // pass' MapHelper pattern) — NOT UpdateBuffer: that path blind-writes
+    // dynamic-heap offset 0 on virtual dynamic buffers, which collides
+    // with the RMLUI vbo's ring region parked at offset 0 (garbled UI
+    // line 1; cbuffer could read back another pass' staged bytes). The
+    // map must stay before the SRB commit in drawImpl (the descriptor's
+    // dynamic offset is written at commit time). See docs/lessons.md,
+    // the 2026-09-05 dynamic-heap offset-0 entry.
+    MapHelper<HLSL::PBRFrameAttribs> frameMap(context, frameAttribsCB, MAP_WRITE,
+            MAP_FLAG_DISCARD);
+    u8* base = reinterpret_cast<u8*>(static_cast<HLSL::PBRFrameAttribs*>(frameMap));
     memset(base, 0, cbSize);
 
     const float4x4& view = engine::renderer::diligent::diligentFrameView();
@@ -822,8 +831,7 @@ void fillFrameAttribs(void) {
     float3 direction = normalize(float3{sunDir[0], sunDir[1], sunDir[2]});
     GLTF_PBR_Renderer::WritePBRLightShaderAttribs({&sun, nullptr, &direction, 1.0f}, light);
 
-    context->UpdateBuffer(frameAttribsCB, 0, cbSize, base,
-            RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    // `frameMap` (MapHelper) unmaps on scope exit.
 }
 
 void syncEnvironment(void) {

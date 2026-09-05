@@ -38,7 +38,10 @@ static u32 screenshotFrame = 0;
 static u32 renderDocCaptureFrame = 0;
 
 bool rendererScreenshotShouldCapture(void) {
-    if (!screenshotPath || screenshotDone) {
+    if (!screenshotPath) {
+        return false;
+    }
+    if (screenshotDone) {
         return false;
     }
     if (screenshotFrame++ < screenshotStartFrame) {
@@ -49,10 +52,12 @@ bool rendererScreenshotShouldCapture(void) {
 }
 
 void rendererScreenshotDeliver(u8* buffer) {
-    if (!stbi_write_jpg(screenshotPath, (int)window.width, (int)window.height, 4, buffer, 90)) {
-        utils::warn("renderer: cannot save screenshot to %s", screenshotPath);
+    char path[512];
+    snprintf(path, sizeof(path), "%s", screenshotPath);
+    if (!stbi_write_jpg(path, (int)window.width, (int)window.height, 4, buffer, 90)) {
+        utils::warn("renderer: cannot save screenshot to %s", path);
     } else {
-        utils::info("renderer: screenshot saved to %s", screenshotPath);
+        utils::info("renderer: screenshot saved to %s", path);
     }
     free(buffer);
 

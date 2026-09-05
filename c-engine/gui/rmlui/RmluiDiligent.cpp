@@ -740,16 +740,19 @@ void drawImpl(void) {
     // stale frames) — the garbled menu / full-screen wedges this pass shipped
     // with. Same rule as docs/lessons.md "dynamic buffers are per-frame
     // scratch"; the map/draw offset contract is the other half of it.
+    void* vboMapPtr = nullptr;
+    void* iboMapPtr = nullptr;
     {
         void* dst = nullptr;
         context->MapBuffer(vbo, MAP_WRITE, MAP_FLAG_DISCARD, dst);
+        vboMapPtr = dst;
         memcpy(dst, stageVerts.data(), vbytesAll);
         context->UnmapBuffer(vbo, MAP_WRITE);
         context->MapBuffer(ibo, MAP_WRITE, MAP_FLAG_DISCARD, dst);
+        iboMapPtr = dst;
         memcpy(dst, stageIndices.data(), ibytesAll);
         context->UnmapBuffer(ibo, MAP_WRITE);
     }
-
     // 2) Frame cbuffer: y-down ortho over the RmlUi viewport (RmlUi units →
     //    clip). The per-element RmlUi transform is baked into the staged
     //    vertices (column-major M·p + CPU divide, see staging), so the

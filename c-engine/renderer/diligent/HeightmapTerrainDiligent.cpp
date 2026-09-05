@@ -24,6 +24,7 @@
 #include "Graphics/GraphicsEngine/interface/Texture.h"
 #include "Graphics/GraphicsEngine/interface/TextureView.h"
 #include "Graphics/GraphicsTools/interface/GraphicsUtilities.h"
+#include "Graphics/GraphicsTools/interface/MapHelper.hpp"
 
 #include <GLTFLoader.hpp>
 #include <GLTF_PBR_Renderer.hpp>
@@ -704,21 +705,23 @@ void initPass(void) {
 // PS reads that the glTF fill leaves unset (zeroed first): the
 // environment rotation, the single-mip prefiltered-cube level, the IBL
 // scale and the loading-animation parameters.
-namespace {
-
-// CPU-side staging for the frame-attribs cbuffer: built here, then pushed
-// with UpdateBuffer. (MapBuffer(DISCARD) on this buffer handed back a
-// pointer whose GPU-visible content landed shifted by 112 bytes — the draw
-// read a coherent-but-wrong matrix assembled from neighbouring struct
-// fields, clipping the world to a ~5 m patch around the camera. See
-// docs/lessons.md dynamic-buffer entries.)
-u8  frameAttribsStaging[sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs)];
-
-}  // namespace
 
 void fillFrameAttribs(void) {
     const size_t cbSize = sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs);
-    u8* base = frameAttribsStaging;
+    // Map the cbuffer into an EXCLUSIVE per-frame dynamic-heap region
+    // (the glTF pass' MapHelper pattern) instead of UpdateBuffer:
+    // UpdateBuffer on a virtual dynamic buffer blind-copies into
+    // dynamic-heap offset 0 — a region the allocator never tracks — and
+    // the RMLUI vbo's ring region parks at offset 0 in steady state, so
+    // the two clobbered each other: the first UI line's vertices read
+    // cbuffer floats (garbled), and the cbuffer could read back whatever
+    // other pass had staged there (collapsed dark terrain). The map must
+    // stay BEFORE the SRB commit in drawImpl: the descriptor's dynamic
+    // offset is written at commit time and must point at THIS frame's
+    // region — a stale offset is exactly the old "112-byte shift" symptom.
+    MapHelper<HLSL::PBRFrameAttribs> frameMap(context, frameAttribsCB, MAP_WRITE,
+            MAP_FLAG_DISCARD);
+    u8* base = reinterpret_cast<u8*>(static_cast<HLSL::PBRFrameAttribs*>(frameMap));
     memset(base, 0, cbSize);
 
     const float4x4& view = engine::renderer::diligent::diligentFrameView();
@@ -803,8 +806,7 @@ void fillFrameAttribs(void) {
     float3 direction = normalize(float3{sunDir[0], sunDir[1], sunDir[2]});
     GLTF_PBR_Renderer::WritePBRLightShaderAttribs({&sun, nullptr, &direction, 1.0f}, light);
 
-    context->UpdateBuffer(frameAttribsCB, 0, cbSize, base,
-            RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    // `frameMap` (MapHelper) unmaps on scope exit.
 }
 
 // ── Look ───────────────────────────────────────────────────────────────────
