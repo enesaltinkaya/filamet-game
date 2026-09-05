@@ -7,9 +7,9 @@
 struct ImFont;  // imgui type; declared in the global namespace (as in imgui.h)
 
 namespace engine::gui {
-// Initialize the ImGui backend (filagui on filament, imgui_impl_vulkan on
-// diligent) on the active renderer. Must run after rendererInit and after the
-// data manager is ready (loads the UI font from the pak).
+// Initialize the ImGui backend (imgui_impl_vulkan) on the renderer. Must run
+// after rendererInit and after the data manager is ready (loads the UI font
+// from the pak).
 void guiInit(void);
 void guiDestroy(void);
 

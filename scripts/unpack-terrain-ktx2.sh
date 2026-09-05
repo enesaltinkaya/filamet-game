@@ -1,11 +1,9 @@
 #!/bin/bash
 # Unpack the ETC1S KTX2 terrain default textures to plain PNGs.
 #
-# The Diligent terrain pass cannot read KTX2 (imageLoadKtx is a stub since
-# KTX-Software was unlinked — "one binary, one BasisU" lesson), so the six
-# default terrain textures ship as recomposited PNGs beside the .ktx2
-# originals (Filament keeps reading the .ktx2; the PNG is the exact decode of
-# the same ETC1S data).
+# The terrain textures ship as recomposited PNGs beside the .ktx2
+# originals (the renderer reads the PNGs; the PNG is the exact decode of
+# the same ETC1S data, kept for provenance).
 #
 # basisu -unpack writes per-format planes; the auto-composited *_rgba_* PNG
 # has FLAT alpha (documented in docs/lessons.md), so RGB and A planes are

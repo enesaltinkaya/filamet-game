@@ -9,66 +9,61 @@
 
 namespace engine::gltf {
 
-static bool diligent(void) {
-    return renderer::rendererBackend() == renderer::Backend::Diligent;
-}
-
 bool gltfInit(void) {
-    return diligent() ? gltfInitDiligent() : gltfInitFilament();
+    return gltfInitDiligent();
 }
 
 bool gltfLoad(const char* pakPath) {
-    return diligent() ? gltfLoadDiligent(pakPath) : gltfLoadFilament(pakPath);
+    return gltfLoadDiligent(pakPath);
 }
 
 bool gltfPlaceAt(double x, double y, double z) {
-    return diligent() ? gltfPlaceAtDiligent(x, y, z) : gltfPlaceAtFilament(x, y, z);
+    return gltfPlaceAtDiligent(x, y, z);
 }
 
 bool gltfPlaceAtFacing(double x, double y, double z, f32 yaw) {
-    return diligent() ? gltfPlaceAtFacingDiligent(x, y, z, yaw) : gltfPlaceAtFacingFilament(x, y, z, yaw);
+    return gltfPlaceAtFacingDiligent(x, y, z, yaw);
 }
 
 void gltfUpdate(double elapsedSeconds) {
-    diligent() ? gltfUpdateDiligent(elapsedSeconds) : gltfUpdateFilament(elapsedSeconds);
+    gltfUpdateDiligent(elapsedSeconds);
 }
 
 bool gltfBoundingBox(f32 min[3], f32 max[3]) {
-    return diligent() ? gltfBoundingBoxDiligent(min, max) : gltfBoundingBoxFilament(min, max);
+    return gltfBoundingBoxDiligent(min, max);
 }
 
 bool gltfLocalBoundingBox(f32 min[3], f32 max[3]) {
-    return diligent() ? gltfLocalBoundingBoxDiligent(min, max) : gltfLocalBoundingBoxFilament(min, max);
+    return gltfLocalBoundingBoxDiligent(min, max);
 }
+
 bool gltfLoadAnimations(const char* pakPath) {
-    return diligent() ? gltfLoadAnimationsDiligent(pakPath) : gltfLoadAnimationsFilament(pakPath);
+    return gltfLoadAnimationsDiligent(pakPath);
 }
 
 u32 gltfAnimationCount(void) {
-    return diligent() ? gltfAnimationCountDiligent() : gltfAnimationCountFilament();
+    return gltfAnimationCountDiligent();
 }
 
 const char* gltfAnimationName(u32 index) {
-    return diligent() ? gltfAnimationNameDiligent(index) : gltfAnimationNameFilament(index);
+    return gltfAnimationNameDiligent(index);
 }
 
 f32 gltfAnimationDuration(u32 index) {
-    return diligent() ? gltfAnimationDurationDiligent(index) : gltfAnimationDurationFilament(index);
+    return gltfAnimationDurationDiligent(index);
 }
 
 bool gltfPlayAnimation(const char* name, f32 speed, bool loop) {
-    return diligent() ? gltfPlayAnimationDiligent(name, speed, loop) : gltfPlayAnimationFilament(name, speed, loop);
+    return gltfPlayAnimationDiligent(name, speed, loop);
 }
 
 bool gltfPlayAnimationBlended(const char* name, f32 speed, bool loop, f32 blendSeconds) {
-    return diligent() ? gltfPlayAnimationBlendedDiligent(name, speed, loop, blendSeconds)
-                      : gltfPlayAnimationBlendedFilament(name, speed, loop, blendSeconds);
+    return gltfPlayAnimationBlendedDiligent(name, speed, loop, blendSeconds);
 }
 
 void gltfStopAnimation(void) {
-    diligent() ? gltfStopAnimationDiligent() : gltfStopAnimationFilament();
+    gltfStopAnimationDiligent();
 }
-
 
 void gltfFrameCamera(void) {
     f32 min[3];
@@ -95,7 +90,7 @@ void gltfFrameCamera(void) {
 }
 
 void gltfDestroy(void) {
-    diligent() ? gltfDestroyDiligent() : gltfDestroyFilament();
+    gltfDestroyDiligent();
 }
 
 }  // namespace engine::gltf

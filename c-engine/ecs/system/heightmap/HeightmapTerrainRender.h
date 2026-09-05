@@ -8,12 +8,12 @@
  * Backend-agnostic API of the heightmap terrain render pass (the GPU half
  * of ecs/system/heightmap/HeightmapTerrain). The game registers the
  * per-world look (biome/climate textures + bounds + thresholds) at world
- * load; the active render backend draws the streaming tiles each frame.
+ * load; the render backend draws the streaming tiles each frame.
  *
- * Dispatch: every entry point forwards to the active backend's half
- * (filament now; diligent in phase 6 of plans/azgaar-terrain.md). The
- * per-frame call comes from the backend's draw (see FilamentRenderer);
- * the registration calls come from the game (main thread).
+ * Dispatch: every entry point forwards to the backend's half
+ * (renderer/diligent/HeightmapTerrainDiligent.cpp). The per-frame call
+ * comes from the backend's draw (see DiligentRenderer); the registration
+ * calls come from the game (main thread).
  */
 
 namespace engine {

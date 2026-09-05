@@ -1,28 +1,11 @@
-// Internal split of the gltf module: dispatch (Gltf.cpp) + one implementation
-// per render backend.
+// Internal split of the gltf module: public dispatch (Gltf.cpp) + the
+// Diligent implementation (GltfDiligent.cpp).
 
 #include "Defines.h"
 
 #include <cstddef>
 
 namespace engine::gltf {
-
-// ── filament (GltfFilament.cpp) ──
-bool gltfInitFilament(void);
-bool gltfLoadFilament(const char* pakPath);
-bool gltfPlaceAtFilament(double x, double y, double z);
-bool gltfPlaceAtFacingFilament(double x, double y, double z, f32 yaw);
-void gltfUpdateFilament(double elapsedSeconds);
-void gltfDestroyFilament(void);
-bool gltfBoundingBoxFilament(float min[3], float max[3]);
-bool gltfLocalBoundingBoxFilament(float min[3], float max[3]);
-bool gltfLoadAnimationsFilament(const char* pakPath);
-u32 gltfAnimationCountFilament(void);
-const char* gltfAnimationNameFilament(u32 index);
-f32 gltfAnimationDurationFilament(u32 index);
-bool gltfPlayAnimationFilament(const char* name, f32 speed, bool loop);
-bool gltfPlayAnimationBlendedFilament(const char* name, f32 speed, bool loop, f32 blendSeconds);
-void gltfStopAnimationFilament(void);
 
 // ── diligent (GltfDiligent.cpp) ──
 bool gltfInitDiligent(void);

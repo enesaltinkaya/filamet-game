@@ -8,8 +8,8 @@
  * corners (world position + border-aware one-sided stencil normal) over
  * HEIGHTMAP_LATTICE_SEG segments, plus the shared index buffer.
  *
- * This is the canonical geometry both render backends build their tile
- * meshes from (Filament phase 5, Diligent phase 6): the corner math is a
+ * This is the canonical geometry the render backend builds its tile
+ * meshes from: the corner math is a
  * port of the old engine's implicit-lattice vertex stage (texel-centre
  * bilinear heights, border-aware normals), so the rendered surface is
  * bit-identical to the CPU/physics bilinear surface and adjacent tiles

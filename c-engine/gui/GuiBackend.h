@@ -1,17 +1,11 @@
 // Internal gui split: GuiManager.cpp owns fonts/input/scale + dispatch; the
-// backend halves implement the ImGui render path and UI textures.
+// backend half (GuiDiligent.cpp) implements the ImGui render path and UI
+// textures.
 
 #include "Defines.h"
 #include <imgui.h>
 
 namespace engine::gui {
-
-// ── filament (GuiFilament.cpp) ──
-void guiBackendInitFilament(void);
-void guiBackendDestroyFilament(void);
-void guiBackendFrameFilament(float dt, u32 width, u32 height, void (*drawGuis)());
-ImTextureID guiTextureCreateFilament(u32 width, u32 height, u8* rgbaPixels);
-void guiTextureDestroyFilament(ImTextureID texture);
 
 // ── diligent (GuiDiligent.cpp) ──
 void guiBackendInitDiligent(void);

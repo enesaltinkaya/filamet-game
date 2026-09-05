@@ -88,7 +88,7 @@ cbuffer cbFrameAttribs
 
 // ── SRV slots ──────────────────────────────────────────────────────────────
 // Default terrain textures (engine pak, KTX2/BC7; albedos created as
-// BC7_UNORM_SRGB so the sRGB decode matches the Filament pass).
+// BC7_UNORM_SRGB so the sRGB decode matches the composited look).
 Texture2D g_GrassAlbedo;
 Texture2D g_GrassNormal;
 Texture2D g_CliffAlbedo;

@@ -10,8 +10,8 @@ export ENGINE_DEBUG=1
 
 if [[ $1 == "renderdoc" ]]; then
     # App-side API (TriggerCapture) via preload; hooks come from the implicit
-    # Vulkan layer (required: filament's bluevk loads Vulkan entry points via
-    # dlopen/dlsym, which plain symbol interposition cannot intercept).
+    # Vulkan layer (required: Diligent's Vulkan backend loads Vulkan entry
+    # points via volk, which plain symbol interposition cannot intercept).
     # Both map the same library file, so only one RenderDoc instance exists.
     export LD_PRELOAD=/home/enes/Apps/renderdoc/build/lib/librenderdoc.so
     export ENABLE_VULKAN_RENDERDOC_CAPTURE=1

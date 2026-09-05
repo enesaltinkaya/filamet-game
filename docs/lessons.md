@@ -4,6 +4,94 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-05 — gltfpack output is only partially compatible with Diligent's GLTF loader: meshopt-compressed buffers AND int16 rotation keys both load as garbage — the character renders invisible/NaN
+
+**Rule:** the gltf → Diligent asset path has two hard constraints, neither
+checked at load time (both are `VERIFY`s compiled out of the release
+prebuilt libs, so failures are silent):
+1. **No meshopt buffer compression** (`gltfpack -cc`): Diligent has no
+   EXT_meshopt_compression support. The JSON parses fine (accessor min/max
+   intact) but every buffer read is compressed bytes — bounding boxes come
+   out at ~3e38 and geometry is garbage. Old filament/cgltf decoded it; the
+   new path must not ship `-cc`.
+2. **Animation rotation keys must be fp32**: gltfpack hard-codes rotation
+   sampler outputs as int16 NORMALIZED snorm (`writeKeyframeStream`), and
+   NO flag changes it (`-noq` still emits r_16 normalized; `-ar` only picks
+   the bit depth). Diligent's `LoadAnimations` memcpy/reinterprets sampler
+   outputs as float4 — quats like (-298, 437, -1576, 32725) flow through
+   slerp/normalize into the joint matrices, NaN the entire skeleton (probe:
+   every bone-matrix scale reads NaN, not 0.0) and the character vanishes.
+   Translation/scale keys stay fp32 (unless `-at/-as` quantize them); vertex
+   attribute quantization (u16 uvs/normals) is fine — the VERTEX converter
+   handles normalized ints.
+
+**Fix:** `scripts/export-models.sh` drops `-cc`, and a new post-gltfpack step
+`scripts/gltf-rotation-f32.py` rewrites every int16-normalized rotation
+output accessor as fp32 (v = max(snorm16/32767, -1)) into a fresh buffer
+region + accessor. Re-run the export whenever eve/animations change.
+
+**Probe:** `ENGINE_GLTF_DEBUG=1` in the new engine dumps the mesh AABB at
+load (~3e38 = compressed buffer data) and, for the first 3 animation frames,
+walks the joint chain for the first NaN plus the min/max bone-matrix scale —
+**1.0 everywhere = healthy** (IBMs legitimately compensate the 0.01 cm-rig
+scale on Hips); 0.0 below the root = compounding local scale (the 2026-09-04
+gltf-standardize lesson); NaN = quantized/garbage sampler data.
+
+**Also hit in the same session (each silently fatal):**
+- `utils::dataManagerRead` does NOT decompress zstd — the shipped
+  `<model>.zstd` must be decompressed by the consumer (magic 28 B5 2F FD;
+  tinygltf's parse error reads "invalid literal; last read: '('" — 0x28 is
+  the zstd magic byte).
+- tinygltf picks GLB-vs-JSON parsing from the FileName EXTENSION — a pak
+  path like `models/eve.zstd` (even decompressed correctly) is parsed as
+  ASCII JSON and fails at the 'glTF' magic. Stage a `"<path>.glb"` name for
+  the loader; serve the real pak bytes from the ReadWholeFile callback.
+- `GLTF::Model(CI)` (the CPU-only ctor) does NOT parse the file at all — it
+  only sets up attribute layouts (0 nodes, no error). For a CPU-only load
+  (the animation-source glb) use `Model(nullptr, nullptr, CI)`: the device/
+  context ctor runs the full parse and skips GPU resources on nulls.
+- `GLTF_PBR_Renderer::CreateInfo.MaxJointCount` defaults to 64 — eve has 65
+  joints; the 65th silently clips (set 128).
+- Appending to a GLB's BIN chunk (the f32 rotation pass) requires updating
+  `buffers[0].byteLength` (same rule as the 2026-09-04 singlekey lesson;
+  forgetting it segfaults tinygltf at load).
+- Placement for the Diligent path (row-vector matrices, applied left to
+  right): root = `T(-minc) * R(yaw) * T(pos - minc)` — the local AABB min
+  corner (feet) lands exactly at pos for every yaw. Cache the built matrix:
+  `gltfPlaceAt*` sets a dirty flag, `gltfUpdate` consumes it, and frames
+  with no placement call (waitingForGround) must keep reusing the cached
+  root, not fall back to identity.
+
+**Incident:** bringing the player character to the Diligent backend after the
+filament removal. Sequence of silent failures, each invisible without its
+probe: (1) raw zstd parsed as JSON ('(' error); (2) GLB parsed as JSON ('g'
+error) after adding decompression; (3) bounds ~3e38 from meshopt-compressed
+buffers — the loader had no error; (4) anim source loaded with 0 nodes from
+the CPU-only ctor; (5) character present but invisible — NaN skeleton from
+gltfpack's int16 rotation keys; (6) segfault from the BIN-append without
+`buffers[].byteLength`. Each fix is in the rules above; the final state is
+verified by the character portrait (ENGINE_CAMERA=character), the auto-run
+third-person view (back to camera, mid-stride), and ENGINE_TPOSE=1.
+
+---
+
+## 2026-09-05 — Automated-run env pitfalls: ENGINE_LOG_TIMEOUT is MILLISECONDS, and piping the game through `head` SIGPIPE-kills it mid-run
+
+**Rule:** `ENGINE_LOG_TIMEOUT` is multiplied by MILLION and added to nanos(),
+so the value is milliseconds (`ENGINE_LOG_TIMEOUT=30000` = 30 s — `25` quits on
+frame 1, which looks like "the game starts and instantly shuts down"). And never
+pipe the game's stdout into `head` (or any early-exiting reader): when head
+exits, the next log write gets SIGPIPE and the game dies silently mid-run — no
+"engine: stopping", no crash, screenshot never fires. Redirect to a file and
+grep the file afterwards.
+
+**Incident:** during the filament-removal verification, three consecutive
+"broken" runs (no screenshot, instant shutdown) were actually self-inflicted:
+`ENGINE_LOG_TIMEOUT=25` meant 25 ms, and `... | grep ... | head -25` killed the
+game by SIGPIPE the moment head collected its 25 lines.
+
+---
+
 ## 2026-09-05 — Runtime-compiled HLSL (glslang) consumes cbuffer matrices TRANSPOSED relative to Diligent's row-major math — and a second cbuffer in the same PSO bound ambiguously
 
 **Rule:** every runtime-compiled HLSL shader on the Diligent backend (device->

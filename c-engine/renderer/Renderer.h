@@ -4,8 +4,6 @@
 
 namespace engine::renderer {
 
-enum class Backend : u8 { Filament = 0, Diligent = 1 };
-
 // Upscaling modes for the graphics settings menu. Quality/Balanced/Performance/
 // UltraPerformance are the old engine's FSR3 resolution presets, kept as the
 // render-scale of TAA upscaling (the scene renders at scale and TAA
@@ -42,17 +40,13 @@ struct GraphicsSettings {
     bool fog = true;               // distance fog on/off (color/density come from the world)
 };
 
-// Active backend (valid after rendererInit).
-Backend rendererBackend(void);
-const char* rendererBackendName(void);
-
 bool rendererInit(const char* title, u32 width, u32 height);
 void rendererDraw(void);
 void rendererDestroy(void);
 
 // Camera: eye/center/up in ABSOLUTE world space (double precision — the
 // camera position is the world anchor; the renderer re-expresses the whole
-// frame relative to it for float precision, see FilamentRenderer). lookAt
+// frame relative to it for float precision, see DiligentRenderer). lookAt
 // semantics, world up +Y, camera forward = normalize(center - eye).
 // Projections use a 60 degree vertical fov with 0.1..20000 depth.
 void rendererCameraLookAt(const double eye[3], const double center[3], const double up[3]);
@@ -67,8 +61,7 @@ void rendererCameraGet(f32 pos[3], f32 forward[3]);
 double rendererWorldAnchorX(void);
 double rendererWorldAnchorZ(void);
 
-// Scene lighting (sun = directional). Both are backend-agnostic: filament maps
-// them to LightManager/IndirectLight, diligent feeds its PBR/splat shaders.
+// Scene lighting (sun = directional); the backend feeds its PBR shaders.
 void rendererSetSun(const f32 direction[3], const f32 color[3], f32 intensity);
 void rendererSetAmbient(const f32 color[3], f32 intensity);
 

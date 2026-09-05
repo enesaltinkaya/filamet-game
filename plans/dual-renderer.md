@@ -1,5 +1,12 @@
 # Dual renderer: Filament + Diligent side by side
 
+> **OBSOLETE (2026-09-05):** the filament backend was removed — diligent is the
+> only render path. This doc stays as the historical design record; the
+> backend-selection plumbing it describes (ENGINE_RENDERER, the
+> `rendererBackend` setting, Backend::Filament/Backend::Diligent dispatch) no
+> longer exists. Pending diligent gaps it implied: props pass, gltf
+> zstd/animation/placement (see PropsRender.cpp and GltfDiligent.cpp stubs).
+
 Follow-up to `diligent-migration.md`: instead of replacing Filament, the engine keeps
 **two render paths** — `filament` (default) and `diligent` — selected at startup by a
 setting (env var `ENGINE_RENDERER=filament|diligent` overrides the persisted

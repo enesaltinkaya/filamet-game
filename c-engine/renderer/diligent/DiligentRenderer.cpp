@@ -73,7 +73,7 @@ public:
         utils::info("renderer: diligent device created (%s)", device->GetAdapterInfo().Description);
 
         // Attach the swapchain to the SDL window's native handle (Xlib on
-        // linux, HWND on windows — same X11 path filament uses)
+        // linux, HWND on windows)
         SwapChainDesc scDesc;
         scDesc.ColorBufferFormat = TEX_FORMAT_RGBA8_UNORM_SRGB;
         scDesc.DepthBufferFormat = TEX_FORMAT_D32_FLOAT;
@@ -183,8 +183,8 @@ public:
             utils::warn("cam: fmt color=%d depth=%d bufferCount=%d", (int)swapChain->GetDesc().ColorBufferFormat,
                     (int)swapChain->GetDesc().DepthBufferFormat, (int)swapChain->GetDesc().BufferCount);
         }
-        // heightmap terrain: budgeted GPU tile uploads (mirrors
-        // FilamentRenderer::draw; the pass lazily inits on the first update)
+        // heightmap terrain: budgeted GPU tile uploads (the pass lazily
+        // inits on the first update)
         heightmapTerrainRenderUpdate();
 
         worldDraw(context);
@@ -298,8 +298,7 @@ public:
     }
 
     void cameraLookAt(const double eye[3], const double center[3], const double up[3]) override {
-        // Parked backend: absolute f32 camera, no world anchor (the filament
-        // path is the live one; this just keeps compiling).
+        // Absolute f32 camera, no world anchor (worldAnchorX/Z report 0).
         for (int i = 0; i < 3; i++) {
             camEye[i] = (f32)eye[i];
             camCenter[i] = (f32)center[i];
@@ -328,8 +327,8 @@ public:
         engine::gltf::gltfIblUpdateDiligent(color, intensity);
     }
 
-    // Distance fog is not implemented on the Diligent path (backend is
-    // parked; the filament path is the live render path).
+    // Distance fog is not implemented yet on this path (no-op; the clear
+    // color matches the sky so the horizon still reads correctly).
     void setFog(const f32 color[3], f32 density) override {
         (void)color;
         (void)density;

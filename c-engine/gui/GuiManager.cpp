@@ -94,9 +94,7 @@ public:
 
     void removed() override {
         // the backend owns the ImGui context teardown
-        renderer::rendererBackend() == renderer::Backend::Diligent
-                ? guiBackendDestroyDiligent()
-                : guiBackendDestroyFilament();
+        guiBackendDestroyDiligent();
         ctx = nullptr;
         fontBody = nullptr;
         fontTitle = nullptr;
@@ -133,20 +131,16 @@ public:
         feedInput(io);
 
         // NewFrame + emit every gui's widgets + Render; the renderer submits
-        // the UI pass afterward (filagui view / imgui vulkan pass)
-        renderer::rendererBackend() == renderer::Backend::Diligent
-                ? guiBackendFrameDiligent((float)utils::timer.dt, window.width, window.height,
-                          drawActiveGuis)
-                : guiBackendFrameFilament((float)utils::timer.dt, window.width, window.height,
-                          drawActiveGuis);
+        // the UI pass afterward (imgui vulkan pass)
+        guiBackendFrameDiligent((float)utils::timer.dt, window.width, window.height,
+                drawActiveGuis);
     }
 };
 
 static GuiManagerSystem guiManager;
 
 void guiInit(void) {
-    const bool diligent = renderer::rendererBackend() == renderer::Backend::Diligent;
-    utils::info("gui: initializing ImGui backend (%s)", diligent ? "vulkan" : "filagui");
+    utils::info("gui: initializing ImGui backend (vulkan)");
 
     ctx = ImGui::CreateContext();
     // Fonts: montserrat.ttf is the raw variable font (default instance =
@@ -177,7 +171,7 @@ void guiInit(void) {
     for (ImFont* f : {fontBody, fontTitle, fontMenu, fontMono})
         if (f) f->Scale = 1.0f / kFontOversample;
 
-    diligent ? guiBackendInitDiligent() : guiBackendInitFilament();
+    guiBackendInitDiligent();
 
     systemAdd(guiPriority, &guiManager);
 }
@@ -204,16 +198,10 @@ bool guiIsActive(void) {
 }
 
 ImTextureID guiTextureCreate(u32 width, u32 height, u8* rgbaPixels) {
-    return renderer::rendererBackend() == renderer::Backend::Diligent
-            ? guiTextureCreateDiligent(width, height, rgbaPixels)
-            : guiTextureCreateFilament(width, height, rgbaPixels);
+    return guiTextureCreateDiligent(width, height, rgbaPixels);
 }
 
 void guiTextureDestroy(ImTextureID texture) {
-    if (renderer::rendererBackend() == renderer::Backend::Diligent) {
-        guiTextureDestroyDiligent(texture);
-    } else {
-        guiTextureDestroyFilament(texture);
-    }
+    guiTextureDestroyDiligent(texture);
 }
 }  // namespace engine::gui

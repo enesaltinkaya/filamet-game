@@ -13,7 +13,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-nullability-completeness -Wno-nulla
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-initializer-overrides")                               # struct params
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c99-designator")                                    # nested/array/mixed designators (P0963)
 # entt uses designated initializers in its id storage (entt::literals / internal)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unsafe-buffer-usage")                              # filament/utils use plenty of raw pointers
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unsafe-buffer-usage")                              # diligent/imgui use plenty of raw pointers
 
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CXX_FLAGS_RELEASE "-O2 -march=x86-64 -mtune=generic -flto -DNDEBUG" CACHE STRING "")

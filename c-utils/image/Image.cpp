@@ -10,17 +10,17 @@
 #include <stdlib.h>
 
 namespace utils {
-// KTX2 CPU decode is gone on purpose: KTX-Software's bundled BasisU
-// (newer ABI than Filament's) collided with Filament's ktxreader when both
-// were linked — its basist:: definitions won and every UASTC transcode via
-// ktxreader failed. GPU-side KTX2 goes through Filament's ktxreader
-// (HeightmapTerrainFilament.cpp, gltfio); this file now only decodes
-// uncompressed formats (PNG etc.) via stb.
+// KTX2 CPU decode is gone on purpose: when KTX-Software and the old
+// filament-based ktxreader were linked together, their two bundled BasisU
+// copies collided (the KTX-Software basist:: definitions won and every
+// UASTC transcode failed). GPU-side KTX2 now goes through Diligent's
+// texture loader; this file only decodes uncompressed formats (PNG etc.)
+// via stb.
 Image imageLoadFromData(const u8 *data, u64 size, const char *mime) {
   Image image = {};
   if (strEndsWithC(mime, "ktx2") || strEndsWithC(mime, "ktx")) {
-    warn("image: KTX2 CPU decode removed (BasisU collision with Filament); "
-         "use the renderer's ktxreader path: %s", mime);
+    warn("image: KTX2 CPU decode removed (BasisU collision, see docs/lessons.md); "
+         "use the renderer's texture loader path: %s", mime);
     return image;
   }
 
@@ -50,8 +50,8 @@ Image imageLoad(const char *path) {
 }
 
 Image imageLoadKtx(const char *path, KtxFormat format) {
-  // Stub: KTX-Software is no longer linked (BasisU collision with Filament,
-  // see imageLoadFromData). Only the ignored Diligent terrain pass called
+  // Stub: KTX-Software is no longer linked (BasisU collision, see
+  // imageLoadFromData). Only the ignored Diligent terrain pass called
   // this; ktx2 paths now get an empty image + a loud warning, anything else
   // still decodes via stb.
   (void)format;

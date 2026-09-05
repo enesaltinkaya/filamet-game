@@ -4,7 +4,7 @@
 Blender's glTF exporter writes a character whose armature object carries a
 90-degree X rotation + 0.01 scale (the rig is authored in centimetres) while
 the skinned mesh's POSITION data is already in metres. A standard renderer
-(Filament/gltfio) then applies the armature transform twice: the character
+then applies the armature transform twice: the character
 comes out tipped on its side and 100x too small ("eve was 2cm").
 
 This script rewrites the plain (pre-gltfpack) GLB so the hierarchy is

@@ -23,11 +23,11 @@ void CreditsGui::draw() {
     ImGui::Begin("CREDITS", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
 
     ImGui::PushFont(engine::gui::guiGetBodyFont());
-    ImGui::TextWrapped("Filament engine port");
+    ImGui::TextWrapped("Diligent engine port");
     ImGui::Spacing();
-    ImGui::Text("UI      Dear ImGui + filagui");
+    ImGui::Text("UI      Dear ImGui");
     ImGui::Text("Layout  Yoga (flexbox)");
-    ImGui::Text("3D      Google Filament");
+    ImGui::Text("3D      Diligent Engine");
     ImGui::Spacing();
     ImGui::TextWrapped("The old engine's RMLUI (HTML/CSS/Lua) menus are being rebuilt as ImGui, screen by screen.");
     ImGui::PopFont();

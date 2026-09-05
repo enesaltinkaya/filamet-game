@@ -894,10 +894,18 @@ namespace game {
             // after framing, once the anchor exists).
             f32 lmin[3], lmax[3];
             if (engine::gltf::gltfLocalBoundingBox(lmin, lmax)) {
-                const double cx   = spawnPt[0] + (lmin[0] + lmax[0]) * 0.5;
-                const double cz   = spawnPt[2] + (lmin[2] + lmax[2]) * 0.5;
+                // feet y: the heightmap surface at the spawn xz — the raw world
+                // point's y can sit metres off the ground (playerSpawn snaps;
+                // frame the same vantage or the model drifts out of frame)
+                const f32 feetY = engine::heightmapTerrainGetActive()
+                        ? engine::heightmapTerrainSample(engine::heightmapTerrainGetActive(), spawnPt[0], spawnPt[2])
+                        : spawnPt[1];
+                // placement pins the bbox MIN corner at the spawn point, so the
+                // body centre sits at spawn + (centre - min), not spawn + centre
+                const double cx   = spawnPt[0] + (lmax[0] - lmin[0]) * 0.5;
+                const double cz   = spawnPt[2] + (lmax[2] - lmin[2]) * 0.5;
                 const double h    = lmax[1] - lmin[1];
-                const double chest[3] = {cx, spawnPt[1] + lmin[1] + h * 0.6, cz};
+                const double chest[3] = {cx, feetY + h * 0.6, cz};
                 const double eye[3]   = {chest[0] + h, chest[1] + h * 0.2, chest[2] - h};
                 const double up[3]    = {0.0, 1.0, 0.0};
                 utils::info("game: character camera — local bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",

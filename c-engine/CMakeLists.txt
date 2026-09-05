@@ -15,58 +15,23 @@ set_source_files_properties(${imgui_vulkan_backend} PROPERTIES
 # c-utils is PUBLIC: its include dirs and PCH propagate to anything linking c-engine
 target_link_libraries(c-engine PUBLIC c-utils)
 
+# zstd (model assets ship as zstd-compressed glb — decompressed in the gltf
+# loader; libzstd.a is linked by c-game)
+target_include_directories(c-engine PUBLIC ${thirdparty}/zstd/git/lib)
+
 target_include_directories(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ── entt (header only) ──────────────────────────────────────────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/entt/git/single_include)
 
-# zstd headers (models are zstd-compressed glbs, loaded as <name>.zstd;
-# the lib itself is linked by c-game — same pattern as the old engine)
-target_include_directories(c-engine PRIVATE ${thirdparty}/zstd/git/lib)
-
 # ── SoLoud (audio, prebuilt — libsoloud.a linked by c-game) ─────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/soloud/git/include)
 
-# ── imgui + filagui (GUI, prebuilt — see c-game link line) ────────────────────
+# ── imgui (GUI, prebuilt — see c-game link line) ─────────────────────────────
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git)
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git/backends)  # imgui_impl_vulkan
-target_include_directories(c-engine PUBLIC ${thirdparty}/filament/git/libs/filagui/include)
 
-# ── filament public headers ─────────────────────────────────────────────────
-set(filament_git ${thirdparty}/filament/git)
-set(filament_root ${filament_git}/${platform_dir})
-target_include_directories(c-engine PUBLIC
-    ${filament_git}
-    ${filament_git}/filament/include
-    ${filament_git}/filament/backend/include
-    ${filament_git}/libs/filabridge/include
-    ${filament_git}/libs/filaflat/include
-    ${filament_git}/libs/gltfio/include
-    ${filament_git}/libs/ktxreader/include
-    ${filament_git}/libs/math/include
-    ${filament_git}/libs/utils/include
-    # SDL3 (our own prebuilt, cpp-thirdparty/sdl) — headers live under include/SDL3
-    ${thirdparty}/sdl/git/include/SDL3
-    ${filament_git}/third_party/robin-map/include  # tsl (NameComponentManager)
-    ${filament_git}/third_party/basisu/transcoder   # basisu_transcoder.h (ktx2 → BC7)
-
-    # generated gltfio resources (materials/uberarchive.h)
-    ${filament_root}/libs/gltfio
-)
-
-# filament's public headers (BlueVK.h, WebGPUPlatform.h) gate their Linux
-# X11/XCB/Xlib paths on these defines; must match how the prebuilt filament
-# libs were compiled
-target_compile_definitions(c-engine PUBLIC
-    FILAMENT_SUPPORTS_X11=1
-    FILAMENT_SUPPORTS_XCB=1
-    FILAMENT_SUPPORTS_XLIB=1
-)
-
-# gltfio_core was built with draco support enabled
-target_compile_definitions(c-engine PUBLIC GLTFIO_DRACO_SUPPORTED=1)
-
-# ── Diligent Engine (second render path, selected by ENGINE_RENDERER/setting) ──
+# ── Diligent Engine (the render backend) ─────────────────────────────────────
 set(diligent_git ${thirdparty}/diligent/git)
 set(diligent_root ${diligent_git}/${platform_dir})
 
@@ -105,7 +70,7 @@ target_include_directories(c-engine PUBLIC
 )
 
 # prebuilt Diligent static libraries — linked by c-game (one --start-group on
-# the exe, same approach as FILAMENT_LIBS)
+# the exe)
 set(DILIGENT_LIBS
     ${diligent_root}/DiligentFX/libDiligentFX.a
     ${diligent_root}/DiligentTools/libDiligentTools.a
@@ -141,47 +106,13 @@ set(DILIGENT_LIBS
     PARENT_SCOPE
 )
 
-# ── filament prebuilt static libraries ──────────────────────────────────────
-# linked by the c-game executable (see c-game/CMakeLists.txt) — a static lib
-# can't link other static libs, and keeping one --start-group on the exe keeps
-# the linker happy
-set(FILAMENT_LIBS
-    ${filament_root}/filament/libfilament.a
-    ${filament_root}/filament/backend/libbackend.a
-    ${filament_root}/libs/filabridge/libfilabridge.a
-    ${filament_root}/libs/filaflat/libfilaflat.a
-    ${filament_root}/libs/math/libmath.a
-    ${filament_root}/libs/utils/libutils.a
-    ${filament_root}/libs/bluegl/libbluegl.a
-    ${filament_root}/libs/bluevk/libbluevk.a
-
-    # gltfio (glTF loading, ubershader materials — no filamat/JIT needed)
-    ${filament_root}/libs/gltfio/libgltfio_core.a
-    ${filament_root}/libs/gltfio/libuberarchive.a
-    ${filament_root}/libs/geometry/libgeometry.a
-    ${filament_root}/libs/ktxreader/libktxreader.a
-    ${filament_root}/libs/image/libimage.a
-    ${filament_root}/libs/uberz/libuberzlib.a
-    ${filament_root}/third_party/draco/tnt/libdracodec.a
-    ${filament_root}/third_party/meshoptimizer/tnt/libmeshoptimizer.a
-    ${filament_root}/third_party/mikktspace/libmikktspace.a  # geometry: tangent-space generation
-    ${filament_root}/third_party/basisu/tnt/libbasis_transcoder.a
-    ${filament_root}/third_party/stb/tnt/libstb.a
-
-    # filament third_party runtime deps
-    ${filament_root}/third_party/smol-v/tnt/libsmol-v.a
-    ${filament_root}/third_party/libz/tnt/libz.a
-    ${filament_root}/third_party/zstd/tnt/libzstd.a
-
-    # windowing (SDL3 dlopens X11/ALSA at runtime — no extra system libs needed)
-    ${thirdparty}/sdl/git/${platform_dir}/libSDL3.a
-    PARENT_SCOPE
-)
+# SDL3 (windowing; headers live under include/SDL3)
+target_include_directories(c-engine PUBLIC ${thirdparty}/sdl/git/include/SDL3)
 
 target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 
-# the diligent TUs pull heavy Diligent headers that clash with the filament
-# pch's compilation cost — skip the shared pch for them
+# the diligent TUs pull heavy Diligent/glslang headers that clash with the
+# shared pch — skip the pch for them
 set_source_files_properties(
     renderer/diligent/DiligentRenderer.cpp
     renderer/diligent/HeightmapTerrainDiligent.cpp
@@ -194,48 +125,10 @@ set_source_files_properties(
 target_include_directories(c-engine PUBLIC /home/enes/Apps/renderdoc/renderdoc/api/app)
 target_link_libraries(c-engine PUBLIC ${CMAKE_DL_LIBS})
 
-# ── heightmap terrain material (compiled with matc into the game data dir) ─
-# The .filamat is committed (the pak pipeline ships it to pak_1); this step
-# keeps it in sync with terrain.mat whenever it changes. Regeneration needs
-# the prebuilt matc (build-linux/tools/matc); on platforms without it the
-# committed blob is used as-is — re-generate on a machine that has it when
-# the .mat changes.
-set(MATC ${filament_root}/tools/matc/matc)
-set(HEIGHTMAP_TERRAIN_MAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/renderer/filament/materials/terrain.mat)
-set(HEIGHTMAP_TERRAIN_MAT_OUT ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain.filamat)
-if (EXISTS ${MATC})
-    add_custom_command(
-        OUTPUT ${HEIGHTMAP_TERRAIN_MAT_OUT}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
-        COMMAND ${MATC} -a vulkan -l 2 -o ${HEIGHTMAP_TERRAIN_MAT_OUT} ${HEIGHTMAP_TERRAIN_MAT_SRC}
-        DEPENDS ${HEIGHTMAP_TERRAIN_MAT_SRC} ${MATC}
-        COMMENT "matc heightmap terrain.mat"
-        VERBATIM
-    )
-    add_custom_target(heightmap_terrain_mat DEPENDS ${HEIGHTMAP_TERRAIN_MAT_OUT})
-    add_dependencies(c-engine heightmap_terrain_mat)
-
-    # ── Azgaar props material (same source-in-tree / artifact-in-pak pattern) ─
-    set(AZGAAR_PROPS_MAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/renderer/filament/materials/props.mat)
-    set(AZGAAR_PROPS_MAT_OUT ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props.filamat)
-    add_custom_command(
-        OUTPUT ${AZGAAR_PROPS_MAT_OUT}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
-        COMMAND ${MATC} -a vulkan -l 2 -o ${AZGAAR_PROPS_MAT_OUT} ${AZGAAR_PROPS_MAT_SRC}
-        DEPENDS ${AZGAAR_PROPS_MAT_SRC} ${MATC}
-        COMMENT "matc Azgaar props.mat"
-        VERBATIM
-    )
-    add_custom_target(azgaar_props_mat DEPENDS ${AZGAAR_PROPS_MAT_OUT})
-    add_dependencies(c-engine azgaar_props_mat)
-else ()
-    message(WARNING "matc not found at ${MATC}; using the committed heightmap_terrain.filamat + props.filamat")
-endif ()
-
-# ── heightmap terrain shaders (diligent pass, compiled at pass init) ─────
+# ── heightmap terrain shaders (compiled at pass init) ────────────────────────
 # The .hlsl sources are shipped to the pak so the pass can read them with
 # dataManagerRead (same "source in-tree, artifact in pak" pattern as the
-# matc step above).
+# other build steps).
 set(HEIGHTMAP_TERRAIN_HLSL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
@@ -259,4 +152,3 @@ add_custom_command(
 )
 add_custom_target(heightmap_terrain_hlsl DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_OUT})
 add_dependencies(c-engine heightmap_terrain_hlsl)
-

@@ -15,11 +15,18 @@ OUT_DIR="$ROOT/c-game/data/pak_1/models"
 SCRIPTS_TMP="$ROOT/scripts/.tmp"
 STAGE_DIR="$SCRIPTS_TMP/models"
 
-# gltfpack flags: identical to the old engine's scene export so files match
-# what the old pak shipped. -cc = meshopt buffer compression (not KTX2),
-# float positions, 16-bit uv/normals, keep names/extras/materials, 30 Hz
-# animation resample with the old engine's quantization.
-GLTFPACK_FLAGS=(-vpf -cc -vt 16 -vn 16 -ke -kn -kv -km -af 30 -at 24 -as 24 -ar 16)
+# gltfpack flags: -noq (no quantization — fp32 positions/uvs/normals AND
+# animation TRS), keep names/extras/materials, 30 Hz animation resample.
+# Animation data must be fp32: Diligent's GLTF loader only reads fp32 sampler
+# outputs (its int16 path is a compiled-out VERIFY — gltfpack's default
+# animation quantization loads as garbage floats and NaNs out the skeleton).
+# Vertex quantization would be fine (Diligent converts normalized ints), but
+# gltfpack offers no way to keep it while disabling animation quantization.
+# NOTE: no -cc (meshopt buffer compression) — the old engine's cgltf decoded
+# EXT_meshopt_compression, but Diligent's GLTF loader has no meshopt support
+# and reads compressed buffer views as garbage (bounding boxes and vertices).
+# The zstd pass below keeps the shipped files small instead.
+GLTFPACK_FLAGS=(-noq -ke -kn -kv -km -af 30)
 
 convertModel() {
     local blendFile="$1"
@@ -54,7 +61,7 @@ convertModel() {
     echo "$(du -sh "$glb" | cut -f1)"
 
     # Standardize the character hierarchy (identity armature, metre-space
-    # bones) so standard glTF renderers (Filament/gltfio) place it correctly
+    # bones) so standard glTF renderers place it correctly
     # — Blender's exporter leaves the cm-authored armature transform on the
     # node, which it then applies twice. No-op for assets without a
     # transformed armature. See scripts/gltf-standardize.py.
@@ -84,6 +91,19 @@ convertModel() {
     rm -f "$glb"
     mv "$STAGE_DIR/${name}.pack.glb" "$glb"
     echo "$(du -sh "$glb" | cut -f1)"
+
+    # gltfpack hard-codes animation rotation keys as int16 normalized snorm
+    # (no flag changes that); Diligent's loader only reads fp32 sampler
+    # outputs — rewrite them (see scripts/gltf-rotation-f32.py)
+    echo -n "rotation f32... "
+    local f32="$STAGE_DIR/${name}.f32.glb"
+    if ! python3 "$ROOT/scripts/gltf-rotation-f32.py" "$glb" "$f32" >> "$log" 2>&1; then
+        echo "FAILED (log: $log)"
+        tail -n 20 "$log"
+        return 1
+    fi
+    echo ok
+    mv "$f32" "$glb"
 
     echo -n "zstd... "
     zstd -q -10 --rm -f "$glb"

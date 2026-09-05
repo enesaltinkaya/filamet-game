@@ -16,7 +16,6 @@
 
 namespace engine::renderer {
 
-static Backend backend = Backend::Filament;
 static RenderBackend* activeBackend = nullptr;
 static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
@@ -37,14 +36,6 @@ static u32 screenshotFrame = 0;
 // ENGINE_RENDERDOC_CAPTURE=1 + LD_PRELOAD librenderdoc.so — capture one frame
 // for inspection (ENGINE_RENDERDOC_CAPTURE_FRAMES, default 30)
 static u32 renderDocCaptureFrame = 0;
-
-Backend rendererBackend(void) {
-    return backend;
-}
-
-const char* rendererBackendName(void) {
-    return backend == Backend::Diligent ? "diligent" : "filament";
-}
 
 bool rendererScreenshotShouldCapture(void) {
     if (!screenshotPath || screenshotDone) {
@@ -69,32 +60,19 @@ void rendererScreenshotDeliver(u8* buffer) {
     engineStop();
 }
 
-static Backend selectBackend(void) {
-    const char* env = getenv("ENGINE_RENDERER");
-    if (env && env[0] != '\0') {
-        if (utils::strequals(env, "diligent")) return Backend::Diligent;
-        if (utils::strequals(env, "filament")) return Backend::Filament;
-        utils::warn("renderer: unknown ENGINE_RENDERER '%s' (filament|diligent)", env);
-    }
-    // persisted setting (0 = filament, 1 = diligent); settings templates carry
-    // the default, so a missing key reads as filament
-    return utils::settingsGetInt("rendererBackend") == 1 ? Backend::Diligent : Backend::Filament;
-}
-
 bool rendererInit(const char* title, u32 width, u32 height) {
     if (!windowCreate(title, width, height)) {
         return false;
     }
 
-    backend = selectBackend();
-    activeBackend = backend == Backend::Diligent ? diligentBackendCreate() : filamentBackendCreate();
+    activeBackend = diligentBackendCreate();
     if (!activeBackend->init()) {
         delete activeBackend;
         activeBackend = nullptr;
         windowDestroy();
         return false;
     }
-    utils::info("renderer: initialized (%s backend)", rendererBackendName());
+    utils::info("renderer: initialized (diligent backend)");
 
     // apply the persisted graphics settings (upscaler/TAA/shadows/effects)
     rendererGraphicsLoad();
@@ -210,8 +188,8 @@ static GraphicsSettings graphicsNormalize(GraphicsSettings s) {
     s.renderScale  = (float)((int)(s.renderScale * 20.0f + 0.5f)) / 20.0f;
     if (s.sharpening < 0.0f) s.sharpening = 0.0f;
     if (s.sharpening > 1.0f) s.sharpening = 1.0f;
-    // TAA upscaling IS the upscaler now (filament reconstructs to native from
-    // a jittered low-res TAA pass), so the upscaler requires TAA on
+    // TAA upscaling IS the upscaler now (the scene reconstructs to native
+    // from a jittered low-res TAA pass), so the upscaler requires TAA on
     if (s.upscaler != UPSCALER_OFF) s.taa = true;
     if (s.taaWeight < 0.5f) s.taaWeight = 0.5f;
     if (s.taaWeight > 0.95f) s.taaWeight = 0.95f;

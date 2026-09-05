@@ -29,15 +29,16 @@
 namespace game {
 
 // Interleaved prop vertex, 13 floats / 52 bytes, laid out so the merged
-// array uploads to a Filament VertexBuffer verbatim (no repack). Filament
-// attribute mapping for the PropsRender pass (stride 52):
+// array uploads to the render pass's vertex buffer verbatim (no repack).
+// Attribute mapping (stride 52):
 //   POSITION  FLOAT3 @ 0
-//   CUSTOM0   FLOAT4 @ 12  normal (w = 0); rotated in the vertex stage with
-//                          the yaw basis recovered from instanceTransform
-//   UV0       FLOAT2 @ 28  (unit UV; grass cards carry the trimmed card UVs)
-//   CUSTOM1   FLOAT4 @ 36  baked part colour (w = 1): brown trunks, white
+//   NORMAL    FLOAT4 @ 12  xyz normal (w = 0); rotated in the vertex stage
+//                          with the yaw basis recovered from instanceTransform
+//   UV        FLOAT2 @ 28  (unit UV; grass cards carry the trimmed card UVs)
+//   COLOR     FLOAT4 @ 36  baked part colour (w = 1): brown trunks, white
 //                          elsewhere = tintable by the per-instance tint
-// (Custom attributes are float4-only in Filament, hence normal[4]/color[4].)
+// (normal[4]/color[4] keep the old engine's layout so buffers stay
+// drop-in compatible across render passes.)
 // No per-instance attributes: species/variant are the draw-call identity.
 struct AzgaarPropVertex {
     float position[3];

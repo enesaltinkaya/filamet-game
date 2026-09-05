@@ -57,12 +57,12 @@ static void exitGame(void) {
 }
 
 // ── pak PNG → UI texture ──────────────────────────────────────────────────
-// The active backend uploads the pixels (stb-decoded PNG) and hands back an
-// ImTextureID: filament renders it through filagui (a filament::Texture*),
-// diligent through imgui_impl_vulkan (a VkDescriptorSet). The .ktx2
-// originals stay the GPU-side assets; the PNGs are the CPU-friendly twins
-// for the UI (a second Basis transcoder copy can't coexist in the process:
-// the engine's copy is already used by the gltf ktx2 path).
+// The backend uploads the pixels (stb-decoded PNG) and hands back an
+// ImTextureID: a VkDescriptorSet rendered through imgui_impl_vulkan. The
+// .ktx2 originals stay the GPU-side assets; the PNGs are the CPU-friendly
+// twins for the UI (a second Basis transcoder copy can't coexist in the
+// process: the one inside the prebuilt Diligent texture loader is already
+// used by the ktx2 path).
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/git/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION

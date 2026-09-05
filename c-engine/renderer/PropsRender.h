@@ -27,9 +27,9 @@
  *       refreshes the wind time
  *   propsRenderClearAll / Destroy    — world release / backend teardown
  *
- * Dispatch: every entry point forwards to the active backend's half
- * (filament now; the diligent mirror is deferred with phase 6 of
- * plans/azgaar-terrain.md and is a no-op).
+ * Dispatch: every entry point currently lands in documented no-ops —
+ * the backend-agnostic contract stays in place for the pending diligent
+ * pass (see PropsRender.cpp).
  */
 
 namespace engine {
@@ -98,8 +98,8 @@ struct PropsRenderMeshVariant {
 // Merged species mesh (uploaded once per world; replaces previous state).
 // verts are interleaved 13-float vertices (52 B): float3 position @ 0,
 // float4 normal (w = 0) @ 12, float2 uv @ 28, float4 part colour (w = 1)
-// @ 36 — the Filament half repacks the normal slot into a tangent-frame
-// quaternion and maps the array to POSITION/TANGENTS/UV0/CUSTOM0.
+// @ 36 — the render pass uploads the array verbatim (no repack); the
+// normal slot is a plain float4 so vegetation normals stay repack-free.
 void propsRenderSetMesh(const float* verts, u32 vertCount, const u32* idx, u32 idxCount);
 
 // Per-(species, variant) merged-mesh table (replaces previous state). The

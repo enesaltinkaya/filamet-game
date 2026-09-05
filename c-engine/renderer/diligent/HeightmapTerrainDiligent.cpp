@@ -46,8 +46,7 @@ namespace HLSL {
 
 /*
  * Diligent half of the heightmap terrain pass (see HeightmapTerrainRender.h
- * and plans/azgaar-terrain.md phase 6) — the Diligent mirror of
- * renderer/filament/HeightmapTerrainFilament.cpp.
+ * and plans/azgaar-terrain.md phase 6).
  *
  * Per READY tile: the CPU lattice (256^2 world-space corners,
  * HeightmapLattice) is repacked into (pos3, normal3) and uploaded as an
@@ -65,8 +64,8 @@ namespace HLSL {
  * sources ship in pak_1 (CMake copy step).
  *
  * Uploads are budgeted (kUploadsPerFrame) and nearest-to-camera first, so
- * the visible ring fills before the window edge (same policy as the
- * Filament pass and the old engine's Vulkan pass).
+ * the visible ring fills before the window edge (the old engine's Vulkan
+ * pass policy).
  */
 
 namespace engine {
@@ -83,7 +82,7 @@ constexpr u32 kDeferredDestroyFrames  = 3;
 // Default terrain textures (engine pak, PNG — the exact ETC1S decode of the
 // .ktx2 originals, which this backend cannot read: imageLoadKtx is a stub
 // since KTX-Software was unlinked, see scripts/unpack-terrain-ktx2.sh).
-// Albedos are created sRGB so the hardware decode matches the Filament pass.
+// Albedos are created sRGB so the hardware decode matches the CPU-composited look.
 struct DefaultTexture {
     const char* path;
     const char* srvName;
@@ -156,8 +155,8 @@ std::vector<u8>      lookBiomePixels;
 std::vector<u8>      lookClimatePixels;
 float                debugView = 0.0f;
 
-// Per-frame cost tracking (same 120-frame warmup + 1000-frame hold as the
-// Filament pass).
+// Per-frame cost tracking (120-frame warmup + 1000-frame hold, the old
+// engine's acceptance pattern).
 constexpr u32 kStatWarmupFrames = 120;
 constexpr u32 kStatFrames       = 1000;
 u64    statFrame   = 0;
@@ -851,8 +850,7 @@ void destroyTile(GpuTile* e) {
     if (!e->inUse) return;
     // The context keeps its own reference until the next SetVertexBuffers
     // unbinds this buffer, so the GPU-side lifetime is already safe; the
-    // deferral just keeps the release off the in-flight draw frame (same
-    // policy as the Filament pass).
+    // deferral just keeps the release off the in-flight draw frame.
     deferred.push_back({.vbo = e->vbo, .framesLeft = kDeferredDestroyFrames});
     *e = GpuTile{};
 }

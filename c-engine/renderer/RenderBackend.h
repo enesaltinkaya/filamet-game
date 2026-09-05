@@ -3,8 +3,8 @@
 #include "Defines.h"
 #include "renderer/Renderer.h"
 
-// Shared constants of both render paths (the look of the game must not depend
-// on the backend) + the internal interface every backend implements. Nothing
+// Shared constants of the render path (the look of the game must not depend
+// on backend details) + the internal interface the backend implements. Nothing
 // in here leaks into engine/game code: they only see renderer/Renderer.h.
 
 namespace engine::renderer {
@@ -24,13 +24,13 @@ public:
     virtual void destroy() = 0;
 
     // World-space camera (absolute coords, double precision — the camera is
-    // the world anchor; see FilamentRenderer's anchor handling).
+    // the world anchor; see DiligentRenderer's anchor handling).
     virtual void cameraLookAt(const double eye[3], const double center[3], const double up[3]) = 0;
     virtual void cameraGet(f32 pos[3], f32 forward[3]) = 0;
 
-    // The anchor (xz) the backend places renderables relative to. The filament
-    // backend anchors to the camera eye (see FilamentRenderer); backends
-    // without re-anchoring report the origin.
+    // The anchor (xz) the backend places renderables relative to. This
+    // backend keeps renderables at absolute world coords (reports the
+    // origin); a backend that re-anchors per frame would report its eye.
     virtual double worldAnchorX() { return 0.0; }
     virtual double worldAnchorZ() { return 0.0; }
 
@@ -50,8 +50,7 @@ public:
     virtual void setFogEnabled(bool) {}
 };
 
-// Implemented by the backends (renderer/filament, renderer/diligent).
-RenderBackend* filamentBackendCreate(void);
+// Implemented by the backend (renderer/diligent).
 RenderBackend* diligentBackendCreate(void);
 
 // ── screenshot plumbing (implemented in Renderer.cpp, used by the backends) ──
