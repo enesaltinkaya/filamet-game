@@ -125,6 +125,14 @@ void playerSetSpawn(f32 x, f32 y, f32 z) {
 
 char playerMode(void) { return p.active; }
 
+bool playerGetFootPos(double out[3]) {
+    if (!p.spawned || !p.character) return false;
+    out[0] = p.pos[0];
+    out[1] = p.pos[1];
+    out[2] = p.pos[2];
+    return true;
+}
+
 char playerTeleportTo(f32 x, f32 y, f32 z) {
     if (!p.spawned || !p.character) return 0;
     p.pos[0] = x;

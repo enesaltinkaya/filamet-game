@@ -923,7 +923,9 @@ static u32 s_mapSeed = 0;
 static BiomeSpecies s_biomeSpecies[AZGAAR_PROPS_MAX_BIOMES];
 static std::vector<PropsTileState> s_tiles;
 static std::vector<AzgaarGrassVariantInfo> s_grassVariants;
-static AzgaarPropsWind s_wind = {0.70710678f, 0.70710678f, 0.10f, 0.15f};
+// Defaults are the render pass' own defaults; the old engine's 0.10 rad/s /
+// 0.15 m read as static — 0.60/0.35 makes the idle sway actually visible.
+static AzgaarPropsWind s_wind = {0.70710678f, 0.70710678f, 0.60f, 0.35f};
 // Window-settled summary state (one-shot per world load; see
 // azgaarPropsUpdate): first-claim stamp + "all resident tiles published".
 static double s_firstClaimNanos = 0.0;
@@ -1253,13 +1255,14 @@ void azgaarPropsInit(const AzgaarWorld* world) {
     propsLoadGrassVariants();
 
     // Wind: the old engine drove this from its weather module; use the map's
-    // authored wind direction (or a 45 deg default) with the old defaults.
+    // authored wind direction (or a 45 deg default) with the visible-sway
+    // defaults (its stock 0.10 rad/s / 0.15 m read as static).
     float deg = world->winds[0] != 0.0f ? world->winds[0] : 45.0f;
     float rad = deg * static_cast<float>(M_PI) / 180.0f;
     s_wind.dirX     = cosf(rad);
     s_wind.dirZ     = sinf(rad);
-    s_wind.speed    = 0.10f;
-    s_wind.strength = 0.15f;
+    s_wind.speed    = 0.60f;
+    s_wind.strength = 0.35f;
     utils::threadUnlock(&s_lock);
 
     // Merged species mesh (task 4). Race-free here: the worker was joined by
@@ -1463,7 +1466,7 @@ void azgaarPropsDestroy(void) {
         for (auto& b : s_biomeSpecies) b = BiomeSpecies{};
         s_grassVariants.clear();
         azgaarPropMeshRelease();
-        s_wind         = {0.70710678f, 0.70710678f, 0.10f, 0.15f};
+        s_wind         = {0.70710678f, 0.70710678f, 0.60f, 0.35f};
         utils::threadUnlock(&s_lock);
     }
     if (s_worker) {

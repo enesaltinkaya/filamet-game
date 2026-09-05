@@ -47,4 +47,10 @@ void playerSetSpawn(f32 x, f32 y, f32 z);
 char playerTeleportTo(f32 x, f32 y, f32 z);
 
 char playerMode(void);  // 1 while player mode owns input + camera
+
+// Live feet position (world metres, double precision — Jolt is double
+// internally). Returns false when no player body is in the world (not
+// spawned yet / automated no-player runs); consumers then treat the
+// player as absent (e.g. the props player-push falloff reads as zero).
+bool playerGetFootPos(double out[3]);
 }  // namespace engine

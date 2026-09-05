@@ -14,9 +14,9 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
-## 2026-09-05 — A single-key glTF channel whose value differs from the node's static TRS is a legit POSE HOLD (eve's run clip holds curled fingers one-key-per-bone) — flattening constants to rest (the 2026-09-04 singlekey-fix) straightened the hands, and the "0.01 head scale in the asset" was never in the source: it was gltf-standardize.py writing a Hips accessor IN PLACE that the exporter had shared with Head/LeftHand/*4 channels
+## 2026-09-05 — A single-key glTF channel whose value differs from the node's static TRS is a legit POSE HOLD (eve's run clip holds curled fingers one-key-per-bone) — flattening constants to rest (the 2026-09-04 singlekey-fix) straightened the hands, and the "0.01 head scale in the asset" was never in the source: it was gltf-standardize.py writing a Hips accessor IN PLACE that the exporter had shared with Head/LeftHand/\*4 channels
 
-**Rule:** a 1-key sampler is a constant and must be sampled + applied every frame (glTF semantics; Mixamo/Blender collapse constant tracks to one key — that's how clips hold a pose: eve_run1's fingers curl 30–42° at the MCP with ONE key per finger bone). Never rewrite constant channels to the node's static TRS. The 2026-09-04 "constant channels corrupt the pose" lesson was misdiagnosed: the 0.01 (cm-factor) scale constants on Head/LeftHand/*4 were NOT authored data — the Blender exporter dedupes identical constant values into a SHARED accessor, and gltf-standardize.py rewrote the Hips scale accessor in place (×0.01), silently converting every other channel sharing it ("1.0" constants on a dozen bones, across all 20 clips) into 0.01. Fix shared-storage rewrites with copy-on-write (fresh accessor per rewritten channel), not by neutralizing the data. And when a runtime "skips single-key samplers" (Diligent's loader does; it had become our engine's behaviour too), any pose held by a constant silently collapses to rest — the skip is only safe when the constant equals the static TRS.
+**Rule:** a 1-key sampler is a constant and must be sampled + applied every frame (glTF semantics; Mixamo/Blender collapse constant tracks to one key — that's how clips hold a pose: eve_run1's fingers curl 30–42° at the MCP with ONE key per finger bone). Never rewrite constant channels to the node's static TRS. The 2026-09-04 "constant channels corrupt the pose" lesson was misdiagnosed: the 0.01 (cm-factor) scale constants on Head/LeftHand/\*4 were NOT authored data — the Blender exporter dedupes identical constant values into a SHARED accessor, and gltf-standardize.py rewrote the Hips scale accessor in place (×0.01), silently converting every other channel sharing it ("1.0" constants on a dozen bones, across all 20 clips) into 0.01. Fix shared-storage rewrites with copy-on-write (fresh accessor per rewritten channel), not by neutralizing the data. And when a runtime "skips single-key samplers" (Diligent's loader does; it had become our engine's behaviour too), any pose held by a constant silently collapses to rest — the skip is only safe when the constant equals the static TRS.
 
 **Incident:** "in the original animation (Blender) the fingers are not straight, but in the game they are." Diagnosis ladder: (1) the packed animations.zstd run clip's finger channels were 1-key and EQUAL to static → the curl wasn't in the shipped data (Blender's animations.blend still had it: 26–42° constant per finger bone); (2) export-models.sh log showed `singlekey-fix: 3000 constant channels set to static pose` — the 2026-09-04 step had flattened the curl to rest, and clipSampleTRS's 1-key skip then kept rest; (3) removing that step exposed the 0.01 scale constants — traced to standardize's in-place shared-accessor write (raw Blender export: zero non-1.0 scale channels; post-standardize: 0.01 on Head etc.), which is also why the old singlekey-fix "worked" for the head: it was masking this bug.
 
@@ -55,6 +55,7 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 **Rule:** the gltf → Diligent asset path has two hard constraints, neither
 checked at load time (both are `VERIFY`s compiled out of the release
 prebuilt libs, so failures are silent):
+
 1. **No meshopt buffer compression** (`gltfpack -cc`): Diligent has no
    EXT_meshopt_compression support. The JSON parses fine (accessor min/max
    intact) but every buffer read is compressed bytes — bounding boxes come
@@ -84,6 +85,7 @@ scale on Hips); 0.0 below the root = compounding local scale (the 2026-09-04
 gltf-standardize lesson); NaN = quantized/garbage sampler data.
 
 **Also hit in the same session (each silently fatal):**
+
 - `utils::dataManagerRead` does NOT decompress zstd — the shipped
   `<model>.zstd` must be decompressed by the consumer (magic 28 B5 2F FD;
   tinygltf's parse error reads "invalid literal; last read: '('" — 0x28 is
@@ -184,7 +186,7 @@ pipeline (scripts/data.sh) zips whatever sits in c-game/data/pak_1/ — always
 verify `zipping pak_1` ran AFTER a shader edit (plain `cmake --build` does NOT
 refresh paks), and grep the shipped archive, not the working tree.
 
-**Also:** scripted validation cameras (ENGINE_CAMERA=*) are clobbered by the
+**Also:** scripted validation cameras (ENGINE_CAMERA=\*) are clobbered by the
 persisted camera/player rows in build/c-game/data/db/db.db, and EVERY run
 re-saves them at exit — delete both tables before each scripted capture
 (python sqlite3 DELETE FROM camera; DELETE FROM player).

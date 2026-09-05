@@ -4,6 +4,7 @@
 #include "datamanager/DataManager.h"
 #include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
+#include "ecs/system/player/Player.h"
 #include "gltf/GltfInternal.h"
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
@@ -38,6 +39,7 @@ namespace HLSL {
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -96,10 +98,26 @@ std::vector<PendingTile> pendingTiles;
 
 bool  enabled = false;
 float windDir[2]     = {0.70710678f, 0.70710678f};
-float windSpeed      = 0.10f;
-float windStrength   = 0.15f;
+float windSpeed      = 0.60f;   // rad/s; the old engine's 0.10 read as static
+float windStrength   = 0.35f;   // m of tip drift at full sway weight
 double windTimeSec   = 0.0;
+double windPhaseRad  = 0.0;  // integrated sway phase (rad, gust-speed aware)
+float  gustStrength  = 0.35f; // effective (gust-modulated) sway strength
 u64   lastNanos      = 0;
+
+// Player reaction push (the old engine's azgaar_props.vert player term): the
+// grass parts around the player and swishes while they move. f4ExtraData[2]
+// = xyz feet position (m), w horizontal speed (m/s); a far-away position is
+// the "no player / push off" state (the falloff reads as 0).
+float playerPush[4] = {1e9f, 0.0f, 1e9f, 0.0f};
+static bool playerPushEnabled(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char* env = getenv("ENGINE_PROPS_PLAYER_PUSH");
+        v = !(env && *env && atof(env) <= 0.0f);
+    }
+    return v;
+}
 
 // ── GPU state ─────────────────────────────────────────────────────────────
 
@@ -751,11 +769,14 @@ void fillFrameAttribs(void) {
     camera.fHandness = view.Determinant() > 0 ? 1.0f : -1.0f;
     frame->PrevCamera = frame->Camera;
 
-    // f4ExtraData[0] = wind (dir.xy, speed, strength); [1].x = phase time
-    // (seconds * speed, pre-multiplied for the VS sin); [3]/[4] = the split
-    // world anchor (f32 high + sub-mm residual).
-    camera.f4ExtraData[0] = float4{windDir[0], windDir[1], windSpeed, windStrength};
-    camera.f4ExtraData[1] = float4{(float)(windTimeSec * (f64)windSpeed), 0.0f, 0.0f, 0.0f};
+    // f4ExtraData[0] = wind (dir.xy, speed, gust-modulated strength);
+    // [1].x = integrated sway phase (rad); [2] = player push (feet.xyz,
+    // horizontal speed); [3]/[4] = the split world anchor (f32 high + sub-mm
+    // residual).
+    camera.f4ExtraData[0] = float4{windDir[0], windDir[1], windSpeed, gustStrength};
+    camera.f4ExtraData[1] = float4{(float)windPhaseRad, 0.0f, 0.0f, 0.0f};
+    camera.f4ExtraData[2] = float4{playerPush[0], playerPush[1], playerPush[2],
+                                   playerPush[3]};
     {
         f64 anchorF64[3];
         engine::renderer::diligent::diligentWorldAnchor(anchorF64);
@@ -997,6 +1018,7 @@ void propsRenderDiligentSetWind(float dirX, float dirZ, float speed, float stren
     windSpeed = speed;
     windStrength = strength;
     windTimeSec = 0.0;
+    windPhaseRad = 0.0;
     lastNanos = 0;
 }
 
@@ -1013,11 +1035,53 @@ void propsRenderDiligentUpdate(void) {
 
     // Advance the wind clock (capped so a hitch does not snap the canopy).
     const u64 now = utils::nanos();
+    double dt = 0.0;
     if (lastNanos != 0) {
-        double dt = (double)(now - lastNanos) * 1e-9;
+        dt = (double)(now - lastNanos) * 1e-9;
         windTimeSec += std::min(dt, 0.1);
     }
     lastNanos = now;
+
+    // Gust envelope: the old engine's weather module drove the sway strength
+    // (0.17..0.38 at 2.6..4.4 m/s gusts); with no weather module yet, two
+    // slow incommensurate sines stand in so the field visibly breathes
+    // instead of drifting at one unchanging amplitude. The phase integrates
+    // the gust-modulated speed (a plain t*speed would jump as the gust
+    // changes).
+    {
+        float t    = (float)windTimeSec;
+        float gust = 0.5f + 0.5f * sinf(t * 0.35f + 2.0f * sinf(t * 0.11f + 1.3f));
+        gustStrength = windStrength * (0.35f + 1.15f * gust);  // 0.35 → 0.12..0.52 m
+        windPhaseRad += dt * (double)windSpeed * (0.7 + 0.8 * (double)gust); // 0.42..0.86 rad/s
+    }
+
+    // Player reaction: feet position + horizontal speed (old engine: dxz/dt
+    // between frames, capped at 30 m/s so a teleport reads as a full swish,
+    // not a discontinuity).
+    {
+        static double prevFoot[3] = {0.0, 0.0, 0.0};
+        static bool havePrev = false;
+        double foot[3];
+        if (!playerPushEnabled() || !playerGetFootPos(foot)) {
+            playerPush[0] = 1e9f; playerPush[1] = 0.0f;
+            playerPush[2] = 1e9f; playerPush[3] = 0.0f;
+            havePrev = false;
+        } else {
+            float speed = 0.0f;
+            if (havePrev && dt > 0.0) {
+                float dx = (float)(foot[0] - prevFoot[0]);
+                float dz = (float)(foot[2] - prevFoot[2]);
+                speed = sqrtf(dx * dx + dz * dz) / (float)dt;
+                if (speed > 30.0f) speed = 30.0f;
+            }
+            playerPush[0] = (float)foot[0];
+            playerPush[1] = (float)foot[1];
+            playerPush[2] = (float)foot[2];
+            playerPush[3] = speed;
+            prevFoot[0] = foot[0]; prevFoot[1] = foot[1]; prevFoot[2] = foot[2];
+            havePrev = true;
+        }
+    }
 
     const double t0 = utils::elapsedBegin();
     if (!passReady) {

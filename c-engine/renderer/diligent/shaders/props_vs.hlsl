@@ -28,8 +28,12 @@
 //
 // Wind sway is the old engine's azgaar_props.vert port: height-weighted
 // (h², base anchored) sin drift along the world wind direction, de-synced
-// per instance by `phase`. Wind (dir.xy, speed, strength) and the
-// pre-multiplied phase time (seconds * speed) ride in f4ExtraData[0]/[1].
+// per instance by `phase`; the CPU integrates the gust-modulated phase so
+// the field breathes. Plus the player reaction — a horizontal push away
+// from the player's feet that parts the vegetation while standing and
+// swishes harder while moving (f4ExtraData[2] = feet.xyz, horizontal
+// speed). Wind (dir.xy, speed, strength) and the phase ride in
+// f4ExtraData[0]/[1].
 
 #include "BasicStructures.fxh"
 #include "PBR_Structures.fxh"
@@ -102,8 +106,9 @@ PSPropsIn main(in VSPropsIn In, uint InstId : SV_InstanceID)
 
     // Wind sway: weight by the fraction of the mesh height (authored space,
     // so it is identical for unit-height and future hand-authored models),
-    // squared so the base stays anchored. The phase time is pre-multiplied
-    // with the wind speed on the CPU (f4ExtraData[1].x).
+    // squared so the base stays anchored. The phase (rad) is integrated on
+    // the CPU with the gust-modulated speed (f4ExtraData[1].x); strength is
+    // gust-modulated too (f4ExtraData[0].w).
     float4 wind = g_Frame.Camera.f4ExtraData[0];
     float  span   = max(bMaxY - bMinY, 1e-3);
     float  hN     = clamp((In.Position.y - bMinY) / span, 0.0, 1.0);
@@ -113,9 +118,25 @@ PSPropsIn main(in VSPropsIn In, uint InstId : SV_InstanceID)
     float3 worldRel = rel + rot;
     worldRel.xz += wind.xy * sway;
 
+    // Player reaction (port of the old engine's azgaar_props.vert term): a
+    // horizontal push away from the player's feet — the vegetation parts
+    // around a standing player (kPlayerBase) and swishes harder while they
+    // move (kPlayerSpeedScale * horizontal speed m/s). The falloff is the 3D
+    // distance, so vegetation on a hill below the player does not react;
+    // weighted by swayW, static species (rocks) are unaffected.
+    float4 player = g_Frame.Camera.f4ExtraData[2]; // xyz feet (m), w speed (m/s)
+    const float kPlayerReach       = 2.0f;  // old PROPS_PLAYER_REACH (m)
+    const float kPlayerBase        = 0.15f; // old PROPS_PLAYER_BASE (m)
+    const float kPlayerSpeedScale  = 0.05f; // old PROPS_PLAYER_SPEED_SCALE (m per m/s)
+    float pDist = length(iPos - player.xyz);
+    float pFall = 1.0 - smoothstep(0.0, kPlayerReach, pDist);
+    float pAmp  = (kPlayerBase + kPlayerSpeedScale * player.w) * pFall * swayW;
+    float2 pDir = (iPos.xz - player.xz) / max(pDist, 1e-3);
+    worldRel.xz += pDir * pAmp;
+
     Out.Position = mul(float4(worldRel, 1.0), g_Frame.Camera.mViewProj);
     Out.WorldPos = iPos + rot;
-    Out.WorldPos.xz += wind.xy * sway;
+    Out.WorldPos.xz += wind.xy * sway + pDir * pAmp;
     Out.Normal    = nrm;
     Out.Tint      = tint;
     Out.UV        = In.UV;
