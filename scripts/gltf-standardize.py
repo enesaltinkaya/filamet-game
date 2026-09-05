@@ -232,38 +232,49 @@ def read_accessor(gltf, bin_data, acc_index):
     return vals, stride, ncomp
 
 
-def write_accessor(gltf, bin_data, acc_index, vals):
-    acc = gltf["accessors"][acc_index]
-    bv = gltf["bufferViews"][acc["bufferView"]]
-    ncomp = TYPES[acc["type"]]
-    stride = bv.get("byteStride", ncomp * 4) or ncomp * 4
-    start = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
-    out = bytearray(bin_data)
-    for i, v in enumerate(vals):
-        struct.pack_into(f"<{ncomp}f", out, start + i * stride, *v)
-    # keep min/max annotations consistent for downstream tools
-    if acc.get("type") == "VEC3":
-        mn = [min(x[i] for x in vals) for i in range(3)]
-        mx = [max(x[i] for x in vals) for i in range(3)]
-        acc["min"] = mn
-        acc["max"] = mx
-    elif acc.get("type") == "VEC4" and "min" in acc:
-        mn = [min(x[i] for x in vals) for i in range(4)]
-        mx = [max(x[i] for x in vals) for i in range(4)]
-        acc["min"] = mn
-        acc["max"] = mx
-    return bytes(out)
+# fresh channel storage: the exporter dedupes identical constant values into
+# SHARED accessors, so rewritten channels must get their own accessor+bin
+# region; the BIN chunk is rebuilt from _alloc["bin"] at the end of main()
+_alloc = {"bin": b""}
+
+
+def alloc_accessor(gltf, vals, path):
+    ncomp = {"translation": 3, "rotation": 4, "scale": 3}[path]
+    b = _alloc["bin"]
+    while len(b) % 4:
+        b += b"\x00"
+    off = len(b)
+    b += struct.pack(f"<{ncomp * len(vals)}f", *([c for v in vals for c in v]))
+    bv_idx = len(gltf["bufferViews"])
+    gltf["bufferViews"].append({
+        "buffer": 0,
+        "byteOffset": off,
+        "byteLength": ncomp * 4 * len(vals),
+    })
+    acc = {
+        "bufferView": bv_idx,
+        "byteOffset": 0,
+        "componentType": FLOAT,
+        "count": len(vals),
+        "type": "VEC3" if ncomp == 3 else "VEC4",
+    }
+    if ncomp == 3:
+        acc["min"] = [min(v[i] for v in vals) for i in range(3)]
+        acc["max"] = [max(v[i] for v in vals) for i in range(3)]
+    gltf["accessors"].append(acc)
+    _alloc["bin"] = b
+    return len(gltf["accessors"]) - 1
 
 
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: gltf-standardize.py input.glb output.glb")
     gltf, bin_data = read_glb(sys.argv[1])
+    _alloc["bin"] = bin_data
     nodes = gltf["nodes"]
 
     changed = 0
     kf = 0
-    done = set()
     for skin in gltf.get("skins", []):
         arm_idx = skin.get("skeleton", -1)
         if arm_idx < 0:
@@ -317,23 +328,23 @@ def main():
         for k in ("translation", "rotation", "scale", "matrix"):
             nodes[arm_idx].pop(k, None)
         # 3. animation keyframes targeting the direct children: world motion
-        #    preserved. The exporter dedupes identical keyframes into shared
-        #    accessors, so transform each output accessor at most once.
+        #    preserved. Copy-on-write: each rewritten channel gets a FRESH
+        #    accessor — the exporter dedupes identical constant values into
+        #    SHARED accessors, so an in-place rewrite of one channel's
+        #    accessor (e.g. Hips scale x0.01) would leak into every other
+        #    channel sharing it (Head/LeftHand/*4 scale became 0.01 and the
+        #    head/hands collapsed to 1% whenever the engine applied them).
         #    Deeper joints' channels are left untouched (their local
         #    transforms were not rewritten either).
         targets = set(top)
         for anim in gltf.get("animations", []):
-            samplers = {i: s["output"] for i, s in enumerate(anim["samplers"])}
             for ch in anim["channels"]:
                 tgt = ch["target"]
                 node = tgt["node"]
                 if node not in targets:
                     continue
                 path = tgt["path"]
-                out = samplers[ch["sampler"]]
-                if out in done:
-                    continue
-                done.add(out)
+                out = anim["samplers"][ch["sampler"]]["output"]
                 if path == "translation":
                     vals, _, _ = read_accessor(gltf, bin_data, out)
                     new = []
@@ -343,22 +354,27 @@ def main():
                             tA[1] + A[1] * v[0] + A[5] * v[1] + A[9] * v[2],
                             tA[2] + A[2] * v[0] + A[6] * v[1] + A[10] * v[2],
                         ))
-                    bin_data = write_accessor(gltf, bin_data, out, new)
-                    kf += len(new)
                 elif path == "rotation":
                     vals, _, _ = read_accessor(gltf, bin_data, out)
                     new = [tuple(quat_norm(quat_mul(qA, list(v)))) for v in vals]
-                    bin_data = write_accessor(gltf, bin_data, out, new)
-                    kf += len(new)
                 elif path == "scale":
                     vals, _, _ = read_accessor(gltf, bin_data, out)
                     new = [(v[0] * sA[0], v[1] * sA[1], v[2] * sA[2]) for v in vals]
-                    bin_data = write_accessor(gltf, bin_data, out, new)
-                    kf += len(new)
+                else:
+                    continue
+                anim["samplers"][ch["sampler"]]["output"] = alloc_accessor(
+                    gltf, new, path)
+                kf += len(new)
         print(f"standardized: {changed} nodes, {kf} keyframe values "
               f"({len(gltf.get('animations', []))} animations)")
 
-    write_glb(sys.argv[2], gltf, bin_data)
+    # appending fresh channel storage above grew the BIN chunk; gltfpack
+    # (and every strict loader) validates buffers[].byteLength against it
+    for buf in gltf.get("buffers", []):
+        if "uri" not in buf:
+            buf["byteLength"] = len(_alloc["bin"])
+
+    write_glb(sys.argv[2], gltf, _alloc["bin"])
     print(f"wrote {sys.argv[2]}")
 
 

@@ -146,10 +146,11 @@ static void clipAdvance(ClipPlay& clip, const GLTF::Model& src, f32 dt) {
 }
 
 // Sample one clip's per-node TRS into out.NodeAnimations (indexed by the
-// global node index). Un-animated components keep the node's static TRS —
-// which is exactly what the export pipeline standardizes constant channels to
-// (scripts/gltf-singlekey-fix.py), so skipping single-key LINEAR samplers
-// (Diligent's own behaviour) is safe.
+// global node index). Un-animated components keep the node's static TRS.
+// Single-key samplers are constants and MUST be applied (glTF semantics):
+// Mixamo-style clips hold a pose with one key (eve's run clip holds the
+// curled fingers that way), so skipping them strands those joints in the
+// straight rest pose. Only 0-key samplers are degenerate and skipped.
 static void clipSampleTRS(const GLTF::Model& src, Uint32 sceneIdx, const ClipPlay& clip,
         GLTF::ModelTransforms& out) {
     if (sceneIdx >= src.Scenes.size() || clip.index < 0 ||
@@ -171,29 +172,31 @@ static void clipSampleTRS(const GLTF::Model& src, Uint32 sceneIdx, const ClipPla
     const f32 time = clipResolveTime(animation, clip.time);
     for (const GLTF::AnimationChannel& channel : animation.Channels) {
         const GLTF::AnimationSampler& sampler = animation.Samplers[channel.SamplerIndex];
-        if (sampler.Inputs.size() > sampler.OutputsVec4.size() ||
-            (sampler.Interpolation == GLTF::AnimationSampler::INTERPOLATION_TYPE::LINEAR &&
-                    sampler.Inputs.size() < 2)) {
+        if (sampler.Inputs.empty() || sampler.Inputs.size() > sampler.OutputsVec4.size()) {
             continue;
         }
 
         GLTF::ModelTransforms::AnimationTransforms& NodeAnim = out.NodeAnimations[channel.pNode->Index];
-        size_t idx = sampler.FindKeyFrame(time);
+        size_t idx = sampler.Inputs.size() == 1 ? 0 : sampler.FindKeyFrame(time);
         f32 u = 0.0f;
-        if (sampler.Interpolation == GLTF::AnimationSampler::INTERPOLATION_TYPE::LINEAR) {
+        if (sampler.Inputs.size() > 1 &&
+                sampler.Interpolation == GLTF::AnimationSampler::INTERPOLATION_TYPE::LINEAR) {
             idx = std::min(idx, sampler.Inputs.size() - 2);
             u = (time - sampler.Inputs[idx]) / (sampler.Inputs[idx + 1] - sampler.Inputs[idx]);
         }
         u = std::clamp(u, 0.0f, 1.0f);
+        // 1-key sampler: the "next" key is itself (a constant), so the lerp/
+        // slerp below degenerates to the constant without an out-of-range read
+        const size_t idxB = sampler.Inputs.size() > 1 ? idx + 1 : idx;
 
         switch (channel.PathType) {
             case GLTF::AnimationChannel::PATH_TYPE::TRANSLATION:
                 NodeAnim.Translation = lerp(float3{sampler.OutputsVec4[idx]},
-                        float3{sampler.OutputsVec4[idx + 1]}, u);
+                        float3{sampler.OutputsVec4[idxB]}, u);
                 break;
             case GLTF::AnimationChannel::PATH_TYPE::SCALE:
                 NodeAnim.Scale = lerp(float3{sampler.OutputsVec4[idx]},
-                        float3{sampler.OutputsVec4[idx + 1]}, u);
+                        float3{sampler.OutputsVec4[idxB]}, u);
                 break;
             case GLTF::AnimationChannel::PATH_TYPE::ROTATION: {
                 QuaternionF q1;
@@ -202,10 +205,10 @@ static void clipSampleTRS(const GLTF::Model& src, Uint32 sceneIdx, const ClipPla
                 q1.q.z = sampler.OutputsVec4[idx].z;
                 q1.q.w = sampler.OutputsVec4[idx].w;
                 QuaternionF q2;
-                q2.q.x = sampler.OutputsVec4[idx + 1].x;
-                q2.q.y = sampler.OutputsVec4[idx + 1].y;
-                q2.q.z = sampler.OutputsVec4[idx + 1].z;
-                q2.q.w = sampler.OutputsVec4[idx + 1].w;
+                q2.q.x = sampler.OutputsVec4[idxB].x;
+                q2.q.y = sampler.OutputsVec4[idxB].y;
+                q2.q.z = sampler.OutputsVec4[idxB].z;
+                q2.q.w = sampler.OutputsVec4[idxB].w;
                 NodeAnim.Rotation = normalize(slerp(q1, q2, u));
                 break;
             }
