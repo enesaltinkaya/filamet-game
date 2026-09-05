@@ -132,7 +132,11 @@ public:
 
         // NewFrame + emit every gui's widgets + Render; the renderer submits
         // the UI pass afterward (imgui vulkan pass)
-        guiBackendFrameDiligent((float)utils::timer.dt, window.width, window.height,
+        // Real frame time, not utils::timer.dt: this runs once per rendered
+        // frame in postUpdate, while timer.dt is the fixed 1/UPS simulation
+        // tick (ImGui would animate 2x fast at 120fps). frameTime is already
+        // clamped to 250ms against hitches.
+        guiBackendFrameDiligent((float)(utils::timer.frameTime / BILLION), window.width, window.height,
                 drawActiveGuis);
     }
 };

@@ -67,13 +67,22 @@ void ecsPreUpdate(void) {
     }
 }
 
-void ecsUpdate(void) {
+// One fixed-timestep tick (utils::timer.dt = 1/UPS): called 0..N times per
+// rendered frame by utils::timerUpdate from ecsUpdate, so simulation speed
+// is frame-rate independent (old engine's ecsUpdateForTimer — without it,
+// systems advancing by timer.dt move faster at >60fps).
+static void ecsUpdateForTimer(void) {
     for (System* system : ecs.systems) {
         double start = utils::elapsedBegin();
         system->update();
-        system->cpuElapsed = utils::elapsedEnd(start);
-        system->cpuElapsedLastFrame = system->cpuElapsed;
+        system->cpuElapsed += utils::elapsedEnd(start);
     }
+}
+
+void ecsUpdate(void) {  // might not run every frame, might run multiple times per frame
+    for (System* system : ecs.systems) system->cpuElapsed = 0.0;
+    utils::timerUpdate(ecsUpdateForTimer);
+    for (System* system : ecs.systems) system->cpuElapsedLastFrame = system->cpuElapsed;
 }
 
 void ecsPostUpdate(void) {

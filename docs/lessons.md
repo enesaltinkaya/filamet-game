@@ -4,6 +4,18 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-05 — Player moved ~2x faster at a 120fps cap than at 60: `utils::timer.dt` is the fixed 1/UPS tick, not the frame's dt, but the ported `ecsUpdate()` ran every system once per rendered frame
+
+**Rule:** `utils::timer.dt` (1/UPS, UPS=60) is the fixed simulation tick length and is only valid inside the fixed-step loop. Any system advancing state by `timer.dt` must be invoked through `utils::timerUpdate(...)` (the accumulator), never once per rendered frame. The converse: passes that run once per frame (GUI postUpdate etc.) must use `utils::timer.frameTime` (already clamped to 250 ms), never `timer.dt`. Consequence: simulation speed is fps-cap independent — at 120 fps the simulation ticks at 60 Hz (one substep every 2nd frame), at 60 fps it ticks 1:1.
+
+**Incident:** "when vsync is off and fpslimit is 120, player character moves faster than when it was 60fps capped". The port dropped the old engine's wrapper: old `Ecs.cpp` had `ecsUpdate() { utils::timerUpdate(ecsUpdateForTimer); }` (comment: "might not run every frame, might run multiple times per frame"); the new one looped systems directly, once per frame. `timer.dt` is set once in `timerInit` and never reassigned, so at 120 fps every `timer.dt`-advancing system (player via joltCharacterUpdate, fly camera, model turn, anim blending) advanced 1/60 s twice per 1/60 s of wall time = 2x speed. The timer's accumulator/alpha machinery was left as dead code in the new Timer.cpp — the trace of the dropped call.
+
+**Fix:** `c-engine/ecs/Ecs.cpp` — restored `ecsUpdateForTimer` + `ecsUpdate` → `utils::timerUpdate(ecsUpdateForTimer)`; `cpuElapsed` now accumulates across substeps and is snapshotted into `cpuElapsedLastFrame` once per frame (per-system stats would otherwise flicker as 0/tick/0…). `c-engine/gui/GuiManager.cpp` — ImGui's NewFrame now gets `timer.frameTime/BILLION` (gui postUpdate runs once per frame; with `timer.dt` menu animations would have run 2x at 120 fps). Verified headless with a temporary tick counter (removed after verification): at the 120 fps cap, render ≈114–120 Hz while sim ticks landed exactly 60 per 120 frames across consecutive 120-frame windows (60 Hz sim); the same accumulator gives 1 tick per frame at 60 fps. Screenshot boot runs clean.
+
+**Note:** `timer.alpha` (substep phase) is computed for render interpolation but nothing consumes it yet — positions snap between the 60 Hz ticks, which is what the old engine also did.
+
+---
+
 ## 2026-09-05 — audio settings gui flush in `removed()` segfaulted in `SoLoud::play` at shutdown: gui `removed()` runs after lower-priority systems are destroyed
 
 **Rules:** (1) `ecsDestroy` runs systems in LIST order (priority ascending), so a gui's `removed()` (the rmlui guis die inside `guiManagerRmlUi::removed()`, priority 4) runs AFTER `soundSystem::removed()` (priority 3) has destroyed SoLoud — never play a sound from a gui's `removed()` without knowing the audio stack is still up. (2) `utils::settingsWrite()` emits `settingsSaved` to ALL subscribers regardless of teardown state — a signal handler that touches a destroyed resource (SoundSystem's handler did `Soloud_setVolume` on the freed handle) must null-guard, because settings writes happen at shutdown too (the audio gui persists its last slider change in `removed()`).
