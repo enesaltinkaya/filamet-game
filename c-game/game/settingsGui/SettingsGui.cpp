@@ -1,5 +1,6 @@
 #include "SettingsGui.h"
 #include "audio/SettingsAudioGui.h"
+#include "graphics/SettingsGraphicsGui.h"
 #include "video/SettingsVideoGui.h"
 #include "ecs/system/lua/LuaSystem.h"
 #include "gui/rmlui/GuiManagerRmlUi.h"
@@ -54,6 +55,8 @@ void SettingsGui::added() {
             showAudioSettings(nullptr);
         } else if (utils::strequals(getenv("ENGINE_SETTINGS_AUTOTEST"), "video")) {
             showVideoSettings(nullptr);
+        } else if (utils::strequals(getenv("ENGINE_SETTINGS_AUTOTEST"), "graphics")) {
+            showGraphicsSettings(nullptr);
         }
     }
 }
@@ -85,11 +88,9 @@ int showVideoSettings(void* _) {
     return 0;
 }
 
-// The graphics sub-menu is ported after audio/video — the button stays live
-// (and plays its click sound) but reports its absence until its document
-// exists.
 int showGraphicsSettings(void* _) {
-    utils::warn("settingsGui: graphics settings menu not ported yet");
+    settingsGuiHide();
+    engine::guiManagerAddGuiNextFrame(&settingsGraphicsGui);
     return 0;
 }
 
