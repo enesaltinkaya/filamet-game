@@ -4,6 +4,8 @@
 #include "playerGui/PlayerGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
 #include "settingsGui/SettingsGui.h"
+#include "settingsGui/audio/SettingsAudioGui.h"
+#include "settingsGui/video/SettingsVideoGui.h"
 #include "gui/GuiManager.h"
 #include "gui/rmlui/GuiManagerRmlUi.h"
 #include "gameState/GameState.h"
@@ -28,15 +30,26 @@ MainMenuGui::MainMenuGui() : engine::System("mainMenu") {}
 static void* document = nullptr;
 static void* model    = nullptr;
 
-// SETTINGS opens the graphics settings gui; the menu steps aside and comes
-// back on BACK.
+// SETTINGS opens the settings panel OVER the menu (the old engine's
+// slide-over: a right-side panel over the dimmed menu, per settings.css) —
+// the menu stays underneath and BACK just closes the panel.
 static void openSettings(void) {
-    engine::guiManagerRemoveGuiNextFrame(&mainMenuGui);
-    engine::gui::guiAdd(&settingsGui);
+    if (!settingsGuiIsShowing())
+        engine::guiManagerAddGuiNextFrame(&settingsGui);
 }
 
 static void enterWorld(void) {
     utils::info("mainMenu: ENTER WORLD");
+    // A settings page left open over the menu must not ride along into the
+    // world (the old engine hid it on the state transition). The sub-pages
+    // (audio/video so far) stay registered while their document shows, so
+    // they are removed too.
+    if (settingsGuiIsShowing())
+        engine::guiManagerRemoveGuiNextFrame(&settingsGui);
+    if (settingsAudioGuiIsShowing())
+        engine::guiManagerRemoveGuiNextFrame(&settingsAudioGui);
+    if (settingsVideoGuiIsShowing())
+        engine::guiManagerRemoveGuiNextFrame(&settingsVideoGui);
     gameSystem.loadWorld();  // blocks a moment on first entry only
     gameStateSet(STATE_PLAYING);
     // Jolt world first: the terrain's heightfield sync and the player's
@@ -53,7 +66,7 @@ static void enterWorld(void) {
     // actions panel while in the world
     engine::guiManagerAddGuiNextFrame(&cameraGui);
     engine::guiManagerAddGuiNextFrame(&playerGui);
-    engine::gui::guiAdd(&playerActionsGui);
+    engine::guiManagerAddGuiNextFrame(&playerActionsGui);
 }
 
 static void exitGame(void) {

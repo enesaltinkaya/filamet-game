@@ -191,8 +191,11 @@ void windowPollEvents(void) {
                 break;
             case SDL_EVENT_WINDOW_RESIZED:
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                window.width = (u32)event.window.data1;
-                window.height = (u32)event.window.data2;
+                if (window.width != (u32)event.window.data1 || window.height != (u32)event.window.data2) {
+                    window.width  = (u32)event.window.data1;
+                    window.height = (u32)event.window.data2;
+                    utils::info("window: resized %ux%u", window.width, window.height);
+                }
                 break;
         }
     }
@@ -261,6 +264,13 @@ void windowHideCursor(void) {
 void windowShowCursor(void) {
     cursorVisible = true;
     if (window.handle) SDL_ShowCursor();
+}
+
+void windowToggleFullscreen(char on) {
+    if (!window.handle) return;
+    // SDL3: SDL_bool is plain bool (the SDL_TRUE/SDL_FALSE old names are not enabled)
+    SDL_SetWindowFullscreen(window.handle, on);
+    utils::info("window: fullscreen %s", on ? "on" : "off");
 }
 
 // ── Cursor support ──────────────────────────────────────────────────────────

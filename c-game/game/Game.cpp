@@ -994,7 +994,7 @@ namespace game {
             engine::guiManagerAddGuiNextFrame(&mainMenuGui);
             engine::guiManagerRemoveGuiNextFrame(&cameraGui);
             engine::guiManagerRemoveGuiNextFrame(&playerGui);
-            engine::gui::guiRemove(&playerActionsGui);
+            engine::guiManagerRemoveGuiNextFrame(&playerActionsGui);
         }
     }
 

@@ -53,6 +53,12 @@ void windowSetRelativeMouseMode(char on);  // true: relative mode + cursor hidde
 void windowHideCursor(void);
 void windowShowCursor(void);
 
+/* Toggle desktop fullscreen (the video settings' Fullscreen row). The size
+ * change flows through the normal resize pipeline: SDL posts WINDOW_RESIZED,
+ * the renderer re-sizes the swapchain, and the rmlui manager gets its
+ * INPUT_EVENT_WINDOW_RESIZED (rmlSetDimensions). */
+void windowToggleFullscreen(char on);
+
 // Cursor support (SDL system cursors) — the pointers are passed to the
 // crmlui wrapper (RmlParams.window) and windowSetCursor is used as its
 // set-cursor callback (0=arrow, 1=pointer/hand, 2=text, 3=move, 4=cross,

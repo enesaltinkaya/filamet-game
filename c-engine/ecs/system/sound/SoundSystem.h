@@ -23,4 +23,9 @@ void soundStop(struct Sound* sound);
 void soundPlayHover(void);
 void soundPlayClick(void);
 void soundPlayError(void);
+
+/* Click at the current MUSIC level (no effects scaling, unthrottled) — the
+ * settings audio page plays it after a music-slider change so the new level
+ * is heard immediately (old engine's soundPlayClickOnMusicLevel). */
+void soundPlayClickOnMusicLevel(void);
 }  // namespace engine

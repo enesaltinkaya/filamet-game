@@ -100,6 +100,9 @@ void soundStop(Sound* sound) {
 }
 
 void settingsSaved(void* _) {
+    if (!audio.soloud) {
+        return;  // the signal can fire after this system is removed (e.g. a settings gui flush on shutdown)
+    }
     for (i32 i = 0, si = static_cast<i32>(audio.loopingHandles.size()); i < si; i++) {
         int handle = audio.loopingHandles[i];
         Soloud_setVolume((Soloud*)audio.soloud, handle, utils::settingsGetDouble("music") / 100.);
@@ -127,6 +130,10 @@ void soundPlayError(void) {
         lastPlayed = utils::nanos();
         soundPlay(audio.errorEffect, utils::settingsGetDouble("effects") / 100., 0);
     }
+}
+
+void soundPlayClickOnMusicLevel(void) {
+    soundPlay(audio.buttonClickEffect, utils::settingsGetDouble("music") / 100., 0);
 }
 
 void SoundSystem::preUpdate() {
