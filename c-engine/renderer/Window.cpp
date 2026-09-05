@@ -78,6 +78,21 @@ bool windowCreate(const char* title, u32 width, u32 height) {
 
     window.width = width;
     window.height = height;
+
+    // Old-engine parity: uiScale 0 means "auto" — seed the persisted setting
+    // with the display scale once (settings are already loaded in utilsInit);
+    // guiManagerScale() then reads it every frame. cursorScale (world-cursor
+    // scaling) is skipped on wayland like the old engine.
+    if (utils::settingsGetDouble("uiScale") <= 0.0) {
+        double scale = (double)SDL_GetWindowDisplayScale(window.handle);
+        utils::settingsSetDouble("uiScale", scale);
+        if (getenv("WAYLAND_DISPLAY") == nullptr) {
+            utils::settingsSetDouble("cursorScale", scale);
+        }
+        utils::settingsWrite();
+        utils::info("window: uiScale was 0, set to display scale %g", scale);
+    }
+
     windowLoadCursors();
     utils::info("window: created %u x %u%s", width, height, hidden ? " (hidden)" : "");
     return true;

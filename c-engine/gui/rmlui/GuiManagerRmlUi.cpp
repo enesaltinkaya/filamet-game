@@ -24,9 +24,10 @@ static std::vector<System*> rmluiGuis;
 static std::vector<System*> pendingAdds;
 static std::vector<System*> pendingRemoves;
 
-// This engine's window has no xscale; uiScale 0 (the settings default) means
-// "auto" — render at 1:1 pixels. The old engine auto-set the setting to
-// window.xscale; here the fallback stays local.
+// uiScale 0 (the settings default) means "auto": windowCreate() seeds the
+// persisted setting with SDL_GetWindowDisplayScale once (old-engine parity),
+// so from the first frame on this reads the display scale. The 1.0 fallback
+// only covers the window-less / settings-unwritten edge cases.
 static float guiManagerScale(void) {
     double s = utils::settingsGetDouble("uiScale");
     return s > 0.0 ? (float)s : 1.0f;
