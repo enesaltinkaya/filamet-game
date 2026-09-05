@@ -97,13 +97,22 @@ static const float4x4& placementRootMatrix(void) {
 }
 
 // ── Animation playback (clips live in a separate animation-source asset) ────
-// gltfUpdate samples the active clip (and, during a crossfade, the clip being
-// blended out), blends the per-node TRS, then rebuilds the visible model's
-// local → global → joint matrices with the placement root. The pose is driven
-// ONLY by the anim source; the visible model itself carries no clips.
+// gltfUpdate samples the active clip, blends it with a FROZEN snapshot of the
+// pose that was on screen at transition time (the blend-out source), then
+// rebuilds the visible model's local → global → joint matrices with the
+// placement root. The pose is driven ONLY by the anim source; the visible
+// model itself carries no clips.
+//
+// Transitions are smoothed two ways (the old live-clip crossfade lurches):
+//  - the incoming looping clip is phase-matched to the on-screen pose, so the
+//    crossfade starts from the closest phase instead of lurching to frame 0;
+//  - the blend-out is a frozen snapshot (not a live clip), so overlapping
+//    transitions start from exactly what was on screen and an in-progress
+//    blend is never dropped mid-fade; the weight is smoothstep-eased so the
+//    blended pose's velocity is continuous at the blend boundaries.
 static std::unique_ptr<GLTF::Model> animSource;
 static std::unique_ptr<GLTF::ModelTransforms> animPoseA;  // active clip TRS
-static std::unique_ptr<GLTF::ModelTransforms> animPoseB;  // blend-out clip TRS
+static std::unique_ptr<GLTF::ModelTransforms> animPoseB;  // frozen blend-out pose TRS
 static Uint32 animSourceSceneIndex = 0;
 static char animNodeCountsMatch = 0;
 
@@ -114,9 +123,8 @@ struct ClipPlay {
     bool loop = true;
 };
 static ClipPlay active;
-static ClipPlay blendFrom;
 static f32 blendElapsed = 0.0f;
-static f32 blendDuration = 0.0f;
+static f32 blendDuration = 0.0f;  // >0 while a crossfade into `active` is running
 static char playing = 0;
 
 // seconds since animation start, wrapped/clamped into the clip's key range
@@ -215,6 +223,97 @@ static void clipSampleTRS(const GLTF::Model& src, Uint32 sceneIdx, const ClipPla
             case GLTF::AnimationChannel::PATH_TYPE::WEIGHTS:
                 break;  // morph weights not used by the character assets
         }
+    }
+}
+
+// Copy the model's static per-node TRS (pre-animation rest pose) into
+// out.NodeAnimations. Used as the blend-out source before the first sample.
+static void captureStaticPose(const GLTF::Model& src, Uint32 srcScene,
+        GLTF::ModelTransforms& out) {
+    const GLTF::Scene& scene = src.Scenes[srcScene];
+    out.NodeAnimations.resize(src.Nodes.size());
+    for (const GLTF::Node* n : scene.LinearNodes) {
+        out.NodeAnimations[n->Index].Translation = n->Translation;
+        out.NodeAnimations[n->Index].Rotation    = n->Rotation;
+        out.NodeAnimations[n->Index].Scale       = n->Scale;
+    }
+}
+
+// Per-node pose distance used to phase-match an incoming clip: sums translation
+// error plus rotation error (up to a half turn) over the scene's nodes. Lower =
+// closer. Only the TRS that the crossfade actually blends (T/R) is scored.
+static f32 poseDistance(const GLTF::Model& src, Uint32 srcScene,
+        const GLTF::ModelTransforms& a, const GLTF::ModelTransforms& b) {
+    const GLTF::Scene& scene = src.Scenes[srcScene];
+    f32 dist = 0.0f;
+    for (const GLTF::Node* n : scene.LinearNodes) {
+        const auto& A = a.NodeAnimations[n->Index];
+        const auto& B = b.NodeAnimations[n->Index];
+        const float3 dT = B.Translation - A.Translation;
+        dist += length(dT);
+        f32 dp = dot(B.Rotation.q, A.Rotation.q);
+        dp = std::max(-1.0f, std::min(1.0f, dp));
+        dist += (1.0f - std::abs(dp)) * 4.0f;  // rotation error, up to a half turn
+    }
+    return dist;
+}
+
+// Start time of a looping clip whose sampled pose is closest to `ref` — used to
+// phase-match the incoming clip to the on-screen pose so a crossfade doesn't
+// lurch to the clip's frame 0 (the classic idle↔run scuff). Samples `N` phases
+// over one loop; cheap enough to run once per transition, not per frame.
+static f32 phaseMatchTime(const GLTF::Model& src, Uint32 srcScene, int clipIndex,
+        const GLTF::ModelTransforms& ref) {
+    const GLTF::Animation& anim = src.Animations[clipIndex];
+    if (anim.End <= anim.Start) {
+        return 0.0f;
+    }
+    const f32 len = anim.End - anim.Start;
+    static GLTF::ModelTransforms scratch;
+    const int N = 24;
+    f32 bestTime = anim.Start;
+    f32 bestDist = 1e30f;
+    for (int i = 0; i < N; ++i) {
+        const f32 t = anim.Start + len * (f32)i / (f32)N;
+        ClipPlay cand{clipIndex, t, 1.0f, true};
+        clipSampleTRS(src, srcScene, cand, scratch);
+        const f32 d = poseDistance(src, srcScene, ref, scratch);
+        if (d < bestDist) {
+            bestDist = d;
+            bestTime = t;
+        }
+    }
+    return bestTime;
+}
+
+// Snapshot the currently displayed per-node pose into out — the blend-out
+// source. That is the active clip, or the in-progress crossfade (lerp of the
+// old frozen pose and the active clip) when one is running. Capturing the
+// on-screen pose (not a live clip) is what keeps overlapping transitions
+// continuous: a new transition starts from exactly what was on screen.
+static void captureDisplayedPose(const GLTF::Model& src, Uint32 srcScene,
+        GLTF::ModelTransforms& out) {
+    if (playing && active.index >= 0 && animPoseA &&
+            animPoseA->NodeAnimations.size() == src.Nodes.size()) {
+        if (blendDuration > 0.0f && animPoseB &&
+                animPoseB->NodeAnimations.size() == src.Nodes.size()) {
+            // A crossfade is in progress: capture its exact on-screen pose.
+            // `out` is animPoseB here, so copy each old node value before
+            // overwriting it (no resize: the size check above already holds).
+            const f32 t = std::clamp(blendElapsed / blendDuration, 0.0f, 1.0f);
+            const f32 w = t * t * (3.0f - 2.0f * t);
+            for (size_t i = 0; i < src.Nodes.size(); ++i) {
+                const auto B = animPoseB->NodeAnimations[i];
+                const auto A = animPoseA->NodeAnimations[i];
+                out.NodeAnimations[i].Translation = lerp(B.Translation, A.Translation, w);
+                out.NodeAnimations[i].Scale       = lerp(B.Scale, A.Scale, w);
+                out.NodeAnimations[i].Rotation    = normalize(slerp(B.Rotation, A.Rotation, w));
+            }
+        } else {
+            out.NodeAnimations = animPoseA->NodeAnimations;
+        }
+    } else {
+        captureStaticPose(src, srcScene, out);
     }
 }
 
@@ -546,19 +645,16 @@ void gltfUpdateDiligent(double elapsedSeconds) {
         const Uint32 srcScene = animSource ? animSourceSceneIndex : sceneIndex;
         const f32 dt = (f32)elapsedSeconds;
         clipAdvance(active, src, dt);
-        if (blendDuration > 0.0f && blendFrom.index >= 0) {
-            clipAdvance(blendFrom, src, dt);
+        if (blendDuration > 0.0f) {
             blendElapsed += dt;
             if (blendElapsed >= blendDuration) {
                 blendDuration = 0.0f;
-                blendFrom.index = -1;
             }
         }
 
+        // animPoseB holds the frozen blend-out snapshot (captured at transition
+        // time); only the active clip is resampled each step.
         clipSampleTRS(src, srcScene, active, *animPoseA);
-        if (blendDuration > 0.0f && blendFrom.index >= 0) {
-            clipSampleTRS(src, srcScene, blendFrom, *animPoseB);
-        }
         // The pose matrices themselves are rebuilt in the render pass
         // (worldDraw → poseRebuild) so the placement sees this frame's camera
         // anchor, not the previous frame's.
@@ -584,9 +680,14 @@ static void poseRebuild(void) {
     const bool playingNow = playing && active.index >= 0;
     GLTF::ModelTransforms* poseB = nullptr;
     f32 w = 1.0f;
-    if (playingNow && blendDuration > 0.0f && blendFrom.index >= 0) {
+    if (playingNow && blendDuration > 0.0f) {
         poseB = animPoseB.get();
-        w = std::clamp(blendElapsed / blendDuration, 0.0f, 1.0f);
+        // Smoothstep the crossfade weight: its derivative is 0 at both ends,
+        // so the blended pose's velocity is continuous at the blend boundaries
+        // (a linear ramp would kink the motion as it enters and leaves the
+        // new clip — the "jerky" part of a transition).
+        const f32 t = std::clamp(blendElapsed / blendDuration, 0.0f, 1.0f);
+        w = t * t * (3.0f - 2.0f * t);
     }
     posePipeline(*model, *transforms, playingNow ? animPoseA.get() : nullptr, poseB, w, root);
 
@@ -804,7 +905,6 @@ void gltfDestroyDiligent(void) {
     animSource.reset();
     playing = 0;
     active = ClipPlay{};
-    blendFrom = ClipPlay{};
     blendDuration = 0.0f;
     placementDirty = true;
     placementAnchor[0] = 0.0;
@@ -899,7 +999,6 @@ bool gltfPlayAnimationDiligent(const char* name, f32 speed, bool loop) {
         return false;
     }
     active = ClipPlay{index, 0.0f, speed, loop};
-    blendFrom = ClipPlay{};
     blendDuration = 0.0f;
     blendElapsed = 0.0f;
     playing = 1;
@@ -915,12 +1014,18 @@ bool gltfPlayAnimationBlendedDiligent(const char* name, f32 speed, bool loop, f3
     if (!playing || blendSeconds <= 0.0f) {
         return gltfPlayAnimationDiligent(name, speed, loop);
     }
-    // the currently playing clip becomes the blend-out source; both advance
-    // during the crossfade so loop blends (run → idle) stay fluid
-    blendFrom = active;
+    const GLTF::Model& src = animSource ? *animSource : *model;
+    const Uint32 srcScene = animSource ? animSourceSceneIndex : sceneIndex;
+    // Freeze the exact on-screen pose as the blend-out source. A live clip
+    // would keep advancing (and an in-progress blend would be dropped mid-
+    // fade); the snapshot is continuous with what the player just saw.
+    captureDisplayedPose(src, srcScene, *animPoseB);
+    // Phase-match a looping clip to that pose so the crossfade starts from
+    // the closest phase instead of lurching to the clip's frame 0.
+    const f32 startTime = loop ? phaseMatchTime(src, srcScene, index, *animPoseB) : 0.0f;
     blendElapsed = 0.0f;
     blendDuration = blendSeconds;
-    active = ClipPlay{index, 0.0f, speed, loop};
+    active = ClipPlay{index, startTime, speed, loop};
     playing = 1;
     return true;
 }
@@ -928,7 +1033,6 @@ bool gltfPlayAnimationBlendedDiligent(const char* name, f32 speed, bool loop, f3
 void gltfStopAnimationDiligent(void) {
     playing = 0;
     active = ClipPlay{};
-    blendFrom = ClipPlay{};
     blendDuration = 0.0f;
 }
 }  // namespace engine::gltf
