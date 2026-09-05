@@ -111,8 +111,8 @@ PSPropsOut main(in PSPropsIn In)
     BaseLayerShadingInfo base;
     base.Metallic = 0.0;
     base.Srf      = srf;
-    base.Normal   = N;
-    base.NdotV    = dot_sat(N, V);
+    base.Normal   = Nlight;
+    base.NdotV    = dot_sat(Nlight, V);
 
     SurfaceShadingInfo shading;
     shading.Pos       = In.WorldPos;
