@@ -31,6 +31,13 @@ void worldDraw(Diligent::IDeviceContext* ctx);
 void guiDraw(Diligent::IDeviceContext* ctx);
 void guiOnBackendDestroy(void);  // release gui resources before device dies
 
+// The rmlui pass (crmlui wrapper, Diligent render half — see
+// gui/rmlui/RmluiDiligent.h): the wrapper's callbacks queue geometry during
+// rmlUpdate/rmlRenderVulkan (postUpdate); this hook uploads + draws it on
+// top of the world/ImGui passes. No-op while no rmlui geometry is queued.
+void rmluiDraw(Diligent::IDeviceContext* ctx);
+void rmluiOnBackendDestroy(void);  // release rmlui GPU state before device dies
+
 // Current frame camera/light state (updated by the frame loop before worldDraw)
 const Diligent::float4x4& diligentFrameView(void);
 const Diligent::float4x4& diligentFrameProj(void);

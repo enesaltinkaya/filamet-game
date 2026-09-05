@@ -1,6 +1,7 @@
 #include "Engine.h"
 #include "Utils.h"
 #include "ecs/Ecs.h"
+#include "ecs/system/lua/LuaSystem.h"
 #include "renderer/Renderer.h"
 #include "renderer/Window.h"
 
@@ -50,6 +51,10 @@ void engineStart(void) {
 
     utils::info("engine: stopping");
     ecsDestroy();
+    // The Lua state must outlive ecsDestroy: rmlDestroy (in the rmlui systems'
+    // removed()) tears down Rml::Contexts whose Lua listeners use the state
+    // during ~Context. Same order as the old engine (ecsDestroy → luaDestroy).
+    luaDestroy();
     renderer::rendererDestroy();
 }
 

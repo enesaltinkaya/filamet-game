@@ -12,6 +12,22 @@ Input input = {};
 
 static char relativeMouse = 0;
 
+// Cursor support (SDL system cursors). arrow/hand are handed to the crmlui
+// wrapper; text is a system cursor. Tracked so windowIsCursorVisible() can
+// gate GUI input forwarding.
+static SDL_Cursor* cursorArrow = nullptr;
+static SDL_Cursor* cursorHand = nullptr;
+static SDL_Cursor* cursorText = nullptr;
+static bool cursorVisible = true;
+
+// Frame-to-frame state for synthesizing the InputEvent stream.
+static float shimPrevMouseX = 0.0f;
+static float shimPrevMouseY = 0.0f;
+static u32 shimPrevWidth = 0;
+static u32 shimPrevHeight = 0;
+
+static void windowSynthesizeInputEvents(void);
+
 // automated runs (screenshot / renderdoc capture): create the window hidden so
 // nothing ever appears on screen — rendering still works, the swapchain just
 // presents to an unmapped window. Same gating as rendererInit in Renderer.cpp
@@ -62,11 +78,13 @@ bool windowCreate(const char* title, u32 width, u32 height) {
 
     window.width = width;
     window.height = height;
+    windowLoadCursors();
     utils::info("window: created %u x %u%s", width, height, hidden ? " (hidden)" : "");
     return true;
 }
 
 void windowDestroy(void) {
+    windowDestroyCursors();
     if (window.handle) {
         SDL_DestroyWindow(window.handle);
         window.handle = nullptr;
@@ -99,7 +117,7 @@ void* windowNativeHandle(void) {
 }
 
 void windowPollEvents(void) {
-    // one-shot input fields: fresh per frame
+// one-shot input fields: fresh per frame
     input.pressed = 0;
     input.released = 0;
     input.mouseDx = 0.0f;
@@ -200,6 +218,9 @@ void windowPollEvents(void) {
     input.ctrl  = keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL];
     input.shift = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
     input.alt   = keys[SDL_SCANCODE_LALT] || keys[SDL_SCANCODE_RALT];
+
+    // Build the per-frame InputEvent stream from the accumulated state.
+    windowSynthesizeInputEvents();
 }
 
 void windowSetRelativeMouseMode(char on) {
@@ -209,17 +230,212 @@ void windowSetRelativeMouseMode(char on) {
         SDL_SetWindowRelativeMouseMode(window.handle, on);
         if (on) {
             SDL_HideCursor();
+            cursorVisible = false;
         } else {
             SDL_ShowCursor();
+            cursorVisible = true;
         }
     }
 }
 
 void windowHideCursor(void) {
+    cursorVisible = false;
     if (window.handle) SDL_HideCursor();
 }
 
 void windowShowCursor(void) {
+    cursorVisible = true;
     if (window.handle) SDL_ShowCursor();
+}
+
+// ── Cursor support ──────────────────────────────────────────────────────────
+
+void windowLoadCursors(void) {
+    windowDestroyCursors();
+    cursorArrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    cursorHand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
+    cursorText  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
+    // default to the arrow (the wrapper re-selects per element on hover)
+    if (cursorArrow) {
+        SDL_SetCursor(cursorArrow);
+    }
+}
+
+void windowDestroyCursors(void) {
+    if (cursorArrow) {
+        SDL_DestroyCursor(cursorArrow);
+        cursorArrow = nullptr;
+    }
+    if (cursorHand) {
+        SDL_DestroyCursor(cursorHand);
+        cursorHand = nullptr;
+    }
+    if (cursorText) {
+        SDL_DestroyCursor(cursorText);
+        cursorText = nullptr;
+    }
+}
+
+void* windowGetArrowCursor(void) {
+    return cursorArrow;
+}
+
+void* windowGetPointerCursor(void) {
+    return cursorHand;
+}
+
+void* windowGetTextCursor(void) {
+    return cursorText;
+}
+
+void windowSetCursor(int cursorType) {
+    SDL_Cursor* cursor = cursorArrow;
+    switch (cursorType) {
+        case 1: cursor = cursorHand; break;  // pointer/hand
+        case 2: cursor = cursorText; break;  // text
+        default: break;                       // 0=arrow (and any unhandled)
+    }
+    if (cursor) SDL_SetCursor(cursor);
+}
+
+bool windowIsCursorVisible(void) {
+    return cursorVisible;
+}
+
+// ── InputEvent shim ─────────────────────────────────────────────────────────
+// Synthesize the old-engine InputEvent stream (crmlui consumes it via
+// rmlSendInputEvent) from the new engine's accumulated input state. The new
+// engine collapses per-frame input into single fields, so at most one key-down,
+// one key-up and one mouse-button per frame is emitted — enough for GUI
+// interaction (hover, click, text, tab/enter/arrows, resize).
+KeyCode windowMapScancode(int scancode) {
+    switch (scancode) {
+        case SDL_SCANCODE_A: return KEY_A;
+        case SDL_SCANCODE_B: return KEY_B;
+        case SDL_SCANCODE_C: return KEY_C;
+        case SDL_SCANCODE_D: return KEY_D;
+        case SDL_SCANCODE_E: return KEY_E;
+        case SDL_SCANCODE_F: return KEY_F;
+        case SDL_SCANCODE_H: return KEY_H;
+        case SDL_SCANCODE_M: return KEY_M;
+        case SDL_SCANCODE_N: return KEY_N;
+        case SDL_SCANCODE_P: return KEY_P;
+        case SDL_SCANCODE_R: return KEY_R;
+        case SDL_SCANCODE_S: return KEY_S;
+        case SDL_SCANCODE_T: return KEY_T;
+        case SDL_SCANCODE_W: return KEY_W;
+        case SDL_SCANCODE_X: return KEY_X;
+        case SDL_SCANCODE_1: return KEY_1;
+        case SDL_SCANCODE_2: return KEY_2;
+        case SDL_SCANCODE_5: return KEY_5;
+        case SDL_SCANCODE_RETURN: return KEY_RETURN;
+        case SDL_SCANCODE_ESCAPE: return KEY_ESCAPE;
+        case SDL_SCANCODE_BACKSPACE: return KEY_BACKSPACE;
+        case SDL_SCANCODE_TAB: return KEY_TAB;
+        case SDL_SCANCODE_SPACE: return KEY_SPACE;
+        case SDL_SCANCODE_F8: return KEY_F8;
+        case SDL_SCANCODE_LCTRL: return KEY_LCTRL;
+        case SDL_SCANCODE_RCTRL: return KEY_RCTRL;
+        case SDL_SCANCODE_LSHIFT: return KEY_LSHIFT;
+        case SDL_SCANCODE_RSHIFT: return KEY_RSHIFT;
+        case SDL_SCANCODE_LALT: return KEY_LALT;
+        case SDL_SCANCODE_RALT: return KEY_RALT;
+        case SDL_SCANCODE_UP: return KEY_UP;
+        case SDL_SCANCODE_DOWN: return KEY_DOWN;
+        case SDL_SCANCODE_LEFT: return KEY_LEFT;
+        case SDL_SCANCODE_RIGHT: return KEY_RIGHT;
+        case SDL_SCANCODE_KP_ENTER: return KEY_KP_ENTER;
+        case SDL_SCANCODE_KP_PLUS: return KEY_KP_PLUS;
+        case SDL_SCANCODE_KP_MINUS: return KEY_KP_MINUS;
+        case SDL_SCANCODE_DELETE: return KEY_DELETE;
+        default: return KEY_NONE;
+    }
+}
+
+static MouseButton windowMapMouseButton(int button) {
+    switch (button) {
+        case 0: return MOUSE_BUTTON_LEFT;
+        case 1: return MOUSE_BUTTON_RIGHT;
+        case 2: return MOUSE_BUTTON_MIDDLE;
+        default: return MOUSE_BUTTON_NONE;
+    }
+}
+
+static void windowSynthesizeInputEvents(void) {
+    input.events.clear();
+    auto push = [&](InputEvent& ev) {
+        ev.ctrl  = input.ctrl;
+        ev.shift = input.shift;
+        ev.alt   = input.alt;
+        input.events.push_back(ev);
+    };
+
+    if (input.pressed != 0) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_KEY_DOWN;
+        ev.data.key.key = windowMapScancode(input.pressed);
+        if (ev.data.key.key != KEY_NONE) push(ev);
+    }
+
+    if (input.released != 0) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_KEY_UP;
+        ev.data.key.key = windowMapScancode(input.released);
+        if (ev.data.key.key != KEY_NONE) push(ev);
+    }
+
+    if (input.mouseX != shimPrevMouseX || input.mouseY != shimPrevMouseY ||
+        input.mouseDx != 0.0f || input.mouseDy != 0.0f) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_MOUSE_MOVE;
+        ev.data.motion.x = input.mouseX;
+        ev.data.motion.y = input.mouseY;
+        ev.data.motion.dx = input.mouseDx;
+        ev.data.motion.dy = input.mouseDy;
+        input.events.push_back(ev);
+    }
+
+    if (input.mousePressed >= 0) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_MOUSE_BUTTON_DOWN;
+        ev.data.mouseButton.button = windowMapMouseButton(input.mousePressed);
+        push(ev);
+    }
+
+    if (input.mouseReleased >= 0) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_MOUSE_BUTTON_UP;
+        ev.data.mouseButton.button = windowMapMouseButton(input.mouseReleased);
+        push(ev);
+    }
+
+    if (input.scrollY != 0.0f) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_MOUSE_WHEEL;
+        ev.data.wheel.x = 0.0f;
+        ev.data.wheel.y = input.scrollY;
+        input.events.push_back(ev);
+    }
+
+    if (input.text[0] != '\0') {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_TEXT_INPUT;
+        strncpy(ev.data.text.text, input.text, sizeof ev.data.text.text - 1);
+        ev.data.text.text[sizeof ev.data.text.text - 1] = '\0';
+        input.events.push_back(ev);
+    }
+
+    if (window.width != shimPrevWidth || window.height != shimPrevHeight) {
+        InputEvent ev = {};
+        ev.type = INPUT_EVENT_WINDOW_RESIZED;
+        ev.data.resize.width = (int)window.width;
+        ev.data.resize.height = (int)window.height;
+        input.events.push_back(ev);
+    }
+
+    shimPrevMouseX = input.mouseX;
+    shimPrevMouseY = input.mouseY;
+    shimPrevWidth = window.width;
+    shimPrevHeight = window.height;
 }
 }  // namespace engine

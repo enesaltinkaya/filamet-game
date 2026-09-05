@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Defines.h"
+#include "shared/InputEventShared.h"
+
+#include <vector>
 
 struct SDL_Window;
 
@@ -20,6 +23,11 @@ struct Input {
     char mouseLeft = 0, mouseRight = 0, mouseMiddle = 0;  // held button state
     i32 mousePressed = -1, mouseReleased = -1;            // button idx (0/1/2) this frame
     char text[256] = {};                                   // UTF-8 text input this frame
+
+    // Per-frame stream of old-engine-style InputEvents synthesized from the
+    // accumulated state above (see windowSynthesizeInputEvents). crmlui's input
+    // callbacks consume this (rmlSendInputEvent per event).
+    std::vector<InputEvent> events;
 };
 
 struct Window {
@@ -37,7 +45,23 @@ void windowPollEvents(void);     // pumps events; engineStop() on window close
 
 extern struct Input input;
 
+// SDL scancode -> old-engine KeyCode (0 = KEY_NONE for unmapped keys); the
+// rmlui gui manager uses it for its Ctrl+letter toggles.
+KeyCode windowMapScancode(int scancode);
+
 void windowSetRelativeMouseMode(char on);  // true: relative mode + cursor hidden
 void windowHideCursor(void);
 void windowShowCursor(void);
+
+// Cursor support (SDL system cursors) — the pointers are passed to the
+// crmlui wrapper (RmlParams.window) and windowSetCursor is used as its
+// set-cursor callback (0=arrow, 1=pointer/hand, 2=text, 3=move, 4=cross,
+// 5=resize, 6=unavailable).
+void windowLoadCursors(void);
+void windowDestroyCursors(void);
+void* windowGetArrowCursor(void);
+void* windowGetPointerCursor(void);  // pointing hand
+void* windowGetTextCursor(void);
+void windowSetCursor(int cursorType);
+bool windowIsCursorVisible(void);
 }  // namespace engine

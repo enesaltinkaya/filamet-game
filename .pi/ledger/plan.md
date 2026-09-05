@@ -1,8 +1,19 @@
-# Plan
+# plan
 
-The attached screenshot (reproduced headless at camera (-100,2,-100)→(-101,1.5,-101), the default in-game framing) shows the ground covered with correct 3D grass tufts but also scattered FLAT, striped, teal/cyan-green rectangular patches — billboard grass cards that render as unrotated, un-alpha-tested quads lying in the ground plane (or wrong orientation/tint) instead of upright blades. The defect is in the azgaar props/grass pipeline: c-game/game/azgaar/AzgaarProps.cpp (+AzgaarPropMesh.*) scatters instances into instance textures, and c-engine/renderer/filament/PropsRenderFilament.cpp draws them (grass card textures are loaded as sRGB RGBA8; thin double-sided vegetation is handled specially around line 432; the "look matches the old engine" comment at ~149 is the intent).
+Strategy: port the old engine's RmlUi GUI system from /home/enes/Projects/c/game-001-cpp into
+this project, keeping the existing C wrapper (crmlui, prebuilt at
+/home/enes/Projects/c/cpp-thirdparty/rmlui, Vulkan renderer). The old system is
+`c-engine/renderer/gui/rmlui/GuiManagerRmlUi.{h,cpp}` plus its guis (DebugGui, PassStatsGui,
+ShowFpsGui, StatsGui) and game-level guis; it drives RmlUi documents via the crmlui C API.
+Approach: add a `gui_rmlui` (or equivalent) layer in c-engine that wraps crmlui.h,
+wire it into the renderer's frame (Vulkan device/context, after main render pass),
+link `${thirdparty}/rmlui/wrapper/build-linux/libcrmlui.a` + the librmlui* libs the old
+c-game CMakeLists already references, port the GuiManagerRmlUi System and at least the
+engine guis, adapt to this engine's ECS/pak/input conventions, and register it in
+c-engine/c-game CMake + Game.cpp. Decide during execution whether the new engine's
+ImGui-based gui layer is kept side-by-side or replaced — the user explicitly wants the
+wrapper path, so RmlUi must be the working GUI; do not delete the existing gui/ layer
+until the rmlui path works (revert safety).
 
-Strategy: first reproduce with a headless screenshot and confirm which instances are wrong (compare against the user's screenshot). Inspect the grass card mesh (AzgaarPropMesh: per-variant meshes, billboard vs fixed orientation), the instance attribute packing (rotation/position/scale in the RGBA32F instance textures), and the props vertex/fragment shaders (azgaar_props.vert/frag) to find why some cards render flat/teal instead of upright. Check the old engine (/home/enes/Projects/c/game-001-cpp) grass rendering for the intended behavior. Fix the orientation/alpha/tint handling so every grass instance renders like the good tufts, re-verify with the headless screenshot, and confirm the flat patches are gone while the good tufts are unchanged.
-
-Verification: ./scripts/build.sh && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json ENGINE_AUTOTEST=enter ENGINE_SCREENSHOT_FRAME=400 ENGINE_SCREENSHOT=/tmp/verify_grass.jpg ./build/c-game/c-game  (then inspect /tmp/verify_grass.jpg: no flat striped teal/green rectangular grass patches on the ground; upright grass tufts as in good reference)
-Baseline commit: ae67685ad711a3ddeb53b504039efb15f2dae7f0 (clean)
+Verification: ./scripts/build.sh
+Baseline commit: 5f511142fb847e6c622339460624a2cb95dd3a4f (clean)

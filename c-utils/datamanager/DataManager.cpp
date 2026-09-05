@@ -123,6 +123,7 @@ void dataManagerDestroy(void) {
 }
 
 String dataManagerRead(const char* path) {
+    debug("dataManagerRead: %255s", path);  // TEMP probe (task 4)
     threadLock(&lock);
     struct zip* zipHandle = findPak(path);
     if (!zipHandle) {
@@ -145,6 +146,7 @@ String dataManagerRead(const char* path) {
 }
 
 void dataManagerReadChunk(const char* path, void* buffer, u32 offset, u32 size) {
+    debug("dataManagerReadChunk: %255s", path);  // TEMP probe (task 4)
     threadLock(&lock);  // Still need this because libzip isn't fully thread-safe on single handle
 
     struct zip* zipHandle = findPak(path);
@@ -188,6 +190,7 @@ std::vector<String> dataManagerListFiles(const char* extension) {
 }
 
 void* dmRmlopen(const char* path) {
+    debug("rml open: %s", path);  // TEMP probe (task 4)
     threadLock(&lock);
     struct zip* zipHandle = findPak(path);
     if (!zipHandle) {

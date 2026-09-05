@@ -1,0 +1,32 @@
+body {
+  position: absolute;
+  width: 450dp;
+  height: 100%;
+  z-index: 10;
+  flex-direction: column;
+  background-color: #0000009f;
+  right: 0;
+  opacity: 1;
+  display: flex;
+}
+
+#first {
+  nav-up: "#exit";
+}
+
+#exit {
+  nav-down: "#first";
+}
+
+#mainMenu img {
+  width: 768px;
+  height: 512px;
+  max-width: 100%;
+}
+
+/* The engine's milligram.css points the active-button decorator at the
+ * ktx2 original; this engine's rmlui texture loader only decodes PNG/JPG,
+ * so the menu overrides it with the PNG twin. */
+button.active {
+  decorator: image("/gui/images/button.png");
+}

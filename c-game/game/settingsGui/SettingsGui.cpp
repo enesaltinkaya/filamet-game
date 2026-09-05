@@ -1,6 +1,7 @@
 #include "SettingsGui.h"
 #include "gameState/GameState.h"
 #include "gui/GuiManager.h"
+#include "gui/rmlui/GuiManagerRmlUi.h"
 #include "mainMenu/MainMenuGui.h"
 #include "renderer/Renderer.h"
 #include "ecs/system/sound/SoundSystem.h"
@@ -76,7 +77,7 @@ static void closeSettings(void) {
     flushWrite();
     engine::soundPlayClick();
     engine::gui::guiRemove(&settingsGui);
-    engine::gui::guiAdd(&mainMenuGui);
+    engine::guiManagerAddGuiNextFrame(&mainMenuGui);
 }
 
 void SettingsGui::draw() {

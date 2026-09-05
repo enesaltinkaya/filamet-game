@@ -7,6 +7,7 @@
 #include "ecs/system/physics/PhysicsSystem.h"
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gui/GuiManager.h"
+#include "gui/rmlui/GuiManagerRmlUi.h"
 #include "gltf/Gltf.h"
 #include "renderer/PropsRender.h"
 #include "renderer/Renderer.h"
@@ -680,7 +681,7 @@ namespace game {
         // GUI: bring up the main menu (ImGui via the active backend)
         gameStateSet(STATE_MAIN_MENU);
         engine::gui::guiInit();
-        engine::gui::guiAdd(&mainMenuGui);
+        engine::guiManagerAddGuiNextFrame(&mainMenuGui);
     }
 
     void GameSystem::loadWorld() {
@@ -981,7 +982,7 @@ namespace game {
             // Drop the props scatter + its GPU state while the menu is up
             // (the world stays retained; re-entering re-inits both).
             propsRelease();
-            engine::gui::guiAdd(&mainMenuGui);
+            engine::guiManagerAddGuiNextFrame(&mainMenuGui);
             engine::gui::guiRemove(&cameraGui);
             engine::gui::guiRemove(&playerActionsGui);
         }

@@ -221,6 +221,10 @@ public:
             guiDraw(context);
             uiDrew = true;
         }
+        // rmlui pass: after the ImGui pass (draws on top of it), before the
+        // screenshot capture so GUI shows up in ENGINE_SCREENSHOT frames.
+        // No-op unless the wrapper queued geometry this frame.
+        rmluiDraw(context);
 
         if (rendererScreenshotShouldCapture()) {
             captureScreenshot();
@@ -308,6 +312,7 @@ public:
         heightmapTerrainRenderDestroy();
         propsRenderDestroy();
         guiOnBackendDestroy();
+        rmluiOnBackendDestroy();
         if (context) {
             context->Flush();
             context->WaitForIdle();

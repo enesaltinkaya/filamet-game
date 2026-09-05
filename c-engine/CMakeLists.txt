@@ -31,6 +31,17 @@ target_include_directories(c-engine PUBLIC ${thirdparty}/soloud/git/include)
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git)
 target_include_directories(c-engine PUBLIC ${thirdparty}/imgui/git/backends)  # imgui_impl_vulkan
 
+# ── RmlUi GUI (crmlui C wrapper) + Lua ──────────────────────────────────────
+# Prebuilt archives are linked in c-game (single --start-group on the exe).
+# Includes are PUBLIC so both engine and game code resolve:
+#   crmlui.h (wrapper C surface), RmlUi headers, lua.h, shared/InputEventShared.h
+target_include_directories(c-engine PUBLIC
+    ${thirdparty}/rmlui/wrapper/src
+    ${thirdparty}/rmlui/git/Include
+    ${thirdparty}/lua/git
+    ${thirdparty}/shared
+)
+
 # ── Diligent Engine (the render backend) ─────────────────────────────────────
 set(diligent_git ${thirdparty}/diligent/git)
 set(diligent_root ${diligent_git}/${platform_dir})
@@ -119,6 +130,7 @@ set_source_files_properties(
     renderer/diligent/PropsRenderDiligent.cpp
     gltf/GltfDiligent.cpp
     gui/GuiDiligent.cpp
+    gui/rmlui/RmluiDiligent.cpp
     PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
@@ -135,12 +147,16 @@ set(HEIGHTMAP_TERRAIN_HLSL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_ps.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_vs.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_ps.hlsl
 )
 set(HEIGHTMAP_TERRAIN_HLSL_OUT
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_ps.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_vs.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_ps.hlsl
 )
 add_custom_command(
     OUTPUT ${HEIGHTMAP_TERRAIN_HLSL_OUT}
@@ -157,6 +173,12 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_ps.hlsl
         ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_ps.hlsl
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_vs.hlsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_vs.hlsl
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_ps.hlsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_ps.hlsl
     DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_SRC}
     COMMENT "copy heightmap terrain + props .hlsl sources into pak_1"
     VERBATIM

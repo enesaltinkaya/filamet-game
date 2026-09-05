@@ -40,6 +40,23 @@ target_link_libraries(c-game PRIVATE
     ${thirdparty}/imgui/git/${platform_dir}/libimgui.a
     ${thirdparty}/yoga/git/${platform_dir}/yoga/libyogacore.a
 
+    # RmlUi GUI (crmlui C wrapper, Vulkan callback path — the wrapper calls
+    # back into the engine, see c-engine/gui rmlui layer; same lib set the old
+    # c-game linked). librmlui.a's font interface is FreeType-based → freetype
+    # is required once any rmlui object is pulled in; freetype's own objects
+    # (autofit/sfnt) pull in harfbuzz (shaping) + brotli (WOFF2 sfnt) — the old
+    # c-game linked all of them (task 2's "no hb_* symbols" check only saw
+    # librmlui.a's undefineds, not freetype's).
+    ${thirdparty}/rmlui/wrapper/${platform_dir}/libcrmlui.a
+    ${thirdparty}/rmlui/git/${platform_dir}/librmlui_lua.a
+    ${thirdparty}/rmlui/git/${platform_dir}/librmlui_debugger.a
+    ${thirdparty}/rmlui/git/${platform_dir}/librmlui.a
+    ${thirdparty}/lua/git/${platform_dir}/liblua.a
+    ${thirdparty}/freetype/git/${platform_dir}/libfreetype.a
+    ${thirdparty}/harfbuzz/git/${platform_dir}/libharfbuzz.a
+    ${thirdparty}/brotli/git/${platform_dir}/libbrotlidec.a
+    ${thirdparty}/brotli/git/${platform_dir}/libbrotlicommon.a
+
     # diligent render backend + SDL3 (paths from c-engine/CMakeLists.txt)
     ${DILIGENT_LIBS}
     ${thirdparty}/sdl/git/${platform_dir}/libSDL3.a

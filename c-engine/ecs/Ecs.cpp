@@ -1,6 +1,10 @@
 #include "Ecs.h"
 #include "Utils.h"
+#include "gui/rmlui/GuiManagerRmlUi.h"
+#include "system/lua/LuaSystem.h"
 #include "system/sound/SoundSystem.h"
+
+#include <cstdlib>
 
 namespace engine {
 struct Ecs ecs;
@@ -8,7 +12,11 @@ struct Ecs ecs;
 void ecsInit(System* gameSystem) {
     utils::info("ecs: initializing");
     systemAdd(0, gameSystem);
+    systemAdd(2, &luaSystem);
     systemAdd(3, &soundSystem);
+    // RmlUi gui manager: owns the crmlui wrapper (RmlParams, input pump,
+    // documents). After luaSystem — it needs the Lua state in added().
+    systemAdd(4, &guiManagerRmlUi);
 }
 
 void ecsDestroy(void) {
