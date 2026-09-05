@@ -1063,31 +1063,25 @@ void propsRenderDiligentUpdate(void) {
         windPhaseRad += dt * (double)windSpeed * (0.7 + 0.8 * (double)gust); // 0.42..0.86 rad/s
     }
 
-    // Player reaction: feet position + horizontal speed (old engine: dxz/dt
-    // between frames, capped at 30 m/s so a teleport reads as a full swish,
-    // not a discontinuity).
+    // Player reaction: feet position + horizontal speed (the character's
+    // own tick-rate speed — playerGetFootSpeed, a finite difference over the
+    // FIXED timer.dt). NOT a rendered-frame difference: the feet only
+    // advance on 1/UPS ticks, so dxz/dt-frame reads 0 between ticks and the
+    // full tick step / frame-dt on tick frames — at >UPS fps the push
+    // amplitude flickers (the unlimited-fps grass shake). Capped at 30 m/s
+    // so a teleport reads as a full swish, not a discontinuity.
     {
-        static double prevFoot[3] = {0.0, 0.0, 0.0};
-        static bool havePrev = false;
         double foot[3];
         if (!playerPushEnabled() || !playerGetFootPos(foot)) {
             playerPush[0] = 1e9f; playerPush[1] = 0.0f;
             playerPush[2] = 1e9f; playerPush[3] = 0.0f;
-            havePrev = false;
         } else {
-            float speed = 0.0f;
-            if (havePrev && dt > 0.0) {
-                float dx = (float)(foot[0] - prevFoot[0]);
-                float dz = (float)(foot[2] - prevFoot[2]);
-                speed = sqrtf(dx * dx + dz * dz) / (float)dt;
-                if (speed > 30.0f) speed = 30.0f;
-            }
+            float speed = (float)playerGetFootSpeed();
+            if (speed > 30.0f) speed = 30.0f;
             playerPush[0] = (float)foot[0];
             playerPush[1] = (float)foot[1];
             playerPush[2] = (float)foot[2];
             playerPush[3] = speed;
-            prevFoot[0] = foot[0]; prevFoot[1] = foot[1]; prevFoot[2] = foot[2];
-            havePrev = true;
         }
     }
 

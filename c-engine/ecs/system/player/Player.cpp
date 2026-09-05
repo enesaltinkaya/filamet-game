@@ -97,6 +97,11 @@ static struct {
     // renderer anchors on the (double) camera eye — an f32 position at 39 km
     // sits on the 3.9 mm f32 grid and the character shimmers (lessons.md).
     double pos[3];
+    // Feet at the previous fixed tick — for the tick-rate speed difference
+    // (playerGetFootSpeed). A difference over the rendered frame dt aliases
+    // against the fixed tick rate at >UPS fps (the unlimited-fps grass shake).
+    double prevPos[3];
+    double footSpeed;  // horizontal speed (m/s) as of the last fixed tick
     JoltCharacter* character = nullptr;
     char waitingForGround    = 0; // pinned at spawn until the body under it exists
     f32 camYaw   = 0.0f;
@@ -136,6 +141,25 @@ bool playerGetFootPos(double out[3]) {
     out[1] = p.pos[1];
     out[2] = p.pos[2];
     return true;
+}
+
+// Advance the tick-rate speed difference with this tick's (already-updated)
+// p.pos and record it as the next tick's baseline. Called at every exit of
+// update(): the difference runs over the FIXED timer.dt (1/UPS), which is
+// what keeps playerGetFootSpeed smooth at any rendered fps (a rendered-frame
+// difference aliases against the tick rate at >UPS fps).
+static void playerTickFootSpeed(void) {
+    const double dx = p.pos[0] - p.prevPos[0];
+    const double dz = p.pos[2] - p.prevPos[2];
+    p.footSpeed = std::hypot(dx, dz) / (double)utils::timer.dt;
+    p.prevPos[0] = p.pos[0];
+    p.prevPos[1] = p.pos[1];
+    p.prevPos[2] = p.pos[2];
+}
+
+double playerGetFootSpeed(void) {
+    if (!p.spawned || !p.character) return 0.0;
+    return p.footSpeed;
 }
 
 char playerTeleportTo(f32 x, f32 y, f32 z) {
@@ -354,6 +378,10 @@ static void playerSpawn(void) {
         p.character = joltCharacterCreate(CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS, cpos, MAX_SLOPE_ANGLE);
         if (!p.character) utils::warn("player: Jolt character creation failed");
     }
+    // Baseline for the tick-rate speed difference — after ALL p.pos writes
+    // (the saved-state load above may have moved it).
+    p.prevPos[0] = p.pos[0]; p.prevPos[1] = p.pos[1]; p.prevPos[2] = p.pos[2];
+    p.footSpeed   = 0.0;
     gltf::gltfPlaceAt(p.pos[0], p.pos[1], p.pos[2]);
     utils::info("player: spawned at (%.1f, %.1f, %.1f), ground %.1f m",
                 p.pos[0], p.pos[1], p.pos[2], groundY);
@@ -682,6 +710,7 @@ void PlayerSystem::update() {
     if (flyingCameraFlying()) {
         playerFollowFlyingCamera();
         gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.modelYaw);
+        playerTickFootSpeed();  // the follow teleports p.pos — speed the jump
         return;
     }
 
@@ -698,6 +727,7 @@ void PlayerSystem::update() {
         } else {
             // No ground yet: stay pinned at spawn, no physics step.
             if (p.active) playerUpdateCamera(0);
+            playerTickFootSpeed();  // pinned: the difference reads 0
             return;
         }
     }
@@ -723,6 +753,7 @@ void PlayerSystem::update() {
     p.pos[0] = charPos[0];
     p.pos[1] = charPos[1];
     p.pos[2] = charPos[2];
+    playerTickFootSpeed();
 
     if (getenv("ENGINE_JITTER_PROBE")) {
         static int jn = 0;

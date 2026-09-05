@@ -53,4 +53,12 @@ char playerMode(void);  // 1 while player mode owns input + camera
 // spawned yet / automated no-player runs); consumers then treat the
 // player as absent (e.g. the props player-push falloff reads as zero).
 bool playerGetFootPos(double out[3]);
+
+// Horizontal feet speed (m/s, xz plane) as of the last fixed tick — the
+// finite difference over the FIXED timer.dt (1/UPS), so it is smooth at any
+// rendered fps. A difference over the rendered frame dt aliases against the
+// tick rate at >UPS fps (0 between ticks, the full tick step / frame-dt on
+// tick frames) and flickers consumers like the props player-push (the
+// unlimited-fps grass shake). Returns 0 when no player body is in the world.
+double playerGetFootSpeed(void);
 }  // namespace engine
