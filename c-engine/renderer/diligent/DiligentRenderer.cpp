@@ -290,7 +290,11 @@ public:
             context->EndQuery(gpuTimeQuery);
         }
 
-        swapChain->Present();
+        // The video-settings "vsync" option drives the present interval:
+        // 1 = vsync (FIFO), 0 = uncapped (MAILBOX/IMMEDIATE, driver-dependent).
+        // Diligent recreates the swapchain once when the value changes, so
+        // toggling it in the video settings takes effect on the next frame.
+        swapChain->Present(utils::settingsGetBool("vsync") ? 1 : 0);
 
         // Harvest the PREVIOUS frame's result: Vulkan fills the pool after the
         // command buffer completes, so GetData returns true ~1 frame late.

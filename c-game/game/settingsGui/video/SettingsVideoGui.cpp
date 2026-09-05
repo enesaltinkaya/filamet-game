@@ -52,9 +52,11 @@ static void reinitTimer(void) {
 // them to the live engine (update()); 0 from removed() at shutdown, where the
 // window/renderer/gui subsystems may already be torn down (docs/lessons.md
 // removed()-ordering entry) — persistence is still safe (plain c-utils).
-// Vsync and cursor scaling have no engine support in this build: the setting
-// is persisted (a future renderer picks it up) and the warn fires while the
-// audio/UI stack is alive.
+// Vsync is live: the renderer reads the setting on every present and passes
+// it to Diligent's Present interval (swapchain recreated once on change,
+// see DiligentRenderer draw). Cursor scaling has no engine support in this
+// build: it is persisted only, and the warn fires while the audio/UI stack
+// is alive.
 static void applyChanges(char toEngine) {
     char wrote = 0;
 
@@ -68,9 +70,6 @@ static void applyChanges(char toEngine) {
     }
     if (dirtyVsync && vsync != (char)utils::settingsGetBool("vsync")) {
         utils::settingsSetBool("vsync", vsync);
-        if (toEngine) {
-            utils::warn("videoSettings: vsync toggle not supported by this renderer (present mode is driver-selected)");
-        }
         dirtyVsync = 0;
         wrote      = 1;
     }
