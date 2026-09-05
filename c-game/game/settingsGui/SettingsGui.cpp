@@ -23,12 +23,23 @@ static int showAudioSettings(void* _);
 static int showVideoSettings(void* _);
 static int showGraphicsSettings(void* _);
 
+// ENGINE_SETTINGS_AUTOTEST=close, armed in added() and fired from update():
+// a remove queued inside added() would be applied by the manager in the
+// SAME frame (the removes loop runs after the adds loop), so the gui would
+// never actually show — the opener menu's hide/re-show tracking would not
+// reach its "settings is up" state and never re-opened its document.
+// One real "showing" frame keeps the cycle honest.
+static char autotestClosePending = 0;
+
+// Null-safe: called from the sub-pages' added()/removed() atomic-swap
+// points (see showAudioSettings) — a sub-page removed during a state
+// transition (settings already torn down) must be a no-op, not a crash.
 void settingsGuiHide(void) {
-    rmlHideDocument(document);
+    if (document) rmlHideDocument(document);
 }
 
 void settingsGuiShow(void) {
-    rmlShowDocument(document);
+    if (document) rmlShowDocument(document);
 }
 
 void SettingsGui::added() {
@@ -50,7 +61,7 @@ void SettingsGui::added() {
     // runs, see ENGINE_AUDIO_SETTINGS_AUTOTEST / ENGINE_VIDEO_SETTINGS_AUTOTEST).
     if (getenv("ENGINE_SETTINGS_AUTOTEST")) {
         if (utils::strequals(getenv("ENGINE_SETTINGS_AUTOTEST"), "close")) {
-            engine::guiManagerRemoveGuiNextFrame(&settingsGui);
+            autotestClosePending = 1;
         } else if (utils::strequals(getenv("ENGINE_SETTINGS_AUTOTEST"), "audio")) {
             showAudioSettings(nullptr);
         } else if (utils::strequals(getenv("ENGINE_SETTINGS_AUTOTEST"), "video")) {
@@ -62,8 +73,16 @@ void SettingsGui::added() {
 }
 
 void SettingsGui::removed() {
+    autotestClosePending = 0;
     rmlUnloadDocument(document);
     document = nullptr;
+}
+
+void SettingsGui::update() {
+    if (autotestClosePending) {
+        autotestClosePending = 0;
+        engine::guiManagerRemoveGuiNextFrame(&settingsGui);
+    }
 }
 
 int settingsClose(void* _) {
@@ -71,25 +90,24 @@ int settingsClose(void* _) {
     return 0;
 }
 
-// The sub-menus open OVER the main settings page: hide its document and add
-// the sub-page gui (the old engine deferred the hide by one frame via
-// futureTask; here it is synchronous — the click handler runs inside the
-// manager's input phase, and rmlHideDocument mid-event is safe, see
-// MainMenuGui::luaPlayGame). BACK on the sub-page re-shows this document.
+// The sub-menus REPLACE the main settings page, with an atomic swap: this
+// click only queues the sub-page add; the manager applies it next frame, and
+// the sub-page's added() hides this document on that same frame (no frame
+// with both pages visible, no blank frame — the old synchronous
+// settingsGuiHide() here left a blank frame, and the old synchronous
+// settingsGuiShow() on BACK left a both-visible frame). BACK on the sub-page
+// queues its remove; its removed() re-shows this document on that same frame.
 int showAudioSettings(void* _) {
-    settingsGuiHide();
     engine::guiManagerAddGuiNextFrame(&settingsAudioGui);
     return 0;
 }
 
 int showVideoSettings(void* _) {
-    settingsGuiHide();
     engine::guiManagerAddGuiNextFrame(&settingsVideoGui);
     return 0;
 }
 
 int showGraphicsSettings(void* _) {
-    settingsGuiHide();
     engine::guiManagerAddGuiNextFrame(&settingsGraphicsGui);
     return 0;
 }

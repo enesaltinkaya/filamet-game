@@ -34,6 +34,13 @@ static double lastChange = 0.0;
 static char   dirtyEffects = 0;
 static char   dirtyMusic   = 0;
 
+// ENGINE_AUDIO_SETTINGS_AUTOTEST=close, armed in added() and fired from
+// update(): closing inside added() would remove the gui in the SAME frame it
+// is added (the manager's removes loop runs right after its adds loop), so
+// the audio page would never render — and the BACK swap would never be
+// exercised.
+static char autotestClosePending = 0;
+
 static int effectsChange(void* _);
 static int musicChange(void* _);
 static int audioSettingsClose(void* _);
@@ -80,6 +87,12 @@ void SettingsAudioGui::added() {
     rmlLoadDocument(document);
     rmlShowDocument(document);
 
+    // Atomic swap point: the manager applies this add (its adds loop) before
+    // the frame's render, so hiding the main settings page here lands both
+    // changes on the same rendered frame — the click frame still shows the
+    // main page, this frame shows the audio page; never both, never blank.
+    if (settingsGuiIsShowing()) settingsGuiHide();
+
     // Headless testing: ENGINE_AUDIO_SETTINGS_AUTOTEST=effects50 applies a
     // slider change programmatically (bind -> debounce -> settings.json),
     // =close exercises the real BACK path (audioSettingsClose: re-shows the
@@ -87,7 +100,7 @@ void SettingsAudioGui::added() {
     const char* at = getenv("ENGINE_AUDIO_SETTINGS_AUTOTEST");
     if (at && at[0]) {
         if (utils::strequals(at, "close")) {
-            audioSettingsClose(nullptr);
+            autotestClosePending = 1;
         } else if (utils::strequals(at, "effects50")) {
             utils::info("audioSettings: autotest — persist effects=50");
             effects      = 50.0f;
@@ -98,6 +111,10 @@ void SettingsAudioGui::added() {
 }
 
 void SettingsAudioGui::update() {
+    if (autotestClosePending && document) {
+        autotestClosePending = 0;
+        audioSettingsClose(nullptr);
+    }
     if (model) {
         rmlUpdateDirtyAll(model);
     }
@@ -107,9 +124,16 @@ void SettingsAudioGui::update() {
 }
 
 void SettingsAudioGui::removed() {
+    autotestClosePending = 0;
     flush(0);  // a BACK within the debounce window still persists the last change (no click: the sound stack may already be gone at shutdown)
     rmlUnloadDocument(document);
     document = nullptr;
+    // Atomic swap point (BACK / ESC): re-show the main settings page on this
+    // same frame our document is unloaded, so the user never sees both pages
+    // (the old synchronous settingsGuiShow() in audioSettingsClose left a
+    // both-visible frame) nor a blank one. Guarded: during a state transition
+    // settings may already be torn down (settingsGuiShow is a no-op then).
+    if (settingsGuiIsShowing()) settingsGuiShow();
     rmlUnloadModel(model);
     model    = nullptr;
 }
@@ -126,12 +150,12 @@ int musicChange(void* _) {
     return 0;
 }
 
-// BACK / ESC: re-show the main settings page (synchronously — the click
-// handler runs inside the manager's input phase, and rmlHideDocument/rmlShowDocument
-// mid-event is safe, see MainMenuGui::luaPlayGame) and remove this page next
-// frame (the old engine's futureTask(0, settingsGuiShow) + deferred remove).
+// BACK / ESC: queue this page's removal. The manager applies it next frame
+// and removed() re-shows the main settings page on that same frame (atomic
+// swap — the old synchronous settingsGuiShow() here left a both-visible
+// frame). The old engine did this with futureTask(0, settingsGuiShow) +
+// deferred remove.
 int audioSettingsClose(void* _) {
-    settingsGuiShow();
     engine::guiManagerRemoveGuiNextFrame(&settingsAudioGui);
     return 0;
 }

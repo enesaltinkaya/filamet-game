@@ -31,14 +31,31 @@ MainMenuGui::MainMenuGui() : engine::System("mainMenu") {}
 static void* document = nullptr;
 static void* model    = nullptr;
 
-// SETTINGS opens the settings panel OVER the menu (the old engine's
-// slide-over: a right-side panel over the dimmed menu, per settings.css) —
-// the menu stays underneath and BACK just closes the panel.
-static void openSettings(void) {
-    if (!settingsGuiIsShowing())
-        engine::guiManagerAddGuiNextFrame(&settingsGui);
-}
+// Set while the settings panel was opened from this menu: the menu document
+// is hidden underneath it and update() re-shows it when the settings gui is
+// removed (BACK / ESC / state transition). Values: 0 = not involved,
+// 1 = opened it but the deferred add has not landed yet (settings is
+// registered on the next frame — must not re-show during that gap),
+// 2 = the settings gui is actually up. 0 when settings was opened
+// elsewhere (pause menu).
+static char settingsOpenFromMenu = 0;
 
+// SETTINGS opens the settings panel over the menu. The old engine left the
+// menu visible underneath, but both documents use a ~63% black background
+// (#0000009f), so the menu ghosted through the panel; here the menu is
+// hidden while the panel is up and re-shown when it closes.
+static void openSettings(void) {
+    if (!settingsGuiIsShowing()) {
+        // No rmlHideDocument here: this click frame must still render the
+        // menu. Hiding it now would leave a blank frame before the settings
+        // panel is added next frame (the old flash). The hide happens in
+        // update() on the frame the settings document actually shows (state
+        // 1 -> 2), so the swap is atomic: one frame menu, next frame settings,
+        // never both visible and never a blank frame.
+        settingsOpenFromMenu = 1;
+        engine::guiManagerAddGuiNextFrame(&settingsGui);
+    }
+}
 static void enterWorld(void) {
     utils::info("mainMenu: ENTER WORLD");
     // A settings page left open over the menu must not ride along into the
@@ -62,6 +79,7 @@ static void enterWorld(void) {
     // Third-person player: spawns at the point set by loadWorld (the gltf
     // model is already placed there) and takes the camera in player mode.
     engine::ecsSystemAddDeferred(100, &engine::playerSystem);
+    settingsOpenFromMenu = 0;  // the menu goes away; update() must not re-show it
     engine::guiManagerRemoveGuiNextFrame(&mainMenuGui);
     // the old engine showed the camera + player debug readouts + player
     // actions panel while in the world
@@ -106,6 +124,7 @@ static int luaPlayGame(void* _) {
 }
 
 void MainMenuGui::added() {
+    settingsOpenFromMenu = 0;
     engine::luaRegisterFunction("settingsOpen", luaSettingsOpen);
     engine::luaRegisterFunction("creditsOpen", luaCreditsOpen);
     engine::luaRegisterFunction("playGame", luaPlayGame);
@@ -138,7 +157,27 @@ void MainMenuGui::added() {
     }
 }
 
+void MainMenuGui::update() {
+    // The manager applies deferred adds/removes in postUpdate BEFORE this
+    // update() runs, so both swaps land on the rendered frame:
+    // 1 -> 2 hides the menu the frame the settings document first shows
+    // (state 1 was set by the click, one frame earlier); 2 -> 0 + re-show
+    // is the frame the settings document is unloaded. Result: exactly one
+    // document visible per frame — no both-visible, no blank (the old
+    // flash was a synchronous hide in openSettings leaving frame N blank).
+    if (settingsOpenFromMenu && document) {
+        if (settingsGuiIsShowing()) {
+            if (settingsOpenFromMenu == 1) rmlHideDocument(document);
+            settingsOpenFromMenu = 2;
+        } else if (settingsOpenFromMenu == 2) {
+            settingsOpenFromMenu = 0;
+            rmlShowDocument(document);
+        }
+    }
+}
+
 void MainMenuGui::removed() {
+    settingsOpenFromMenu = 0;
     if (document) {
         rmlUnloadDocument(document);
         document = nullptr;

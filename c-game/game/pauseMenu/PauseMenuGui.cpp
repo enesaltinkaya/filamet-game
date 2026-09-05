@@ -16,6 +16,16 @@ PauseMenuGui::PauseMenuGui() : engine::System("pauseMenu") {}
 
 static void* document = nullptr;
 
+// Set while the settings panel was opened from this pause menu: the pause
+// document is hidden underneath it and update() re-shows it when the
+// settings gui is removed (BACK / ESC). Values: 0 = not involved,
+// 1 = opened it but the deferred add has not landed yet (must not
+// re-show during that gap), 2 = the settings gui is actually up.
+// The old engine instead removed the pause menu here and resumed gameplay
+// on close; both documents use a ~63% black background (#0000009f), so
+// stacking them ghosted (same reason the main menu hides, see MainMenuGui).
+static char settingsOpenFromPause = 0;
+
 // Frame the document was shown. The ESC press that opened the menu is pumped
 // into the document on that same frame (the rmlui input pump runs after the
 // deferred adds are applied in postUpdate) — a close action landing on the
@@ -31,6 +41,7 @@ static int pauseExitGame(void* _);
 void PauseMenuGui::added() {
     // onclick handlers in pauseMenu.html. pauseKeyDown (body onkeydown:
     // ESC -> RETURN TO GAME) lives in pauseMenu.lua itself.
+    settingsOpenFromPause = 0;
     engine::luaRegisterFunction("pauseReturnToGame", pauseReturnToGame);
     engine::luaRegisterFunction("pauseSettingsOpen", pauseSettingsOpen);
     engine::luaRegisterFunction("pauseExitGame", pauseExitGame);
@@ -41,18 +52,39 @@ void PauseMenuGui::added() {
     shownFrame = utils::timer.frameCounter;
 
     // Headless action testing (the same one-shot pattern as the main
-    // menu's ENGINE_AUTOTEST): ENGINE_PAUSE_AUTOTEST=back|mainmenu fires
-    // once, for the close / return-to-menu screenshot runs.
+    // menu's ENGINE_AUTOTEST): ENGINE_PAUSE_AUTOTEST=back|settings|mainmenu
+    // fires once. "settings" opens the settings panel over the (hidden)
+    // pause menu, for the close / re-show screenshot runs.
     if (const char* at = getenv("ENGINE_PAUSE_AUTOTEST")) {
         if (utils::strequals(at, "back")) pauseReturnToGame(nullptr);
+        else if (utils::strequals(at, "settings")) pauseSettingsOpen(nullptr);
         else if (utils::strequals(at, "mainmenu")) pauseExitGame(nullptr);
     }
 }
 
 void PauseMenuGui::removed() {
+    settingsOpenFromPause = 0;
     if (document) {
         rmlUnloadDocument(document);
         document = nullptr;
+    }
+}
+
+void PauseMenuGui::update() {
+    // Atomic swap: the manager applies the deferred settings add in
+    // postUpdate BEFORE this update(), so 1 -> 2 hides the pause doc the frame
+    // the settings doc first shows (state 1 set by the click a frame earlier),
+    // and 2 -> 0 + re-show is the frame settings is unloaded. One doc visible
+    // per frame — no both-visible, no blank (the old synchronous hide in
+    // pauseSettingsOpen left the click frame blank).
+    if (settingsOpenFromPause && document) {
+        if (settingsGuiIsShowing()) {
+            if (settingsOpenFromPause == 1) rmlHideDocument(document);
+            settingsOpenFromPause = 2;
+        } else if (settingsOpenFromPause == 2) {
+            settingsOpenFromPause = 0;
+            rmlShowDocument(document);
+        }
     }
 }
 
@@ -69,13 +101,17 @@ int pauseReturnToGame(void* _) {
     return 0;
 }
 
-// SETTINGS opens the settings slide-over OVER the pause menu (the new
-// engine's main-menu pattern: the menu stays underneath and BACK just
-// closes the panel, re-exposing this document).
+// SETTINGS opens the settings panel over the pause menu, hiding this
+// document underneath (re-shown by update() when the panel closes).
 int pauseSettingsOpen(void* _) {
     (void)_;
-    if (!settingsGuiIsShowing())
+    if (!settingsGuiIsShowing()) {
+        // No rmlHideDocument here: this click frame still renders the pause
+        // doc; the hide is done in update() (state 1 -> 2) on the frame the
+        // settings doc shows, so the swap is atomic (no blank frame).
+        settingsOpenFromPause = 1;
         engine::guiManagerAddGuiNextFrame(&settingsGui);
+    }
     return 0;
 }
 

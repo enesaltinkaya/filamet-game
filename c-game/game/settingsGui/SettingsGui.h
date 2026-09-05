@@ -4,10 +4,13 @@
 
 namespace game {
 // The settings menu as an RMLUI document (gui/settings/settings.html) —
-// the old engine's menu ported as-is (same html/css/lua, same document
+// the old engine's menu ported (same html/css/lua, same document
 // lifecycle): a right-side slide-over panel that opens OVER the main menu
-// (the menu stays underneath), with the AUDIO / VIDEO / GRAPHICS buttons
-// (audio and video ported; graphics comes later), a disabled KEYBINDINGS row and BACK.
+// or the pause menu — the opener hides its own document underneath (both
+// use a ~63% black background, #0000009f, so the menu ghosted through the
+// panel when both stayed visible) and re-shows it when this panel closes.
+// The AUDIO / VIDEO / GRAPHICS buttons (audio and video ported; graphics
+// comes later), a disabled KEYBINDINGS row and BACK.
 // Added/removed through engine::guiManagerAddGuiNextFrame /
 // engine::guiManagerRemoveGuiNextFrame (deferred, like the other rmlui guis).
 class SettingsGui : public engine::System {
@@ -15,6 +18,7 @@ public:
     SettingsGui();
     void added() override;
     void removed() override;
+    void update() override;
 };
 
 extern SettingsGui settingsGui;

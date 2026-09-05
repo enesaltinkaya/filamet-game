@@ -162,6 +162,12 @@ void SettingsGraphicsGui::added() {
     rmlLoadDocument(document);
     rmlShowDocument(document);
 
+    // Atomic swap point: the manager applies this add (its adds loop) before
+    // the frame's render, so hiding the main settings page here lands both
+    // changes on the same rendered frame — click frame shows the main page,
+    // this frame shows the graphics page; never both, never blank.
+    if (settingsGuiIsShowing()) settingsGuiHide();
+
     // Headless testing: ENGINE_GRAPHICS_SETTINGS_AUTOTEST=close exercises the
     // real BACK path (settingsGuiShow + deferred remove).
     const char* at = getenv("ENGINE_GRAPHICS_SETTINGS_AUTOTEST");
@@ -181,6 +187,10 @@ void SettingsGraphicsGui::update() {
 void SettingsGraphicsGui::removed() {
     rmlUnloadDocument(document);
     document = nullptr;
+    // Atomic swap point (BACK / ESC): re-show the main settings page on this
+    // same frame our document is unloaded — never both pages, never blank.
+    // Guarded: a state transition may have torn settings down already (no-op).
+    if (settingsGuiIsShowing()) settingsGuiShow();
     rmlUnloadModel(model);
     model    = nullptr;
 }
@@ -384,12 +394,12 @@ int toggleTaa(void* _) {
     return 0;
 }
 
-// BACK / ESC: re-show the main settings page (synchronously — the click
-// handler runs inside the manager's input phase, and rmlShowDocument mid-event
-// is safe, see MainMenuGui::luaPlayGame) and remove this page next frame
-// (the old engine's futureTask(0, settingsGuiShow) + deferred remove).
+// BACK / ESC: queue this page's removal. The manager applies it next frame
+// and removed() re-shows the main settings page on that same frame (atomic
+// swap — the old synchronous settingsGuiShow() here left a both-visible
+// frame). The old engine did this with futureTask(0, settingsGuiShow) +
+// deferred remove.
 int graphicsClose(void* _) {
-    settingsGuiShow();
     engine::guiManagerRemoveGuiNextFrame(&settingsGraphicsGui);
     return 0;
 }

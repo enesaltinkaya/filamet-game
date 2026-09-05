@@ -165,6 +165,12 @@ void SettingsVideoGui::added() {
     rmlLoadDocument(document);
     rmlShowDocument(document);
 
+    // Atomic swap point: the manager applies this add (its adds loop) before
+    // the frame's render, so hiding the main settings page here lands both
+    // changes on the same rendered frame — click frame shows the main page,
+    // this frame shows the video page; never both, never blank.
+    if (settingsGuiIsShowing()) settingsGuiHide();
+
     // Headless testing: ENGINE_VIDEO_SETTINGS_AUTOTEST=close exercises the
     // real BACK path; =uiscale15 verifies slider -> apply -> persist;
     // =fullscreen verifies the window toggle (the screenshot shows the
@@ -207,6 +213,10 @@ void SettingsVideoGui::removed() {
     applyChanges(0);
     rmlUnloadDocument(document);
     document = nullptr;
+    // Atomic swap point (BACK / ESC): re-show the main settings page on this
+    // same frame our document is unloaded — never both pages, never blank.
+    // Guarded: a state transition may have torn settings down already (no-op).
+    if (settingsGuiIsShowing()) settingsGuiShow();
     rmlUnloadModel(model);
     model    = nullptr;
 }
@@ -256,7 +266,6 @@ int showFpsChange(void* _) {
 // BACK / ESC: re-show the main settings page (synchronously — safe mid-input-
 // event, see MainMenuGui::luaPlayGame) and remove this page next frame.
 int videoClose(void* _) {
-    settingsGuiShow();
     engine::guiManagerRemoveGuiNextFrame(&settingsVideoGui);
     return 0;
 }

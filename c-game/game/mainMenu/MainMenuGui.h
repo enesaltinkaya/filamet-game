@@ -14,6 +14,7 @@ public:
     MainMenuGui();
     void added() override;
     void removed() override;
+    void update() override;
 };
 
 extern MainMenuGui mainMenuGui;
