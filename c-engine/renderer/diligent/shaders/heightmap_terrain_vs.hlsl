@@ -21,8 +21,8 @@
 // PSO's layout elements use the "ATTRIB" semantic with InputIndex n).
 //
 // The view/proj matrices come from the shared PBR frame attribs cbuffer
-// (same layout + fill as the glTF PBR path, see GltfDiligent.cpp
-// fillFrameAttribs) — no separate uniform.
+// (filled in HeightmapTerrainDiligent.cpp fillFrameAttribs — transposed,
+// see the note there) — no separate uniform.
 
 #include "BasicStructures.fxh"
 #include "PBR_Structures.fxh"

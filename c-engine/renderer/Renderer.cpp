@@ -96,6 +96,9 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     }
     utils::info("renderer: initialized (%s backend)", rendererBackendName());
 
+    // apply the persisted graphics settings (upscaler/TAA/shadows/effects)
+    rendererGraphicsLoad();
+
     selectScreenshotStartFrame();
 
     const char* screenshotEnv = getenv("ENGINE_SCREENSHOT");
@@ -180,5 +183,76 @@ void rendererSetFog(const f32 color[3], f32 density) {
     if (activeBackend) {
         activeBackend->setFog(color, density);
     }
+}
+
+void rendererSetFogEnabled(bool enabled) {
+    if (activeBackend) {
+        activeBackend->setFogEnabled(enabled);
+    }
+}
+
+// ── graphics settings (menu ↔ renderer) ────────────────────────────────────
+static GraphicsSettings graphicsApplied;
+
+static int sanitizeUpscaler(int mode) {
+    if (mode < UPSCALER_OFF || mode >= UPSCALER_COUNT) {
+        return UPSCALER_OFF;
+    }
+    return mode;
+}
+
+static GraphicsSettings graphicsNormalize(GraphicsSettings s) {
+    s.upscaler     = sanitizeUpscaler(s.upscaler);
+    // manual scale: 0.5..1 in 5% steps (the old engine's snapping), upscaler
+    // presets carry their own TAA-upscale render scale
+    if (s.renderScale < 0.5f) s.renderScale = 0.5f;
+    if (s.renderScale > 1.0f) s.renderScale = 1.0f;
+    s.renderScale  = (float)((int)(s.renderScale * 20.0f + 0.5f)) / 20.0f;
+    if (s.sharpening < 0.0f) s.sharpening = 0.0f;
+    if (s.sharpening > 1.0f) s.sharpening = 1.0f;
+    // TAA upscaling IS the upscaler now (filament reconstructs to native from
+    // a jittered low-res TAA pass), so the upscaler requires TAA on
+    if (s.upscaler != UPSCALER_OFF) s.taa = true;
+    if (s.taaWeight < 0.5f) s.taaWeight = 0.5f;
+    if (s.taaWeight > 0.95f) s.taaWeight = 0.95f;
+    if (s.shadowQuality < 0) s.shadowQuality = 0;
+    if (s.shadowQuality > 3) s.shadowQuality = 3;
+    if (s.vignette < 0.0f) s.vignette = 0.0f;
+    if (s.vignette > 1.0f) s.vignette = 1.0f;
+    if (s.dofQuality < 1) s.dofQuality = 1;
+    if (s.dofQuality > 8) s.dofQuality = 8;
+    if (s.dofFocus < 0.1f) s.dofFocus = 0.1f;
+    return s;
+}
+
+void rendererGraphicsApply(const GraphicsSettings& settings) {
+    graphicsApplied = graphicsNormalize(settings);
+    if (activeBackend) {
+        activeBackend->applyGraphicsSettings(graphicsApplied);
+    }
+}
+
+const GraphicsSettings& rendererGraphicsSettings(void) {
+    return graphicsApplied;
+}
+
+void rendererGraphicsLoad(void) {
+    GraphicsSettings s;
+    s.upscaler      = sanitizeUpscaler((int)utils::settingsGetDouble("upscalerMode"));
+    s.renderScale   = (float)utils::settingsGetDouble("renderScale");
+    s.sharpening    = (float)(utils::settingsGetDouble("aaCasStrength") / 100.0);
+    s.taa           = utils::settingsGetBool("taaEnabled");
+    s.taaWeight     = (float)utils::settingsGetDouble("taaWeight");
+    s.msaa          = utils::settingsGetBool("msaaEnabled");
+    s.shadowQuality = utils::settingsGetInt("shadowQuality");
+    s.ssao          = !utils::settingsGetBool("aoDisabled");
+    s.ssr           = !utils::settingsGetBool("ssrDisabled");
+    s.bloom         = !utils::settingsGetBool("bloomDisabled");
+    s.vignette      = (float)(utils::settingsGetDouble("lensVignette") / 100.0);
+    s.dof           = utils::settingsGetBool("dofEnabled");
+    s.dofFocus      = (float)utils::settingsGetDouble("dofFocus");
+    s.dofQuality    = (int)utils::settingsGetDouble("dofQuality");
+    s.fog           = utils::settingsGetDouble("fogMode") > 0.5;
+    rendererGraphicsApply(s);
 }
 }  // namespace engine::renderer

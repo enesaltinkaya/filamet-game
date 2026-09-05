@@ -7,9 +7,11 @@
 // (Uncharted2 with the gltf PBR frame's AverageLogLum/MiddleGray/
 // WhitePoint). Lighting inputs come from:
 //   - cbFrameAttribs: PBRFrameAttribs + one PBRLightAttribs (directional
-//     sun), filled exactly like GltfDiligent.cpp fillFrameAttribs
-//   - cbTerrainLook:  per-world look (registered at world load), same
-//     values the Filament MaterialInstance carries
+//     sun), filled exactly like GltfDiligent.cpp fillFrameAttribs; the
+//     per-world look values ride in Camera.f4ExtraData (mapBounds /
+//     climateParams / maxLandHeight+debugView — see the look constants
+//     block below; a second cbuffer bound ambiguously on this pipeline,
+//     see docs/lessons.md, the diligent-terrain entry)
 //   - the 9 look/tiling Texture2Ds + 2 constant IBL cubes + the PBR
 //     preintegrated GGX LUT (SRV from GLTF_PBR_Renderer, see
 //     GetPreintegratedGGX_SRV).
@@ -31,9 +33,8 @@
 // Debug views (terrain.mat parity): 0 = off, 1 = 256 m periodic height
 // ramp, 2 = raw biome-colour texture. Drawn as a flat matte surface.
 //
-// Resource declarations below are in SRB slot order (Diligent assigns
-// slots by declaration order): cbuffers first, then SRVs, then samplers.
-// The per-tile SRB clones the shared template; only the VBO differs.
+// One shared SRB serves every tile: all pipeline resources are STATIC
+// (bound once through the PRS); only the per-draw VBO varies.
 
 #include "BasicStructures.fxh"
 #include "PBR_Shading.fxh"
@@ -73,21 +74,17 @@ cbuffer cbFrameAttribs
     PBRLightAttribs   g_Sun;
 };
 
-// cbTerrainLook: 48 bytes on the C++ side (the compiler pads the cbuffer
-// to a multiple of 16).
-cbuffer cbTerrainLook
-{
-    // Map bounds in world metres (map centred at the world origin):
-    // x = minX, y = minZ, z = maxX, w = maxZ.
-    float4 mapBounds;
-    // x = snowLo (deg C), y = snowHi (deg C), z = beachHeight (m),
-    // w = climate blending enabled (0/1).
-    float4 climateParams;
-    // Peak land elevation in metres (drives the altitude rock band).
-    float  maxLandHeight;
-    // 0 = off, 1 = height ramp, 2 = raw biome texture.
-    float  debugView;
-};
+// NOTE: the look params (map bounds, climate thresholds, debug view) are NOT
+// in a separate cbuffer — they ride in g_Frame.Camera.f4ExtraData
+// (filled in fillFrameAttribs). A second cbuffer here bound ambiguously on
+// this pipeline (the PS read the frame attribs instead, rendering the
+// debug-white path); see docs/lessons.md, the diligent-terrain entry.
+// ── Look constants (carried in g_Frame.Camera.f4ExtraData — see the note
+// above; filled by fillFrameAttribs) ─────────────────────────────────────
+#define mapBounds      (g_Frame.Camera.f4ExtraData[0])
+#define climateParams  (g_Frame.Camera.f4ExtraData[1])
+#define maxLandHeight  (g_Frame.Camera.f4ExtraData[2].x)
+#define debugView      (g_Frame.Camera.f4ExtraData[2].y)
 
 // ── SRV slots ──────────────────────────────────────────────────────────────
 // Default terrain textures (engine pak, KTX2/BC7; albedos created as
@@ -123,7 +120,6 @@ Texture2D   g_PreintegratedGGX;
 //
 // SRB resource list (bind by name; slots follow declaration order):
 //   cbuffer 0 cbFrameAttribs (PBRFrameAttribs + PBRLightAttribs, 1 buffer)
-//   cbuffer 1 cbTerrainLook
 //   SRV     g_GrassAlbedo, g_GrassNormal, g_CliffAlbedo, g_CliffNormal,
 //           g_SnowAlbedo, g_SandAlbedo, g_BiomeColor, g_Climate,
 //           g_ClimateNearest, g_IblIrradiance, g_IblPrefiltered,
@@ -224,40 +220,6 @@ float3x3 buildTerrainTBN(float3 geomNormal)
 // what the glTF PBR path relies on.
 PSTerrainOut main(in PSTerrainIn vs)
 {
-    // TEMP round-5 probes (debugView 10/11/12 via ENGINE_TERRAIN_PROBE):
-    // 10 = raw VS input position, 11 = raw VS input normal, 12 = where
-    // the frame viewProj places the raw VS input position (NDC).
-    if (debugView > 9.5)
-    {
-        PSTerrainOut probe;
-        if (debugView < 10.5) {
-            probe.Color = float4(vs.WorldPos * 0.0001, 1.0);
-        } else if (debugView < 11.5) {
-            probe.Color = float4(vs.Normal * 0.5 + 0.5, 1.0);
-        } else if (debugView < 12.5) {
-            float4 clip = mul(float4(vs.WorldPos, 1.0), g_Frame.Camera.mViewProj);
-            probe.Color = float4(clip.xy / max(clip.w, 1e-6) * 0.5 + 0.5,
-                    clip.w > 0.0 ? 1.0 : 0.0, 1.0);
-        } else if (debugView < 14.5)
-        {
-            // 13 = cbuffer's view-matrix translation row * 0.01 (compare to
-            // CPU's DiligentBackend::viewMatrix(); identity would read 0).
-            probe.Color = float4(g_Frame.Camera.mView[3].xyz * 0.01, 1.0);
-        }
-        else if (debugView < 15.5)
-        {
-            // 17 = raw VS input world position / 20000 + 0.5
-            probe.Color = float4(vs.WorldPos / 20000.0 + 0.5, 1.0);
-        }
-        else
-        {
-            // 18 = view-space position (pos * cbuffer mView) / 20000 + 0.5
-            float3 vspace = mul(float4(vs.WorldPos, 1.0), g_Frame.Camera.mView).xyz;
-            probe.Color = float4(vspace / 20000.0 + 0.5, 1.0);
-        }
-        return probe;
-    }
-
     float3 worldPos   = vs.WorldPos;
     float3 V          = normalize(g_Frame.Camera.f4Position.xyz - worldPos);
     float3 geomNormal = normalize(vs.Normal);

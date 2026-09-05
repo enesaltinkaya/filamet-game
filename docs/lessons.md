@@ -4,6 +4,91 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ---
 
+## 2026-09-05 — Runtime-compiled HLSL (glslang) consumes cbuffer matrices TRANSPOSED relative to Diligent's row-major math — and a second cbuffer in the same PSO bound ambiguously
+
+**Rule:** every runtime-compiled HLSL shader on the Diligent backend (device->
+CreateShader + SHADER_SOURCE_LANGUAGE_HLSL, resolved against
+DiligentFXShaderSourceStreamFactory) must receive float4x4 cbuffer members
+written as `matrix.Transpose()`. With the plain Diligent matrix stored, the
+shader applies the transpose: rotation-without-translation plus the
+translation row as the projective row — the world collapses to a camera-
+hugging sliver/patch that looks like a depth-buffer or culling bug. The
+prebuilt DiligentFX SPIRV shaders are precompiled with a matching convention
+and hide this; only runtime-compiled HLSL exposes it. Corollary: do NOT put
+per-pass data in a SECOND cbuffer declared alongside cbFrameAttribs in the
+same PSO — that cbuffer bound ambiguously (the PS read the frame buffer
+instead, so `debugView` read fFarPlaneZ = 20000 and every debug branch was
+dead while the cbuffer's GPU bytes verified byte-correct). Carry small
+per-pass values in `CameraAttribs.f4ExtraData[]` (application-specific,
+unused by DiligentFX) instead.
+
+**Incident:** the azgaar heightmap terrain (phase 6, Diligent backend) rendered
+as a white/grey sheet truncated to a few metres around the camera at eye-level
+views and to nothing from 5 km up (landtop), while every byte-level probe
+verified correct: VBO readback bit-identical to CPU lattice corners, cbuffer
+readback byte-identical to the staged fill, SPIR-V linkage correct (WorldPos
+loc 0, Normal loc 1), and the projection math checked out numerically. The
+turnaround came from switching the validation vantage (ENGINE_CAMERA=close,
+60 m up): the terrain rendered as a paper-thin SLIVER = a ground plane seen
+EDGE-ON = the camera's height missing from the transform. With the transpose,
+the identical scene rendered the full streamed window with a correct horizon.
+
+**Probes that misled (documented so future sessions don't re-chase them):**
+probe outputs written to the RGBA8_UNORM_SRGB swapchain are sRGB-ENCODED —
+sample values must be linearized ((v+0.055)/1.055)^2.4 before decoding; NEGATIVE
+values clamp to 0 (an abs/centered encoding is mandatory); and a PS-side
+recompute of clip(WorldPos) is SELF-CONSISTENT under any matrix (both stages
+share it), so "re-projects to its own screen position" proves nothing about
+matrix correctness.
+
+**Second incident, same session:** after the fixes verified green, a cleanup
+strip of the temp shader probes truncated the VS file (the removal regex cut
+the real main between #else/#endif), the game still ran (the .pak zip held the
+previous good VS) and the NEXT full build shipped the truncated VS —
+"everything went navy" with a compile error only visible in the log. The pak
+pipeline (scripts/data.sh) zips whatever sits in c-game/data/pak_1/ — always
+verify `zipping pak_1` ran AFTER a shader edit (plain `cmake --build` does NOT
+refresh paks), and grep the shipped archive, not the working tree.
+
+**Also:** scripted validation cameras (ENGINE_CAMERA=*) are clobbered by the
+persisted camera/player rows in build/c-game/data/db/db.db, and EVERY run
+re-saves them at exit — delete both tables before each scripted capture
+(python sqlite3 DELETE FROM camera; DELETE FROM player).
+
+**Verification (pixel-diff A/B, same camera, ENGINE_SCREENSHOT_FRAME=1500):**
+Diligent dry-turf look now matches the Filament baseline (same rust turf
+texture, same pale noise patches, same horizon hills); landtop ramp from
+5.5 km shows the full streamed window, seam-free; props/player remain
+Filament-only by design (deferred with phase 6 / gltf zstd loader gap).
+
+---
+
+## 2026-09-04 — settings.json type validation silently REWRITES the file: one wrong-typed key (e.g. `"upscalerMode": 2` int vs "double" template) nukes every user setting via writeDefault()
+
+**Rule:** when editing `build/c-game/data/settings.json` for an A/B test (or
+hand-tuning), every key's JSON type must match its Settings.cpp template:
+"double" keys need a decimal point (`2.0`, never `2`), "int" keys must be bare
+ints, "boolean" real JSON booleans. ONE mismatched key makes validateSetting()
+call writeDefault() + re-read, silently discarding ALL of the user's settings —
+and until today writeDefault() didn't handle the "int" type at all, so
+`shadowQuality`/`rendererBackend` were additionally dropped from the fresh file
+(fixed 2026-09-04: writeDefault() now writes "int" keys; "number" branch was
+dead code). Symptom signature: a settings-driven feature "doesn't apply" while
+an identical earlier run worked, and the file's keys change between runs.
+Probe: `grep` the file BEFORE and after the run; any unexpected value means a
+writeDefault() clobber happened mid-run, invalidating the A/B.
+
+**Incident:** the graphics-settings FSR upscaler test (upscalerMode=2 set with
+python json.dump → bare int `2`) appeared to do nothing — the in-game DynamicResolution
+stayed at 1.0 while the shadow-quality A/Bs (correctly-typed int key) had worked
+minutes earlier. `getLastDynamicResolutionScale()` probes + an applyUpscale
+readback log (renderScale=1.000 despite the edit) pointed at the loader; the
+culprit was validateSetting's writeDefault path resetting the file at startup.
+Re-ran with `2.0` → scale 0.770 immediately. The renderer code was correct all
+along; the test harness (the hand-edited JSON) was the bug.
+
+---
+
 ## 2026-09-04 — `Texture::setImage` is zero-copy too: a `PixelBufferDescriptor` with a `nullptr` callback must be backed by storage that outlives the command (freed/stack source = garbage texture, different every launch)
 
 **Rule:** the zero-copy rule proven for `setBufferAt`/`setBuffer` (see the 2026-09 buffer entry below) applies equally to texture uploads: `Texture::setImage` only REFERENCES the `PixelBufferDescriptor`'s CPU buffer — the driver reads it later, on the engine loop thread. A `nullptr` callback means "caller keeps ownership", so the caller must keep the memory valid indefinitely; the safe patterns are (a) heap-copy the pixels and release them from the descriptor's callback (`PixelBufferDescriptor::make(data, size, fmt, type, [](void* b, size_t){ free(b); })` — the functor fires exactly when the driver has consumed the buffer, the pattern GuiFilament already used), or (b) transfer ownership of an already-heap buffer to the callback. A STACK source is always wrong: the frame is dead long before the upload executes. A freed source is worse than a crash: glibc mmaps multi-MB image blocks and reuses the same addresses, so texture N's upload happily reads texture N+1's pixels (stride mismatch → skewed/repeated bands) or arbitrary heap bytes (alpha usually ≥ 0.5 → the cutout discard never fires → solid card).
@@ -16,9 +101,9 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 ## 2026-09-04 — Filament `doubleSided` flips the normal on back faces, blacking out thin up-normal vegetation (grass cards); and never mipmap sparse alpha-cutout grass textures
 
-**Rule:** the built-in lit model computes `n = gl_FrontFacing ? n : -n` (`surface_shading_parameters.fs`), so `doubleSided: true` lights the back face with the *flipped* normal. For thin vegetation cards whose mesh normals all point one way (grass cards are all (0,1,0) up, but the two quads are vertical), the back face gets normal (0,−1,0) → N·L ≈ 0 → black tuft silhouettes. The correct lighting for thin blades is to light BOTH faces with the *unflipped* normal (that's exactly what the old engine's `azgaar_props.frag` did for grass/palm/reed, `isThin` = species 0/6/9/12). In Filament, `MaterialInstance::setDoubleSided(false)` disables that normal flip **without** changing culling, so pair it with `setCullingMode(NONE)`: both faces still rasterize, neither gets flipped → both light from the same side. (Setting `doubleSided:false` alone would also re-enable back-face culling and drop the back face, so you must re-set culling NONE.)
+**Rule:** the built-in lit model computes `n = gl_FrontFacing ? n : -n` (`surface_shading_parameters.fs`), so `doubleSided: true` lights the back face with the _flipped_ normal. For thin vegetation cards whose mesh normals all point one way (grass cards are all (0,1,0) up, but the two quads are vertical), the back face gets normal (0,−1,0) → N·L ≈ 0 → black tuft silhouettes. The correct lighting for thin blades is to light BOTH faces with the _unflipped_ normal (that's exactly what the old engine's `azgaar_props.frag` did for grass/palm/reed, `isThin` = species 0/6/9/12). In Filament, `MaterialInstance::setDoubleSided(false)` disables that normal flip **without** changing culling, so pair it with `setCullingMode(NONE)`: both faces still rasterize, neither gets flipped → both light from the same side. (Setting `doubleSided:false` alone would also re-enable back-face culling and drop the back face, so you must re-set culling NONE.)
 
-**Incident:** "grass plane objects look wrong" — two screenshots at the same camera: green grass tufts with black back faces (the flip), plus solid filled cards. Root cause 1: `props.filamat` `doubleSided: true`. Root cause 2 (separate): generating mipmaps on the sparse alpha-cutout grass textures (`.levels(7)+generateMipmaps()`) averages the alpha *upward* in the transparent border, raising it above the hard 0.5 discard, so distant (minified) cards render as solid filled rectangles — reverting to `.levels(1)` (level-0-only sampling) restores proper cutout. These sparse cutout textures must NOT be mipmappable.
+**Incident:** "grass plane objects look wrong" — two screenshots at the same camera: green grass tufts with black back faces (the flip), plus solid filled cards. Root cause 1: `props.filamat` `doubleSided: true`. Root cause 2 (separate): generating mipmaps on the sparse alpha-cutout grass textures (`.levels(7)+generateMipmaps()`) averages the alpha _upward_ in the transparent border, raising it above the hard 0.5 discard, so distant (minified) cards render as solid filled rectangles — reverting to `.levels(1)` (level-0-only sampling) restores proper cutout. These sparse cutout textures must NOT be mipmappable.
 
 **Wiring:** `AZGAAR_PROPS_FLAG_DOUBLE_SIDED` (bit 1, was "reserved") in AzgaarProps.h; `azgaarPropsSpeciesRenderFlags` returns it for grass(0)/palm(6)/reed(9)/flower(12); `PropsRenderFilament::buildTile` sets `setDoubleSided(false)`+`setCullingMode(NONE)` when bit 1 is set (the material's `doubleSided:true` is the default, so closed-solid species are unaffected). Verified at the user's actual eye-level camera (`ENGINE_CAMERA=propsground`, pos −109.67 2.24 −93.39): proper cutout tufts, no black, no solid cards. (A far 89 m orbit still shows minification aliasing on level-0-only sampling — cosmetic, not the reported bug.)
 
@@ -32,7 +117,7 @@ Dated log of hard-won debugging knowledge. One entry per incident, rule first.
 
 **Probe:** full-precision (%.6f) per-frame pos/eye log is decisive — if every logged coordinate is a multiple of 2⁻ⁿ m for some n, it is f32 quantization, not physics or animation. The ULP follows |pos|: 3.9 mm at 32–64 km, 1.9 mm at 16–32 km, 0.12 mm at 1–2 km (why nobody saw it before the 39 km Azgaar teleport — a 0.12 mm step is sub-pixel at normal spawn distances).
 
-**Status: FIXED (2026-09-04).** Implemented the relative-to-anchor rework: Jolt f64 position getter, `camera_at_origin` disabled (the debug property must be set **after** `Engine::createView()` — it is registered in the View constructor, so setting it earlier silently fails), and all renderables placed in anchor-space (the camera eye's xz, f64): terrain corners are tile-local (the renderable transform carries tile-origin−anchor), props instance data is tile-local (+ a `tileRel` uniform), and the camera is posed at (eye−anchor). Two shader gotchas found while verifying: (1) Filament's final vertex position is `material.worldPosition` (world-space, used directly via `getClipFromWorldMatrix()` — the renderable transform is applied ONLY to the culling box, NOT to a manually-set worldPosition), so props add their tile offset explicitly in the vertex stage; (2) world-anchored value noise (micro-bump / dry-turf) is **aperiodic**, so a `fract(anchor/freq)` phase does NOT re-anchor it (that corrupted the ground into black smears) — it must use the WORLD xz (`anchorSpace.xz + anchor`, stationary per point, ~4 mm f32 grid = sub-pixel for 4–48 m features); only *periodic* tiling (grass, cliff) takes the exact `fract(anchor·freq)` phase. Verified: origin view matches base (autorun), and the 39 km teleported cell (`ENGINE_TELEPORT="39000,100,39000"`) renders a coherent, non-shimmering scene.
+**Status: FIXED (2026-09-04).** Implemented the relative-to-anchor rework: Jolt f64 position getter, `camera_at_origin` disabled (the debug property must be set **after** `Engine::createView()` — it is registered in the View constructor, so setting it earlier silently fails), and all renderables placed in anchor-space (the camera eye's xz, f64): terrain corners are tile-local (the renderable transform carries tile-origin−anchor), props instance data is tile-local (+ a `tileRel` uniform), and the camera is posed at (eye−anchor). Two shader gotchas found while verifying: (1) Filament's final vertex position is `material.worldPosition` (world-space, used directly via `getClipFromWorldMatrix()` — the renderable transform is applied ONLY to the culling box, NOT to a manually-set worldPosition), so props add their tile offset explicitly in the vertex stage; (2) world-anchored value noise (micro-bump / dry-turf) is **aperiodic**, so a `fract(anchor/freq)` phase does NOT re-anchor it (that corrupted the ground into black smears) — it must use the WORLD xz (`anchorSpace.xz + anchor`, stationary per point, ~4 mm f32 grid = sub-pixel for 4–48 m features); only _periodic_ tiling (grass, cliff) takes the exact `fract(anchor·freq)` phase. Verified: origin view matches base (autorun), and the 39 km teleported cell (`ENGINE_TELEPORT="39000,100,39000"`) renders a coherent, non-shimmering scene.
 
 ---
 
@@ -563,7 +648,7 @@ as provenance and the sourcing is documented at both load sites.
 
 ## 2026-09-04 — RADV LINEAR minification of sRGB8_A8 returns OPAQUE alpha: the grass-card alpha discard stops firing and mid-distance tufts render as solid tinted rectangles
 
-**Rule:** never bind a LINEAR minification filter (`LINEAR` or `LINEAR_MIPMAP_LINEAR`) to an sRGB-format (`SRGB8_A8`) texture on RADV (Mesa) — LINEAR-minified samples come back with a corrupted OPAQUE alpha, so `alpha < 0.5` discards silently stop firing. The grass cards (1-level `.levels(1)`, sparse alpha cutout) must use NEAREST minification: on a 1-level image NEAREST minification is exactly "level-0 only" (the intended look), and the LINEAR *magnification* filter is unaffected, keeping close-up edges smooth. If a texture genuinely needs LINEAR minification, convert sRGB→linear at load and upload as `RGBA8` — linear filtering of a LINEAR-format image is clean (uploading raw sRGB bytes as RGBA8 without conversion washes the colour).
+**Rule:** never bind a LINEAR minification filter (`LINEAR` or `LINEAR_MIPMAP_LINEAR`) to an sRGB-format (`SRGB8_A8`) texture on RADV (Mesa) — LINEAR-minified samples come back with a corrupted OPAQUE alpha, so `alpha < 0.5` discards silently stop firing. The grass cards (1-level `.levels(1)`, sparse alpha cutout) must use NEAREST minification: on a 1-level image NEAREST minification is exactly "level-0 only" (the intended look), and the LINEAR _magnification_ filter is unaffected, keeping close-up edges smooth. If a texture genuinely needs LINEAR minification, convert sRGB→linear at load and upload as `RGBA8` — linear filtering of a LINEAR-format image is clean (uploading raw sRGB bytes as RGBA8 without conversion washes the colour).
 
 **Incident:** user screenshot showed scattered flat striped teal/cyan-green rectangular patches on the ground amid correct grass tufts ("grass dont always look correct"). Headless A/B matrix (frame 400, all 7 card textures, full scatter): SRGB8_A8 + NEAREST/NEAREST ✅; SRGB8_A8 + LINEAR/LINEAR ❌ solid patches; SRGB8_A8 + LINEAR_MIPMAP_LINEAR (the old default) ❌; SRGB8_A8 + NEAREST min / LINEAR mag ✅; RGBA8 linear + any sampler ✅. Exonerated with direct evidence: assets (all 7 PNGs real 8-bit RGBA cutouts, byte-identical to the old engine), upload (direct vkCmdCopyBufferToImage, byte-exact — the NEAREST run matches the PNG alpha), discard gating (props.filamat disassembly: OpKill on a<0.5, flags ON, lodBias 0). The corruption is minification-specific, which is why the defect is "not always": magnified close-up cards and tiny far dots were fine, every mid-distance card was solid.
 

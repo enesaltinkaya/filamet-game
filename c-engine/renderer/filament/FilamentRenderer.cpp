@@ -195,14 +195,29 @@ public:
     double worldAnchorZ() override { return anchorZ; }
 
     void setFog(const f32 color[3], f32 density) override {
-        filament::FogOptions fog{};
-        fog.enabled         = true;
-        fog.color           = {color[0], color[1], color[2]};
-        fog.density         = density;
-        fog.height          = 0.0f;      // "sea level" (world Y = 0)
-        fog.heightFalloff   = 0.0f;      // constant density with altitude
-        fog.maximumOpacity  = 1.0f;
-        view->setFogOptions(fog);
+        fogColor[0] = color[0];
+        fogColor[1] = color[1];
+        fogColor[2] = color[2];
+        fogDensity = density;
+        applyFogOptions();
+    }
+
+    void setFogEnabled(bool enabled) override {
+        gfx.fog = enabled;
+        applyFogOptions();
+    }
+
+    void applyGraphicsSettings(const GraphicsSettings& s) override {
+        gfx = s;
+        applyUpscaleOptions();
+        applyAntiAliasingOptions();
+        applyAmbientOcclusionOptions();
+        applyScreenSpaceReflectionsOptions();
+        applyBloomOptions();
+        applyVignetteOptions();
+        applyDepthOfFieldOptions();
+        applyShadowOptions();
+        applyFogOptions();
     }
 
     void setSun(const f32 direction[3], const f32 color[3], f32 intensity) override {
@@ -214,8 +229,12 @@ public:
             sunEntity = utils::EntityManager::get().create();
             filament::LightManager::Builder(filament::LightManager::Type::SUN)
                     .direction({direction[0], direction[1], direction[2]})
+                    // always a shadow caster; View::setShadowingEnabled (graphics
+                    // settings) gates whether the shadow passes run at all
+                    .castShadows(true)
                     .build(*engine, sunEntity);
             scene->addEntity(sunEntity);
+            applyShadowOptions();  // mapSize/cascades from the settings (also set on quality changes)
         }
         filament::LightManager::Instance inst = engine->getLightManager().getInstance(sunEntity);
         engine->getLightManager().setColor(inst, {color[0], color[1], color[2]});
@@ -255,12 +274,163 @@ public:
     }
 
 private:
+    // ── graphics settings → filament view/light options ──────────────────────
+    // Upscaler preset render scales (the old engine's FSR3 quality modes).
+    // No FSR pass anymore: the scale is carried by TAA upscaling (the scene
+    // renders at `scale`, jittered, and TAA reconstructs to native).
+    static float upscalerScale(int mode) {
+        switch (mode) {
+            case UPSCALER_NATIVE_AA:         return 1.0f;
+            case UPSCALER_QUALITY:           return 0.77f;
+            case UPSCALER_BALANCED:          return 0.67f;
+            case UPSCALER_PERFORMANCE:       return 0.59f;
+            case UPSCALER_ULTRA_PERFORMANCE: return 0.50f;
+            default:                         return 1.0f;
+        }
+    }
+
+    void applyUpscaleOptions(void) {
+        filament::DynamicResolutionOptions dr{};
+        // upscaler presets never touch DSR: filament's TAA upscaling renders
+        // the color pass at 1/upscaling itself and is "incompatible with
+        // regular dsr" (details/Renderer.cpp disables it internally)
+        if (gfx.upscaler == UPSCALER_OFF && gfx.renderScale < 0.999f) {
+            // manual resolution scale, bilinear blit back up (old engine's
+            // plain render-scale behaviour)
+            dr.enabled           = true;
+            dr.homogeneousScaling = true;
+            dr.minScale          = {gfx.renderScale, gfx.renderScale};
+            dr.maxScale          = {gfx.renderScale, gfx.renderScale};
+            dr.quality           = filament::QualityLevel::LOW;
+        }
+        // main view only — the filagui overlay must stay at native resolution
+        view->setDynamicResolutionOptions(dr);
+    }
+
+    void applyAntiAliasingOptions(void) {
+        filament::TemporalAntiAliasingOptions taa{};
+        taa.enabled = gfx.taa;
+        // upscaler presets set the TAA upscale ratio (native AA preset = 1.0);
+        // taaWeight is the old engine's history weight, filament's feedback is
+        // its inverse (1 = no temporal accumulation)
+        const float scale  = upscalerScale(gfx.upscaler);
+        taa.upscaling      = scale < 0.999f ? 1.0f / scale : 1.0f;
+        taa.feedback       = 1.0f - gfx.taaWeight;
+        // post-TAA RCAS sharpen (restores the softening of temporal
+        // accumulation — does the job FSR's RCAS used to do)
+        taa.sharpness      = gfx.sharpening;
+        // damp feedback where the history disagrees, against shimmer/flicker
+        taa.preventFlickering = true;
+        view->setTemporalAntiAliasingOptions(taa);
+
+        filament::MultiSampleAntiAliasingOptions msaa{};
+        msaa.enabled    = gfx.msaa;
+        msaa.sampleCount = 4;
+        view->setMultiSampleAntiAliasingOptions(msaa);
+
+        // FXAA only as the fallback AA when nothing stronger is active
+        const bool fxaa = !gfx.taa && !gfx.msaa && gfx.upscaler == UPSCALER_OFF &&
+                          gfx.renderScale > 0.999f;
+        view->setAntiAliasing(fxaa ? filament::AntiAliasing::FXAA : filament::AntiAliasing::NONE);
+    }
+
+    void applyAmbientOcclusionOptions(void) {
+        filament::AmbientOcclusionOptions ao{};
+        ao.enabled = gfx.ssao;
+        ao.radius  = 1.5f;  // metres — filament's 0.3 m default is an indoor value
+        ao.quality = filament::QualityLevel::MEDIUM;
+        view->setAmbientOcclusionOptions(ao);
+    }
+
+    void applyScreenSpaceReflectionsOptions(void) {
+        filament::ScreenSpaceReflectionsOptions ssr{};
+        ssr.enabled     = gfx.ssr;
+        ssr.thickness   = 1.0f;      // world units — outdoor scale
+        ssr.maxDistance = 100.0f;
+        view->setScreenSpaceReflectionsOptions(ssr);
+    }
+
+    void applyBloomOptions(void) {
+        filament::BloomOptions bloom{};
+        bloom.enabled = gfx.bloom;
+        view->setBloomOptions(bloom);
+    }
+
+    void applyVignetteOptions(void) {
+        // filament's vignette has no strength: map the 0..1 setting onto the
+        // midpoint (1 = invisible at the very corners, 0.2 = heavy)
+        filament::VignetteOptions vig{};
+        vig.enabled  = gfx.vignette > 0.01f;
+        vig.midPoint = 1.0f - 0.8f * gfx.vignette;
+        vig.feather  = 0.5f;
+        view->setVignetteOptions(vig);
+    }
+
+    void applyDepthOfFieldOptions(void) {
+        filament::DepthOfFieldOptions dof{};
+        dof.enabled = gfx.dof;
+        // gather rings 1..8 in the settings; (rings*2-1)^2 samples each —
+        // keep the kernel in the sane 3..5 band, fast tiles at 3
+        int rings = gfx.dofQuality;
+        if (rings < 3) rings = 3;
+        if (rings > 5) rings = 5;
+        dof.foregroundRingCount = (uint8_t)rings;
+        dof.backgroundRingCount = (uint8_t)rings;
+        dof.fastGatherRingCount = 3;
+        view->setDepthOfFieldOptions(dof);
+        camera->setFocusDistance((double)gfx.dofFocus);
+    }
+
+    void applyShadowOptions(void) {
+        view->setShadowingEnabled(gfx.shadowQuality > 0);
+        if (!sunEntity || gfx.shadowQuality <= 0) {
+            return;
+        }
+        filament::LightManager::ShadowOptions so{};
+        // splits are fractions of the [near 0.1 .. far 20000] frustum; the fog
+        // hides everything past ~3 km, so pack the cascades in close
+        switch (gfx.shadowQuality) {
+            case 1:  // low: one 1k cascade
+                so.mapSize = 1024;
+                so.shadowCascades = 1;
+                break;
+            case 2:  // medium: 2k, split at ~400 m
+                so.mapSize = 2048;
+                so.shadowCascades = 2;
+                so.cascadeSplitPositions[0] = 0.02f;
+                break;
+            default:  // high: 4k, ~100 / 400 / 1600 m
+                so.mapSize = 4096;
+                so.shadowCascades = 4;
+                so.cascadeSplitPositions[0] = 0.005f;
+                so.cascadeSplitPositions[1] = 0.02f;
+                so.cascadeSplitPositions[2] = 0.08f;
+                break;
+        }
+        engine->getLightManager().setShadowOptions(
+                engine->getLightManager().getInstance(sunEntity), so);
+    }
+
+    void applyFogOptions(void) {
+        filament::FogOptions fog{};
+        fog.enabled         = gfx.fog && fogDensity > 0.0f;
+        fog.color           = {fogColor[0], fogColor[1], fogColor[2]};
+        fog.density         = fogDensity;
+        fog.height          = 0.0f;      // "sea level" (world Y = 0)
+        fog.heightFalloff   = 0.0f;      // constant density with altitude
+        fog.maximumOpacity  = 1.0f;
+        view->setFogOptions(fog);
+    }
+
     u8* pendingScreenshot = nullptr;
     double anchorX = 0.0, anchorZ = 0.0;
     utils::Entity sunEntity{};
     filament::IndirectLight* ambientLight = nullptr;
     f32 sunColor[3] = {1.0f, 1.0f, 1.0f};
     f32 sunIntensity = 0.0f;
+    GraphicsSettings gfx{};  // last applied graphics settings
+    f32 fogColor[3] = {0.02f, 0.04f, 0.09f};
+    f32 fogDensity = 0.0f;
 };
 
 RenderBackend* filamentBackendCreate(void) {

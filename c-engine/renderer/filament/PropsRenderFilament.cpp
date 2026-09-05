@@ -493,8 +493,10 @@ bool buildTile(GpuTile& t, const PendingTile& p) {
                     .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, meshVbo,
                             meshIbo, v->indexOffset, v->indexCount)
                     .instances(chunkCount)
-                    .castShadows(false)
-                    .receiveShadows(false)
+                    // always shadow casters/receivers: View::setShadowingEnabled
+                    // (graphics settings) gates whether the shadow passes run
+                    .castShadows(true)
+                    .receiveShadows(true)
                     .build(*engine, entity);
             scene->addEntity(entity);
 

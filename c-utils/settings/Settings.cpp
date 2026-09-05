@@ -63,6 +63,8 @@ void settingsInit(void) {
     templates.push_back((Template{"taaWeight", "double", 0.9}));
     templates.push_back((Template{"taaGhost", "double", 1.0}));
     templates.push_back((Template{"taaDepth", "double", 0.06}));
+    /* 4x MSAA (new-engine setting; the old renderer had no MSAA). */
+    templates.push_back((Template{"msaaEnabled", "boolean", 0.}));
     templates.push_back((Template{"lensEnabled", "boolean", 1.}));
     templates.push_back((Template{"lensGrain", "double", 20.0}));
     templates.push_back((Template{"lensChromAb", "double", 20.0}));
@@ -121,7 +123,11 @@ void writeDefault(void) {
         if (strcmp(tpl->type, "double") == 0) {
             jsonSetDouble(settingsJson, tpl->name, tpl->defaultValue);
         }
-        if (strcmp(tpl->type, "number") == 0) {
+        /* "int" (shadowQuality, rendererBackend): without this branch a
+         * writeDefault() (triggered by a type-mismatched user file) drops
+         * every int key from the fresh file; they only come back in memory
+         * via the seeding loop, after the next settingsWrite(). */
+        if (strcmp(tpl->type, "int") == 0) {
             jsonSetInt(settingsJson, tpl->name, (int)tpl->defaultValue);
         }
     }

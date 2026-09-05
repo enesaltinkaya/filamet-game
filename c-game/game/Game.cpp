@@ -486,21 +486,6 @@ namespace game {
         } else if (dbg && utils::strequals(dbg, "biome")) {
             debugMode = 2;
         }
-        // TEMP round-5 (misplaced-terrain diagnosis): shader probes.
-        const char* probe = getenv("ENGINE_TERRAIN_PROBE");
-        if (probe && utils::strequals(probe, "vs")) {
-            debugMode = 10;
-        } else if (probe && utils::strequals(probe, "nrm")) {
-            debugMode = 11;
-        } else if (probe && utils::strequals(probe, "clip")) {
-            debugMode = 12;
-        } else if (probe && utils::strequals(probe, "vt")) {
-            debugMode = 13;
-        } else if (probe && utils::strequals(probe, "wpos")) {
-            debugMode = 17;
-        } else if (probe && utils::strequals(probe, "vspace")) {
-            debugMode = 18;
-        }
         engine::heightmapTerrainRenderSetDebugView(debugMode);
     }
 

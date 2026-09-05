@@ -18,10 +18,9 @@ Example: `ENGINE_SCREENSHOT=/tmp/shot.jpg ./build/c-game/c-game` — save screen
 
 We will porting our old engine /home/enes/Projects/c/game-001-cpp to this new engine.
 
-### 1 render path
+### 2 render paths
 
-We are only using filament.
-Diligent is ignored for now.
+We are only using filament and diligent.
 
 Sources are here with samples and docs;
 /home/enes/Projects/c/cpp-thirdparty/filament

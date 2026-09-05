@@ -97,6 +97,7 @@ target_include_directories(c-engine PUBLIC
     ${diligent_git}/DiligentCore/Graphics/GraphicsEngineVulkan/interface
     ${diligent_git}/DiligentCore/ThirdParty/volk
     ${diligent_git}/DiligentTools/AssetLoader/interface
+    ${diligent_git}/DiligentTools/TextureLoader/interface
     ${diligent_git}/DiligentFX
     ${diligent_git}/DiligentFX/PBR/interface
     ${diligent_git}/DiligentFX/Utilities/interface

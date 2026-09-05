@@ -2,6 +2,7 @@
 #include "Game.h"
 #include "cameraGui/CameraGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
+#include "settingsGui/SettingsGui.h"
 #include "gui/GuiManager.h"
 #include "gameState/GameState.h"
 #include "credits/CreditsGui.h"
@@ -22,6 +23,13 @@ namespace game {
 MainMenuGui mainMenuGui;
 
 MainMenuGui::MainMenuGui() : engine::Gui("mainMenu") {}
+
+// SETTINGS opens the graphics settings gui; the menu steps aside (like the
+// old engine's document switch) and comes back on BACK.
+static void openSettings(void) {
+    engine::gui::guiRemove(&mainMenuGui);
+    engine::gui::guiAdd(&settingsGui);
+}
 
 static void enterWorld(void) {
     utils::info("mainMenu: ENTER WORLD");
@@ -115,6 +123,7 @@ void MainMenuGui::draw() {
         if (at && at[0]) {
             autotestRan = 1;
             if (utils::strequals(at, "enter")) enterWorld();
+            else if (utils::strequals(at, "settings")) openSettings();
             else if (utils::strequals(at, "credits")) engine::gui::guiAdd(&creditsGui);
             else if (utils::strequals(at, "exit")) exitGame();
         }
@@ -190,7 +199,7 @@ void MainMenuGui::draw() {
         if (ImGui::InvisibleButton(id, ImVec2(panelW, rowH))) {
             engine::soundPlayClick();
             if (i == 0) enterWorld();
-            else if (i == 1) utils::info("mainMenu: SETTINGS (todo)");
+            else if (i == 1) openSettings();
             else if (i == 2) engine::gui::guiAdd(&creditsGui);
             else exitGame();
         }
@@ -207,7 +216,7 @@ void MainMenuGui::draw() {
         ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
         engine::soundPlayClick();
         if (focusIdx == 0) enterWorld();
-        else if (focusIdx == 1) utils::info("mainMenu: SETTINGS (todo)");
+        else if (focusIdx == 1) openSettings();
         else if (focusIdx == 2) engine::gui::guiAdd(&creditsGui);
         else exitGame();
     }

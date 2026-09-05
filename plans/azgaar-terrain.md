@@ -109,11 +109,35 @@ fade (-10 m → 0).
 - Hard-won pitfalls recorded in `docs/lessons.md` (setBufferAt no-copy,
   tiling-texture sampling, photometric emissive).
 
-### 6. Diligent terrain render pass ⏸ (deferred — Diligent backend ignored for now)
+### 6. Diligent terrain render pass ✅ (done 2026-09-05)
 
-HLSL mirror of phase 5 (pre-compiled at build time per
+HLSL mirror of phase 5 (runtime-compiled via device->CreateShader per
 `plans/diligent-migration.md`). Same CPU lattice, same surface invariant.
-Revisit only if we return to the Diligent backend.
+Shipped as `c-engine/renderer/diligent/HeightmapTerrainDiligent.{h,cpp}` +
+`shaders/heightmap_terrain_{vs,ps}.hlsl` (pak_1/materials, copied by CMake).
+
+- Per READY tile: 256² lattice corners repacked to (pos3, normal3) immutable
+  VBO; one shared 255-segment lattice IBO; budgeted (3/frame) nearest-first
+  uploads; single shared PRS/SRB (all-static resources, per-draw VBO binds
+  via SetVertexBuffers).
+- Look = DiligentFX-PBR port of terrain.mat (same lighting/tone-map path as
+  the glTF PBR pass; same turf noise, beach band, triplanar cliff, snow
+  line, micro-band normal perturbation; ramp/biome debug views).
+- Default textures ship as recomposited PNGs
+  (scripts/unpack-terrain-ktx2.sh: the ETC1S .ktx2 originals stay for
+  Filament; imageLoadKtx is a stub on this backend) loaded through
+  DiligentTools TextureLoader with mip generation.
+- **Hard-won:** runtime-glslang HLSL consumes cbuffer matrices TRANSPOSED
+  (fillFrameAttribs writes .Transpose()); per-pass look params ride in
+  CameraAttribs.f4ExtraData instead of a second cbuffer (ambiguous binding);
+  see docs/lessons.md 2026-09-05.
+- Verification: pixel-diff A/B vs Filament at the default spawn camera
+  (same turf texture/noise patches/horizon hills), landtop ramp from 5.5 km
+  (full window, seam-free), 100-400 m/s dolly streaming (window re-anchors,
+  uploads keep pace), clean teardown.
+- Still Filament-only around the terrain: props/vegetation (phase 7) and
+  the player model (gltf zstd loading not ported) — deferred with this
+  phase's scope.
 
 ### 7. Props / vegetation ✅ (done)
 
@@ -230,8 +254,8 @@ placement, waterline.
 
 ## Out of scope (for now)
 
-Diligent backend for all azgaar terrain work (decision: Diligent is ignored
-for the time being; Filament path only),
+Diligent backend for props/vegetation and the player model (the terrain
+render pass itself shipped 2026-09-05, see phase 6),
 Per-ring LOD ladder (needs per-ring CPU corner sets, not VS math),
 TAA/HiZ/motion-vector pipeline on the Filament path (scene-wide, separate
 workstream), `AzgaarWeather`.

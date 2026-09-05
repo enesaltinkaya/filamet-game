@@ -27,10 +27,10 @@
 
 #include <GLTFLoader.hpp>
 #include <GLTF_PBR_Renderer.hpp>
+#include <TextureLoader.h>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -60,7 +60,8 @@ namespace HLSL {
  *
  * The shaders are compiled at pass init via device->CreateShader
  * (HLSL + DiligentFXShaderSourceStreamFactory — the repo's runtime HLSL
- * precedent, see docs/azgaar-terrain/phase6-diligent-recon.md §3); the
+ * precedent, the repo's runtime-HLSL shaders are compiled at pass init via
+ * device->CreateShader); the
  * sources ship in pak_1 (CMake copy step).
  *
  * Uploads are budgeted (kUploadsPerFrame) and nearest-to-camera first, so
@@ -79,9 +80,10 @@ namespace {
 constexpr u32 kUploadsPerFrame        = 3;
 constexpr u32 kDeferredDestroyFrames  = 3;
 
-// Default terrain textures (engine pak, KTX2/BC7). Albedos are created
-// UNORM_SRGB so the hardware sRGB decode matches the Filament pass
-// (SRGB_ALPHA_BPTC_UNORM).
+// Default terrain textures (engine pak, PNG — the exact ETC1S decode of the
+// .ktx2 originals, which this backend cannot read: imageLoadKtx is a stub
+// since KTX-Software was unlinked, see scripts/unpack-terrain-ktx2.sh).
+// Albedos are created sRGB so the hardware decode matches the Filament pass.
 struct DefaultTexture {
     const char* path;
     const char* srvName;
@@ -89,12 +91,12 @@ struct DefaultTexture {
 };
 
 const DefaultTexture kDefaultTextures[] = {
-    {"images/terrain/grass_default/albedo.ktx2", "g_GrassAlbedo", true},
-    {"images/terrain/grass_default/normal.ktx2", "g_GrassNormal", false},
-    {"images/terrain/cliff_side_default/albedo.ktx2", "g_CliffAlbedo", true},
-    {"images/terrain/cliff_side_default/normal.ktx2", "g_CliffNormal", false},
-    {"images/terrain/snow_default/albedo.ktx2", "g_SnowAlbedo", true},
-    {"images/terrain/sand_default/albedo.ktx2", "g_SandAlbedo", true},
+    {"images/terrain/grass_default/albedo.png", "g_GrassAlbedo", true},
+    {"images/terrain/grass_default/normal.png", "g_GrassNormal", false},
+    {"images/terrain/cliff_side_default/albedo.png", "g_CliffAlbedo", true},
+    {"images/terrain/cliff_side_default/normal.png", "g_CliffNormal", false},
+    {"images/terrain/snow_default/albedo.png", "g_SnowAlbedo", true},
+    {"images/terrain/sand_default/albedo.png", "g_SandAlbedo", true},
 };
 
 // Per-tile GPU state (main thread only).
@@ -113,17 +115,6 @@ struct DeferredDestroy {
     u32           framesLeft = kDeferredDestroyFrames;
 };
 
-// cbTerrainLook contents (mirrors the shader cbuffer: 40 bytes, padded to a
-// 16-byte multiple on the C++ side).
-struct TerrainLookCB {
-    float mapBounds[4];      // minX, minZ, maxX, maxZ (world metres)
-    float climateParams[4];  // snowLoC, snowHiC, beachHeightM, climateEnabled
-    float maxLandHeight;
-    float debugView;
-    float pad[2];
-};
-static_assert(sizeof(TerrainLookCB) == 48);
-
 // ── Pass state ────────────────────────────────────────────────────────────
 
 IPipelineState*        pipeline = nullptr;
@@ -135,7 +126,6 @@ IShader*               ps = nullptr;
 IBuffer*               latticeIbo = nullptr;
 u32                    latticeIdxCount = 0;
 IBuffer*               frameAttribsCB = nullptr;
-IBuffer*               lookCB = nullptr;
 ISampler*              tilingSampler = nullptr;
 ISampler*              clampSampler = nullptr;
 ISampler*              clampNearestSampler = nullptr;
@@ -166,19 +156,6 @@ std::vector<u8>      lookBiomePixels;
 std::vector<u8>      lookClimatePixels;
 float                debugView = 0.0f;
 
-// TEMP diagnostic (misplaced-terrain round 5): repeatedly read the first
-// uploaded tile's VBO back through a staging buffer and compare it with
-// the CPU-side corner data — detects post-upload GPU memory clobbering.
-// Remove once the bug is fixed.
-IBuffer* probeBuf      = nullptr;
-GpuTile* probeTile     = nullptr;
-float    probeExpected[12];  // corner0 (pos+nrm) + last corner (pos only kept in 0..5)
-size_t   probeSize     = 0;
-bool     probePending  = false;
-bool     probeSettled  = false;
-u32      probeFrameCount = 0;
-constexpr u32 probeEvery = 20;
-
 // Per-frame cost tracking (same 120-frame warmup + 1000-frame hold as the
 // Filament pass).
 constexpr u32 kStatWarmupFrames = 120;
@@ -197,50 +174,34 @@ void transitionToShaderResource(ITexture* tex) {
 }
 
 void transitionToShaderResource(ITexture* tex);
-void fillLookCB(void);
 
-// Load a pak KTX2 (UASTC supercompressed) through the c-utils KTX decoder
-// (the process' single BasisU copy — not Filament's ktxreader) and upload
-// the transcoded BC7 bytes as an immutable texture. The decoder's
-// mipSizes vector holds per-mip DATA OFFSETS (ktxTexture_GetImageOffset),
-// so the BC7 block sizes are computed here: ceil(w/4)*ceil(h/4)*8.
+// Load a pak PNG through DiligentTools' TextureLoader (stb decode + mip-chain
+// generation) and create an immutable texture. The TextureLoader copies the
+// input, so the pak blob only needs to outlive this call.
 ITexture* loadKtx2Texture(const char* path, bool srgb) {
-    utils::Image img = utils::imageLoadKtx(path, utils::KTX_FORMAT_BC7_RGBA);
-    if (!img.data || img.mips < 1) {
-        utils::warn("heightmapTerrain: KTX2 load failed: %s", path);
-        if (img.data) utils::imageDestory(&img);
+    utils::String blob = utils::dataManagerRead(path);
+    if (!blob.data || blob.size == 0) {
+        utils::warn("heightmapTerrain: texture load failed: %s", path);
+        utils::stringDestroy(&blob);
         return nullptr;
     }
 
-    TextureDesc desc;
-    desc.Name        = path;
-    desc.Type        = RESOURCE_DIM_TEX_2D;
-    desc.Usage       = USAGE_IMMUTABLE;
-    desc.BindFlags   = BIND_SHADER_RESOURCE;
-    desc.Format      = srgb ? TEX_FORMAT_BC7_UNORM_SRGB : TEX_FORMAT_BC7_UNORM;
-    desc.Width       = (Uint32)img.width;
-    desc.Height      = (Uint32)img.height;
-    desc.MipLevels   = (Uint32)img.mips;
-    desc.ArraySize   = 1;
-
-    const u8* base = (const u8*)img.data;
-    std::vector<TextureSubResData> subres((size_t)img.mips);
-    for (int i = 0; i < img.mips; i++) {
-        u32 mw = std::max(1u, (u32)img.width >> i);
-        size_t rowBytes = ((size_t)(mw + 3) / 4) * 8;  // BC7: 4x4 texels / 8 bytes
-        subres[i].pData = base + img.mipSizes[i];
-        subres[i].Stride = rowBytes;
+    TextureLoadInfo info;
+    info.Name        = path;
+    info.IsSRGB      = srgb ? True : False;
+    info.GenerateMips = True;
+    RefCntAutoPtr<ITextureLoader> loader;
+    CreateTextureLoaderFromMemory(blob.data, blob.size, true, info, &loader);
+    utils::stringDestroy(&blob);
+    if (!loader) {
+        utils::warn("heightmapTerrain: texture loader failed: %s", path);
+        return nullptr;
     }
-    TextureData data;
-    data.pSubResources   = subres.data();
-    data.NumSubresources = (Uint32)img.mips;
-    data.pContext        = context;
 
     RefCntAutoPtr<ITexture> tex;
-    device->CreateTexture(desc, &data, &tex);
-    utils::imageDestory(&img);
+    loader->CreateTexture(device, &tex);
     if (!tex) {
-        utils::warn("heightmapTerrain: KTX2 upload failed: %s", path);
+        utils::warn("heightmapTerrain: texture creation failed: %s", path);
         return nullptr;
     }
     transitionToShaderResource(tex);
@@ -363,8 +324,6 @@ void rebuildIblCubes(const f32 color[3], f32 intensity) {
 PipelineResourceDesc gResources[] = {
         {SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cbFrameAttribs", 1,
                 SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
-        {SHADER_TYPE_PIXEL, "cbTerrainLook", 1,
-                SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
         {SHADER_TYPE_PIXEL, "g_GrassAlbedo", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                 SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
         {SHADER_TYPE_PIXEL, "g_GrassNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
@@ -427,8 +386,6 @@ IShaderResourceVariable* prsVar(SHADER_TYPE stage, const char* name) {
 void bindSharedStatics(void) {
     if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_VERTEX, "cbFrameAttribs"))
         v->Set(frameAttribsCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "cbTerrainLook"))
-        v->Set(lookCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 
     auto bindSRV = [&](const char* name, ITexture* tex) {
         if (!tex) return;  // the slot keeps its previous (fallback) binding
@@ -512,21 +469,6 @@ IShader* createHlslShader(const char* pakPath, const char* name, SHADER_TYPE typ
         utils::warn("heightmapTerrain: shader compile failed %s: %s", name, msg);
         return nullptr;
     }
-    // TEMP diagnostic (round 5): dump the compiled module for spirv-dis.
-    if (getenv("ENGINE_TERRAIN_DEBUG_SPIRV") != nullptr) {
-        const void* code = nullptr;
-        Uint64 codeSize = 0;
-        shader->GetBytecode(&code, codeSize);
-        char path[256];
-        std::snprintf(path, sizeof(path), "/tmp/terrain_%s.spv", name);
-        FILE* f = std::fopen(path, "wb");
-        if (f && code && codeSize > 0) {
-            std::fwrite(code, 1, (size_t)codeSize, f);
-            std::fclose(f);
-            utils::info("heightmapTerrain: SPIRV dumped %s (%llu B)", path,
-                    (unsigned long long)codeSize);
-        }
-    }
 
     // keep one ref past this scope (see loadKtx2Texture)
     shader->AddRef();
@@ -573,8 +515,7 @@ void initConstantBuffers(void) {
     // "layout owned by the renderer" pairing.
     const size_t size = sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs);
     CreateUniformBuffer(device, (Uint64)size, "terrain PBR frame attribs", &frameAttribsCB);
-    CreateUniformBuffer(device, 64, "terrain look attribs", &lookCB);
-    if (!frameAttribsCB || !lookCB) {
+    if (!frameAttribsCB) {
         utils::warn("heightmapTerrain: cbuffer creation failed");
     }
 }
@@ -752,11 +693,6 @@ void initPass(void) {
         return;
     }
 
-    // The game may have set a debug view before the first frame.
-    if (debugView != 0.0f) {
-        fillLookCB();
-    }
-
     passReady = true;
     utils::info("heightmapTerrain: diligent pass initialized (shaders + PSO + shared IBO %u idx)",
             latticeIdxCount);
@@ -769,33 +705,56 @@ void initPass(void) {
 // PS reads that the glTF fill leaves unset (zeroed first): the
 // environment rotation, the single-mip prefiltered-cube level, the IBL
 // scale and the loading-animation parameters.
+namespace {
+
+// CPU-side staging for the frame-attribs cbuffer: built here, then pushed
+// with UpdateBuffer. (MapBuffer(DISCARD) on this buffer handed back a
+// pointer whose GPU-visible content landed shifted by 112 bytes — the draw
+// read a coherent-but-wrong matrix assembled from neighbouring struct
+// fields, clipping the world to a ~5 m patch around the camera. See
+// docs/lessons.md dynamic-buffer entries.)
+u8  frameAttribsStaging[sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs)];
+
+}  // namespace
+
 void fillFrameAttribs(void) {
-    PVoid mapped = nullptr;
-    context->MapBuffer(frameAttribsCB, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-    if (!mapped) {
-        context->UnmapBuffer(frameAttribsCB, MAP_WRITE);
-        return;
-    }
-    memset(mapped, 0, (size_t)sizeof(HLSL::PBRFrameAttribs) + (size_t)sizeof(HLSL::PBRLightAttribs));
+    const size_t cbSize = sizeof(HLSL::PBRFrameAttribs) + sizeof(HLSL::PBRLightAttribs);
+    u8* base = frameAttribsStaging;
+    memset(base, 0, cbSize);
 
     const float4x4& view = engine::renderer::diligent::diligentFrameView();
     const float4x4& proj = engine::renderer::diligent::diligentFrameProj();
     const SwapChainDesc& scDesc = swapChain->GetDesc();
 
-    HLSL::PBRFrameAttribs* frame = (HLSL::PBRFrameAttribs*)mapped;
+    HLSL::PBRFrameAttribs* frame = (HLSL::PBRFrameAttribs*)base;
     HLSL::CameraAttribs& camera = frame->Camera;
-    camera.mView = view;
-    camera.mProj = proj;
-    camera.mViewProj = view * proj;
-    camera.mViewInv = view.Inverse();
-    camera.mProjInv = proj.Inverse();
-    camera.mViewProjInv = camera.mViewProj.Inverse();
+    // The runtime HLSL (glslang HLSL frontend) consumes cbuffer matrices
+    // transposed relative to Diligent's row-major math: storing the plain
+    // matrices made the shader apply rotation-without-translation plus the
+    // translation as the projective row (terrain collapsed to a sliver that
+    // hugged the world origin — see docs/lessons.md, the diligent-terrain
+    // entry). The prebuilt DiligentFX SPIRV shaders are precompiled with the matching
+    // convention; every runtime-compiled HLSL here must write transposed.
+    camera.mView = view.Transpose();
+    camera.mProj = proj.Transpose();
+    camera.mViewProj = (view * proj).Transpose();
+    camera.mViewInv = view.Inverse().Transpose();
+    camera.mProjInv = proj.Inverse().Transpose();
+    camera.mViewProjInv = (view * proj).Inverse().Transpose();
     camera.f4Position = float4(float3::MakeVector(camera.mViewInv[3]), 1.0f);
     camera.f4ViewportSize = float4{(float)scDesc.Width, (float)scDesc.Height,
             1.0f / (float)scDesc.Width, 1.0f / (float)scDesc.Height};
     camera.SetClipPlanes(engine::renderer::kCameraNear, engine::renderer::kCameraFar);
     camera.fHandness = view.Determinant() > 0 ? 1.0f : -1.0f;
     frame->PrevCamera = frame->Camera;
+
+    // Per-world look params ride in f4ExtraData (application-specific; the
+    // pixel stage reads them from here — a second cbuffer bound ambiguously,
+    // see docs/lessons.md, the diligent-terrain entry).
+    camera.f4ExtraData[0] = float4{look.mapMinX, look.mapMinZ, look.mapMaxX, look.mapMaxZ};
+    camera.f4ExtraData[1] = float4{look.snowLoC, look.snowHiC, look.beachHeightM,
+            look.climateEnabled ? 1.0f : 0.0f};
+    camera.f4ExtraData[2] = float4{look.maxLandHeightM, debugView, 0.0f, 0.0f};
 
     HLSL::PBRRendererShaderParameters& renderer = frame->Renderer;
     renderer.OcclusionStrength = 1.0f;
@@ -815,17 +774,7 @@ void fillFrameAttribs(void) {
 
     // Directional sun right after the frame attribs (same as the glTF fill).
     HLSL::PBRLightAttribs* light =
-            reinterpret_cast<HLSL::PBRLightAttribs*>(static_cast<HLSL::PBRFrameAttribs*>(mapped) + 1);
-    if (getenv("ENGINE_TERRAIN_DUMP_CB")) {
-        const float4x4& mv = frame->Camera.mView;
-        utils::info("terrainCB: view %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
-                mv._11, mv._12, mv._13, mv._14, mv._21, mv._22, mv._23, mv._24,
-                mv._31, mv._32, mv._33, mv._34, mv._41, mv._42, mv._43, mv._44);
-        const float4x4& pj = frame->Camera.mProj;
-        utils::info("terrainCB: proj %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
-                pj._11, pj._12, pj._13, pj._14, pj._21, pj._22, pj._23, pj._24,
-                pj._31, pj._32, pj._33, pj._34, pj._41, pj._42, pj._43, pj._44);
-    }
+            reinterpret_cast<HLSL::PBRLightAttribs*>(base + sizeof(HLSL::PBRFrameAttribs));
     const f32* sunDir = engine::renderer::diligent::diligentSunDirection();
     const f32* sunColor = engine::renderer::diligent::diligentSunColor();
     f32 sunIntensity = engine::renderer::diligent::diligentSunIntensity();
@@ -837,32 +786,8 @@ void fillFrameAttribs(void) {
     float3 direction = normalize(float3{sunDir[0], sunDir[1], sunDir[2]});
     GLTF_PBR_Renderer::WritePBRLightShaderAttribs({&sun, nullptr, &direction, 1.0f}, light);
 
-    context->UnmapBuffer(frameAttribsCB, MAP_WRITE);
-}
-
-// cbTerrainLook: rewritten each frame (48 bytes; values only change at
-// world load / debug view set, but the map is trivial).
-void fillLookCB(void) {
-    PVoid mapped = nullptr;
-    context->MapBuffer(lookCB, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-    if (!mapped) {
-        context->UnmapBuffer(lookCB, MAP_WRITE);
-        return;
-    }
-    TerrainLookCB cb;
-    std::memset(&cb, 0, sizeof(cb));
-    cb.mapBounds[0] = look.mapMinX;
-    cb.mapBounds[1] = look.mapMinZ;
-    cb.mapBounds[2] = look.mapMaxX;
-    cb.mapBounds[3] = look.mapMaxZ;
-    cb.climateParams[0] = look.snowLoC;
-    cb.climateParams[1] = look.snowHiC;
-    cb.climateParams[2] = look.beachHeightM;
-    cb.climateParams[3] = look.climateEnabled ? 1.0f : 0.0f;
-    cb.maxLandHeight = look.maxLandHeightM;
-    cb.debugView = debugView;
-    memcpy(mapped, &cb, sizeof(cb));
-    context->UnmapBuffer(lookCB, MAP_WRITE);
+    context->UpdateBuffer(frameAttribsCB, 0, cbSize, base,
+            RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 }
 
 // ── Look ───────────────────────────────────────────────────────────────────
@@ -889,7 +814,6 @@ void registerLookImpl(const HeightmapTerrainLook* lookPtr) {
         createLookTextures();
         bindSharedStatics();
         rebuildSharedSRB();
-        fillLookCB();
         utils::info("heightmapTerrain: look %s (climate %s, snow [%.1f, %.1f] C, beach %.1f m, "
                 "maxLand %.0f m, map %.0fx%.0f m)",
                 lookRegistered ? "registered" : "cleared",
@@ -907,9 +831,6 @@ void setDebugViewImpl(u32 mode) {
     float v = (float)mode;
     if (v == debugView) return;
     debugView = v;
-    if (passReady) {
-        fillLookCB();
-    }
 }
 
 // ── Tile cache ─────────────────────────────────────────────────────────────
@@ -979,12 +900,6 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
     desc.Size        = (Uint64)vboSize;
     desc.BindFlags   = BIND_VERTEX_BUFFER;
     desc.Usage       = USAGE_IMMUTABLE;
-    // TEMP diagnostic: snapshot the CPU-side corner data before the upload
-    // (the readback verdict needs it).
-    float cpuCorner0[6];
-    float cpuCornerLast[6];
-    std::memcpy(cpuCorner0, vboData, sizeof(cpuCorner0));
-    std::memcpy(cpuCornerLast, &vboData[(size_t)(cornerCount - 1) * 6u], sizeof(cpuCornerLast));
 
     BufferData data{(const void*)vboData, (Uint64)vboSize, context};
     device->CreateBuffer(desc, &data, &e->vbo);
@@ -992,34 +907,6 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
     if (!e->vbo) {
         utils::warn("heightmapTerrain: VBO creation failed tile(%d,%d)", v->tileX, v->tileZ);
         return false;
-    }
-
-    // TEMP diagnostic: arm a readback probe on the first successful upload.
-    if (!probeSettled && probeBuf == nullptr) {
-        BufferDesc pdesc;
-        pdesc.Name           = "heightmap terrain VBO probe";
-        pdesc.Size           = (Uint64)vboSize;
-        pdesc.BindFlags      = BIND_NONE;
-        pdesc.Usage          = USAGE_STAGING;
-        pdesc.CPUAccessFlags = CPU_ACCESS_READ;
-        device->CreateBuffer(pdesc, nullptr, &probeBuf);
-        if (probeBuf) {
-            std::memcpy(probeExpected, cpuCorner0, sizeof(cpuCorner0));
-            std::memcpy(&probeExpected[6], cpuCornerLast, sizeof(cpuCornerLast));
-            probeSize = vboSize;
-            probeTile = e;
-            context->CopyBuffer(e->vbo, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
-                    probeBuf, 0, (Uint64)vboSize, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-            probePending = true;
-            utils::info("heightmapTerrain: PROBE armed tile(%d,%d) %zu B; cpu corner0 pos(%.3f %.3f %.3f) nrm(%.3f %.3f %.3f) last pos(%.3f %.3f %.3f)",
-                    v->tileX, v->tileZ, vboSize,
-                    cpuCorner0[0], cpuCorner0[1], cpuCorner0[2],
-                    cpuCorner0[3], cpuCorner0[4], cpuCorner0[5],
-                    cpuCornerLast[0], cpuCornerLast[1], cpuCornerLast[2]);
-        } else {
-            probeSettled = true;
-            utils::warn("heightmapTerrain: PROBE staging buffer creation failed");
-        }
     }
 
     e->inUse      = true;
@@ -1035,32 +922,6 @@ void updateImplWork(void) {
     if (!passReady) {
         initPass();
         if (!passReady) return;
-    }
-
-    // TEMP diagnostic: periodic VBO readback (see probeBuf). The read lags
-    // the copy by one frame (staging lands at the frame flush).
-    if (probeBuf && !probeSettled && probeTile && probeTile->inUse) {
-        if (probePending) {
-            PVoid mapped = nullptr;
-            context->MapBuffer(probeBuf, MAP_READ, MAP_FLAG_NONE, mapped);
-            if (mapped) {
-                const float* p = (const float*)mapped;
-                const float* last = &p[(size_t)((u32)(probeSize / 24u) - 1u) * 6u];
-                utils::info("heightmapTerrain: PROBE f%u: gpu corner0 pos(%.3f %.3f %.3f) nrm(%.3f %.3f %.3f) | gpu last pos(%.3f %.3f %.3f) | cpu corner0 pos(%.3f %.3f %.3f) | cpu last pos(%.3f %.3f %.3f)",
-                        probeFrameCount, p[0], p[1], p[2], p[3], p[4], p[5],
-                        last[0], last[1], last[2],
-                        probeExpected[0], probeExpected[1], probeExpected[2],
-                        probeExpected[6], probeExpected[7], probeExpected[8]);
-            } else {
-                probeSettled = true;
-            }
-            probePending = false;
-        }
-        if (++probeFrameCount % probeEvery == 0) {
-            context->CopyBuffer(probeTile->vbo, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
-                    probeBuf, 0, probeSize, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-            probePending = true;
-        }
     }
 
     // Tick deferred GPU destruction (must outlive in-flight draws).
@@ -1088,7 +949,6 @@ void updateImplWork(void) {
         iblInitialized = true;
     }
     syncGgxLUT();
-    fillLookCB();
 
     HeightmapTerrain* ht = heightmapTerrainGetActive();
     if (cachedHt && ht != cachedHt) {
@@ -1219,7 +1079,6 @@ void destroyImpl(void) {
     if (ps) { ps->Release(); ps = nullptr; }
     if (latticeIbo) { latticeIbo->Release(); latticeIbo = nullptr; }
     if (frameAttribsCB) { frameAttribsCB->Release(); frameAttribsCB = nullptr; }
-    if (lookCB) { lookCB->Release(); lookCB = nullptr; }
     if (tilingSampler) { tilingSampler->Release(); tilingSampler = nullptr; }
     if (clampSampler) { clampSampler->Release(); clampSampler = nullptr; }
     if (clampNearestSampler) { clampNearestSampler->Release(); clampNearestSampler = nullptr; }
@@ -1230,8 +1089,6 @@ void destroyImpl(void) {
     if (iblPrefiltered) { iblPrefiltered->Release(); iblPrefiltered = nullptr; }
     if (ggxLUT) { ggxLUT->Release(); ggxLUT = nullptr; }
     if (ggxFallbackLUT) { ggxFallbackLUT->Release(); ggxFallbackLUT = nullptr; }
-
-    if (probeBuf) { probeBuf->Release(); probeBuf = nullptr; }
 
     lookBiomePixels.clear();
     lookClimatePixels.clear();

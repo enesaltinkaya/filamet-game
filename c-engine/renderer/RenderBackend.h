@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Defines.h"
+#include "renderer/Renderer.h"
 
 // Shared constants of both render paths (the look of the game must not depend
 // on the backend) + the internal interface every backend implements. Nothing
@@ -40,6 +41,13 @@ public:
     // constant density, fog color should match the sky clear color so the
     // fogged far terrain meets the horizon seamlessly). density is [1/m].
     virtual void setFog(const f32 color[3], f32 density) = 0;
+
+    // Graphics settings menu support. applyGraphicsSettings maps the whole
+    // block to backend state in one call; setFogEnabled toggles the world fog
+    // without re-sending color/density. Default: no-op (a backend that has no
+    // equivalent for a setting just ignores it).
+    virtual void applyGraphicsSettings(const GraphicsSettings&) {}
+    virtual void setFogEnabled(bool) {}
 };
 
 // Implemented by the backends (renderer/filament, renderer/diligent).

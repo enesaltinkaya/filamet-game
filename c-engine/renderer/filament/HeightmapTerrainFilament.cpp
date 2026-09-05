@@ -498,8 +498,10 @@ bool uploadTile(GpuTile* e, const HeightmapTileView* v) {
             .material(0, materialInstance)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, vbo, latticeIbo, 0,
                     latticeIdxCount)
-            .castShadows(false)
-            .receiveShadows(false)
+            // always shadow casters/receivers: View::setShadowingEnabled
+            // (graphics settings) gates whether the shadow passes run
+            .castShadows(true)
+            .receiveShadows(true)
             .build(*engine, entity);
     scene->addEntity(entity);
 
