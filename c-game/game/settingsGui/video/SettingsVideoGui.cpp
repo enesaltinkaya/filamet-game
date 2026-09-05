@@ -108,7 +108,13 @@ static void applyChanges(char toEngine) {
     if (dirtyCursorScale && cursorScale != (float)utils::settingsGetDouble("cursorScale")) {
         utils::settingsSetDouble("cursorScale", cursorScale);
         if (toEngine) {
-            utils::warn("videoSettings: cursor scaling not supported by this engine (system cursors are fixed-size)");
+            // old engine parity: rebuild the color cursors at the new scale
+            // and push the fresh pointers into the crmlui wrapper (it keeps
+            // its own copy, so a reload alone would leave it with stale
+            // SDL_Cursor* — the old engine did the same via
+            // windowSystemReloadCursors + guiManagerUpdateCursors).
+            engine::windowLoadCursors();
+            engine::guiManagerUpdateCursors();
         }
         dirtyCursorScale = 0;
         wrote            = 1;

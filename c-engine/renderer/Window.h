@@ -49,7 +49,10 @@ extern struct Input input;
 // rmlui gui manager uses it for its Ctrl+letter toggles.
 KeyCode windowMapScancode(int scancode);
 
-void windowSetRelativeMouseMode(char on);  // true: relative mode + cursor hidden
+/* true: relative mode + hidden cursor (absolute position saved); false: exit
+ * relative mode, warp the cursor back to the pre-drag position, and show it
+ * (old engine's sdlWindowSystemHideCursor/ShowCursor save/restore). */
+void windowSetRelativeMouseMode(char on);
 void windowHideCursor(void);
 void windowShowCursor(void);
 
@@ -59,10 +62,14 @@ void windowShowCursor(void);
  * INPUT_EVENT_WINDOW_RESIZED (rmlSetDimensions). */
 void windowToggleFullscreen(char on);
 
-// Cursor support (SDL system cursors) — the pointers are passed to the
-// crmlui wrapper (RmlParams.window) and windowSetCursor is used as its
-// set-cursor callback (0=arrow, 1=pointer/hand, 2=text, 3=move, 4=cross,
-// 5=resize, 6=unavailable).
+// Cursor support — arrow/hand are the old engine's custom images (pak
+// images/cursor{Arrow,Hand}.png) built into SDL color cursors at
+// cursorScale, falling back to system cursors when an image is unavailable;
+// text is always a system cursor. The pointers are passed to the crmlui
+// wrapper (RmlParams.window) and windowSetCursor is used as its set-cursor
+// callback (0=arrow, 1=pointer/hand, 2=text, 3=move, 4=cross, 5=resize,
+// 6=unavailable). windowLoadCursors must be followed by
+// guiManagerUpdateCursors so the wrapper's own copy sees the new pointers.
 void windowLoadCursors(void);
 void windowDestroyCursors(void);
 void* windowGetArrowCursor(void);

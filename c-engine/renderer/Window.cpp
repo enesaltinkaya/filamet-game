@@ -12,9 +12,21 @@ Input input = {};
 
 static char relativeMouse = 0;
 
-// Cursor support (SDL system cursors). arrow/hand are handed to the crmlui
-// wrapper; text is a system cursor. Tracked so windowIsCursorVisible() can
-// gate GUI input forwarding.
+// Old engine's cursor save/restore (SDLWindowSystem's cursorSaveX/Y): the
+// absolute position where a camera-rotation drag started. On exiting
+// relative mode the cursor is warped back there. cursorShowDue is the
+// SDL_GetTicks() time at which a pending delayed SDL_ShowCursor fires
+// (0 = none) — this engine's form of the old engine's
+// futureTaskAdd(10, showCursorDelayed): this engine never runs the global
+// utils::futureTaskRun, so the delay is serviced in windowPollEvents.
+static float cursorSaveX = 0.0f, cursorSaveY = 0.0f;
+static u32 cursorShowDue = 0;
+
+// Cursor support. arrow/hand are the old engine's custom images
+// (images/cursor{Arrow,Hand}.png in pak_0_engine) built into SDL color
+// cursors; text stays a system cursor. The pointers are handed to the crmlui
+// wrapper; cursorVisible is tracked so windowIsCursorVisible() can gate GUI
+// input forwarding.
 static SDL_Cursor* cursorArrow = nullptr;
 static SDL_Cursor* cursorHand = nullptr;
 static SDL_Cursor* cursorText = nullptr;
@@ -228,6 +240,13 @@ void windowPollEvents(void) {
         }
     }
 
+    // Pending delayed cursor show (the 10ms showCursorDelayed task from the
+    // old engine's showCursor) — fires after the warp-back has settled.
+    if (cursorShowDue && SDL_GetTicks() >= cursorShowDue) {
+        cursorShowDue = 0;
+        if (window.handle && !relativeMouse) SDL_ShowCursor();
+    }
+
     // absolute cursor position + held buttons (covers state from before focus,
     // and keeps it consistent even without a motion event this frame)
     if (window.handle) {
@@ -285,12 +304,26 @@ void windowSetRelativeMouseMode(char on) {
         input.mouseDy = 0.0f;
     }
     if (window.handle) {
-        SDL_SetWindowRelativeMouseMode(window.handle, on);
         if (on) {
+            // Old engine's sdlWindowSystemHideCursor: save the absolute
+            // position BEFORE entering relative mode — it is the cursor's
+            // restore point when the drag ends.
+            SDL_GetMouseState(&cursorSaveX, &cursorSaveY);
+            cursorShowDue = 0;  // a new drag cancels any pending show
+            SDL_SetWindowRelativeMouseMode(window.handle, true);
             SDL_HideCursor();
             cursorVisible = false;
         } else {
-            SDL_ShowCursor();
+            // Old engine's sdlWindowSystemShowCursor: exit relative mode and
+            // warp the cursor back to where the rotation started, so it
+            // appears where it was before the drag.
+            SDL_SetWindowRelativeMouseMode(window.handle, false);
+            SDL_WarpMouseInWindow(window.handle, cursorSaveX, cursorSaveY);
+            // Old engine delayed SDL_ShowCursor ~10ms (futureTaskAdd(10,
+            // showCursorDelayed)): the warp is asynchronous on some
+            // platforms, showing immediately can draw the cursor at the
+            // pre-drag position for a frame.
+            cursorShowDue = SDL_GetTicks() + 10;
             cursorVisible = true;
         }
     }
@@ -315,11 +348,55 @@ void windowToggleFullscreen(char on) {
 
 // ── Cursor support ──────────────────────────────────────────────────────────
 
+// Port of the old engine's loadCursor (SDLWindowSystem): decode the cursor
+// image from pak data, resize it by cursorScale (the 64px sources are divided
+// by 2.5 so scale 1.0 lands at ~25px on screen), and build an SDL color
+// cursor at the old engine's hotspots. Returns nullptr on any failure so the
+// caller can fall back to a system cursor.
+static SDL_Cursor* loadCursorImage(const char* path, float xHot, float yHot) {
+    if (!utils::dataManagerFileExists(path)) {
+        utils::warn("window: cursor image not found in paks: %s", path);
+        return nullptr;
+    }
+    utils::Image image = utils::imageLoad(path);
+    if (!image.data) {
+        utils::warn("window: failed to decode cursor image %s", path);
+        return nullptr;
+    }
+
+    double scale = utils::settingsGetDouble("cursorScale");
+    u32 w = (u32)(image.width / 2.5f * scale);
+    u32 h = (u32)(image.height / 2.5f * scale);
+    if (w == 0 || h == 0) {
+        utils::warn("window: cursorScale %g yields a 0px cursor, using system cursor", scale);
+        utils::imageDestory(&image);
+        return nullptr;
+    }
+    u32 hotX = (u32)(xHot / 2.5f * scale);
+    u32 hotY = (u32)(yHot / 2.5f * scale);
+
+    utils::Image resized = utils::imageResize(&image, (int)w, (int)h);
+    SDL_Surface* surface = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGBA32, resized.data, 4 * w);
+    SDL_Cursor* cursor = surface ? SDL_CreateColorCursor(surface, hotX, hotY) : nullptr;
+    utils::imageDestory(&image);
+    utils::imageDestory(&resized);
+    if (surface) SDL_DestroySurface(surface);
+    if (cursor) {
+        utils::info("window: cursor %s -> %ux%u (scale %g)", path, w, h, scale);
+    } else {
+        utils::warn("window: SDL_CreateColorCursor failed for %s", path);
+    }
+    return cursor;
+}
+
 void windowLoadCursors(void) {
     windowDestroyCursors();
-    cursorArrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
-    cursorHand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
+    // old engine hotspots (8,8) and (25,4); text stays a system cursor
+    cursorArrow = loadCursorImage("images/cursorArrow.png", 8, 8);
+    cursorHand  = loadCursorImage("images/cursorHand.png", 25, 4);
     cursorText  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
+    if (!cursorArrow) cursorArrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    if (!cursorHand)  cursorHand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
     // default to the arrow (the wrapper re-selects per element on hover)
     if (cursorArrow) {
         SDL_SetCursor(cursorArrow);
