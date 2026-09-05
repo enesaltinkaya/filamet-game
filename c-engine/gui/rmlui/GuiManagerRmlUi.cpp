@@ -217,7 +217,13 @@ void guiManagerAddGuiNextFrame(System* gui) {
     }
 }
 
+char rmluiDisabled(void) {
+    static char disabled = getenv("ENGINE_NO_RMLUI") != nullptr;
+    return disabled;
+}
+
 char guiManagerIsMouseInteracting(void) {
+    if (rmluiDisabled()) return 0;
     /* RmlUi's own answer (Rml::Context::IsMouseInteracting): the cursor
      * hovers over, or has activated, an element in any loaded document.
      * The context state is refreshed by rmlUpdate() after the input events
@@ -242,6 +248,7 @@ void guiManagerRemoveGuiNextFrame(System* gui) {
 }
 
 void guiManagerUpdateScale(void) {
+    if (rmluiDisabled()) return;
     rmlSetDimensions(window.width, window.height, guiManagerScale());
 }
 
@@ -253,6 +260,7 @@ void GuiManagerRmlUi::updateCursors(void) {
 }
 
 void guiManagerUpdateCursors(void) {
+    if (rmluiDisabled()) return;
     guiManagerRmlUi.updateCursors();
 }
 
@@ -265,10 +273,12 @@ void guiManagerToggleShowFps(void) {
 }
 
 void guiManagerReleaseTexture(const char* name) {
+    if (rmluiDisabled()) return;
     rmlReleaseTextureByName(name);
 }
 
 void guiManagerReleaseAllTextures(void) {
+    if (rmluiDisabled()) return;
     rmlReleaseAllTextures();
 }
 

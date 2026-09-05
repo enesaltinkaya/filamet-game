@@ -10,6 +10,7 @@
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gltf/GltfInternal.h"
 #include "gui/GuiManager.h"
+#include "gui/rmlui/GuiManagerRmlUi.h"
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/Window.h"
@@ -224,7 +225,9 @@ public:
         // rmlui pass: after the ImGui pass (draws on top of it), before the
         // screenshot capture so GUI shows up in ENGINE_SCREENSHOT frames.
         // No-op unless the wrapper queued geometry this frame.
-        rmluiDraw(context);
+        if (!engine::rmluiDisabled()) {
+            rmluiDraw(context);
+        }
 
         if (rendererScreenshotShouldCapture()) {
             captureScreenshot();
@@ -312,7 +315,9 @@ public:
         heightmapTerrainRenderDestroy();
         propsRenderDestroy();
         guiOnBackendDestroy();
-        rmluiOnBackendDestroy();
+        if (!engine::rmluiDisabled()) {
+            rmluiOnBackendDestroy();
+        }
         if (context) {
             context->Flush();
             context->WaitForIdle();

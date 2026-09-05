@@ -59,6 +59,10 @@ static void exitGame(void) {
     engine::engineStop();
 }
 
+void mainMenuGuiEnterWorld(void) {
+    enterWorld();
+}
+
 // ── Lua callbacks (onclick handlers in mainMenu.html) ────────────────────
 // EXIT is handled by the engine-global luacExit (LuaSystem); CREDITS just
 // opens the overlay gui on top of the menu, like the old engine did.

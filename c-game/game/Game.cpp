@@ -679,9 +679,15 @@ namespace game {
         utils::stringDestroy(&version);
 
         // GUI: bring up the main menu (ImGui via the active backend)
-        gameStateSet(STATE_MAIN_MENU);
         engine::gui::guiInit();
-        engine::guiManagerAddGuiNextFrame(&mainMenuGui);
+        if (engine::rmluiDisabled()) {
+            // ENGINE_NO_RMLUI: there is no main menu to show — take the
+            // menu's ENTER WORLD action directly.
+            mainMenuGuiEnterWorld();
+        } else {
+            gameStateSet(STATE_MAIN_MENU);
+            engine::guiManagerAddGuiNextFrame(&mainMenuGui);
+        }
     }
 
     void GameSystem::loadWorld() {
@@ -962,7 +968,9 @@ namespace game {
     }
 
     void GameSystem::preUpdate() {
-        // In the world and not flying: ESC returns to the main menu
+        // In the world and not flying: ESC returns to the main menu.
+        // ENGINE_NO_RMLUI: no menu to return to — ignore ESC.
+        if (engine::rmluiDisabled()) return;
         if (gameStateCurrent() == STATE_PLAYING && !engine::flyingCameraFlying() &&
             engine::input.pressed == SDL_SCANCODE_ESCAPE) {
             utils::info("game: back to main menu");

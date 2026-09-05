@@ -35,6 +35,12 @@ private:
 
 extern GuiManagerRmlUi guiManagerRmlUi;
 
+// ENGINE_NO_RMLUI: completely disable the RMLUI stack. When set, the
+// GuiManagerRmlUi system is never added (so rmlInitVulkan never runs), the
+// rmlui draw hooks are skipped, and the crmlui-touching free functions below
+// are no-ops. Cached on first call.
+char rmluiDisabled(void);
+
 // Deferred (next-frame) gui add/remove — applied at the top of the manager's
 // postUpdate, outside any iteration (the old engine's futureTaskAdd(0, ...)).
 void guiManagerAddGuiNextFrame(System* gui);

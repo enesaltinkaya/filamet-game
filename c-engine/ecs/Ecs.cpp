@@ -16,7 +16,11 @@ void ecsInit(System* gameSystem) {
     systemAdd(3, &soundSystem);
     // RmlUi gui manager: owns the crmlui wrapper (RmlParams, input pump,
     // documents). After luaSystem — it needs the Lua state in added().
-    systemAdd(4, &guiManagerRmlUi);
+    // ENGINE_NO_RMLUI drops the whole RMLUI stack (no rmlInitVulkan, no rml
+    // documents, no rmlui draw pass).
+    if (!rmluiDisabled()) {
+        systemAdd(4, &guiManagerRmlUi);
+    }
 }
 
 void ecsDestroy(void) {

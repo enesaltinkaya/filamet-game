@@ -289,7 +289,7 @@ void rmlPassReleaseGeometry(uintptr_t geometryHandle) {
     if (!geometryHandle) {
         return;
     }
-    geometriesToRemove.push_back((u32)geometryHandle - 1);
+    geometriesToRemove.push_back((u32)geometryHandle);  // handle; releaseGeometryNow converts to slot
 }
 
 void rmlPassRenderGeometry(uintptr_t geometryHandle, float translationX, float translationY, uintptr_t texture) {
@@ -298,6 +298,10 @@ void rmlPassRenderGeometry(uintptr_t geometryHandle, float translationX, float t
     }
     u32 gidx = (u32)geometryHandle - 1;
     if (gidx >= geometryPool.size() || !geometryPool[gidx].inUse) {
+        // A released slot must never still be referenced by RmlUi — if this fires, the pool's
+        // release bookkeeping is off (silently dropping visible geometry looks like "random
+        // elements turn black/invisible", see docs/lessons.md 2026-09-05).
+        utils::warn("rmlui: renderGeometry %llu on free slot %u — release bookkeeping bug", (unsigned long long)geometryHandle, gidx);
         return;
     }
     FrameCmd cmd;

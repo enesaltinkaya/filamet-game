@@ -17,4 +17,8 @@ public:
 };
 
 extern MainMenuGui mainMenuGui;
+
+// The ENTER WORLD action (world load + state flip + gameplay systems),
+// exposed for the menu-less auto-start under ENGINE_NO_RMLUI.
+void mainMenuGuiEnterWorld(void);
 }  // namespace game
