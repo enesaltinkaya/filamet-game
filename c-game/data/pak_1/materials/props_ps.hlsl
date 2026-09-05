@@ -111,8 +111,8 @@ PSPropsOut main(in PSPropsIn In)
     BaseLayerShadingInfo base;
     base.Metallic = 0.0;
     base.Srf      = srf;
-    base.Normal   = N;
-    base.NdotV    = dot_sat(N, V);
+    base.Normal   = Nlight;
+    base.NdotV    = dot_sat(Nlight, V);
 
     SurfaceShadingInfo shading;
     shading.Pos       = In.WorldPos;
@@ -124,6 +124,12 @@ PSPropsOut main(in PSPropsIn In)
 
     SurfaceLightingInfo lighting = GetDefaultSurfaceLightingInfo();
 
+    // Direct sun + IBL both run on the lighting normal: thin vegetation
+    // (flag bit 1) catches the sun on BOTH faces of a blade/card — a card's
+    // back face faces the sky like its front, so the flipped back-face
+    // normal must not be fed to the light (it would NdotL == 0 and render
+    // half of every tuft near-black; the port of the old engine's `Nlight`
+    // computed it but never used it).
     ApplyPunctualLight(shading, g_Sun, lighting);
 
     ApplyIBL(shading,
