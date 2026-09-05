@@ -76,6 +76,17 @@ static char autoRunEnabled(void) {
     return v;
 }
 
+// Screenshot / dolly / renderdoc / no-player runs keep the player parked:
+// the scripted camera owns the view, so a fly-end must not auto-activate the
+// player over it (same gate as added(); ENGINE_AUTO_RUN is the exception —
+// it IS the camera-follow test).
+static char automatedRun(void) {
+    return (getenv("ENGINE_SCREENSHOT") != nullptr) ||
+           (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
+           (getenv("ENGINE_RENDERDOC_CAPTURE") != nullptr) ||
+           (getenv("ENGINE_NO_PLAYER") != nullptr);
+}
+
 static struct {
     // Feet position, world metres. DOUBLE: Jolt is double internally and the
     // renderer anchors on the (double) camera eye — an f32 position at 39 km
@@ -101,6 +112,8 @@ static struct {
     char spawned = 0;
     char autoRun = 0;
     char dragging = 0; // LMB/RMB drag in flight — relative mouse mode is ours
+    char prevFlying  = 0; // fly state last frame (off-edge hands control back)
+    char canTakeover = 1; // 0 for automated runs — never auto-activate
 } p = {};
 
 void playerSetSpawn(f32 x, f32 y, f32 z) {
@@ -228,6 +241,32 @@ static void playerUpdateMouseMode(void) {
     }
 }
 
+// Port of the old engine's playerFollowFlyingCamera: while the fly camera is
+// active the player sticks to it — parked just ahead of and below the eye so
+// the model stays in view, the Jolt body is teleported along (no rubber-band
+// when control comes back), and the orbit angles track the fly camera so the
+// handover is seamless. Runs after the fly system's update in the same frame.
+static void playerFollowFlyingCamera(void) {
+    f32 pos[3];
+    f32 f[3];
+    renderer::rendererCameraGet(pos, f);
+    p.pos[0] = pos[0] + f[0] * 2.0f;
+    p.pos[1] = pos[1] - 3.0f;
+    p.pos[2] = pos[2] + f[2] * 2.0f;
+
+    if (p.character) joltCharacterSetPositionD64(p.character, p.pos);
+
+    // Keep the orbit angles in sync with the engine camera (old engine:
+    // cameraYaw / cameraPitch / moveYaw / facingYaw ← cam; pitch clamped to
+    // the orbit range). syncOrbitFromCamera already flips the pitch sign —
+    // the orbit convention has pitch > 0 = camera above the target.
+    syncOrbitFromCamera(&p.camYaw, &p.camPitch);
+    if (p.camPitch < PITCH_MIN) p.camPitch = PITCH_MIN;
+    if (p.camPitch > PITCH_MAX) p.camPitch = PITCH_MAX;
+    p.moveYaw    = p.camYaw;
+    p.faceTarget = p.moveYaw;
+}
+
 static void playerSpawn(void) {
     HeightmapTerrain* ht = heightmapTerrainGetActive();
     f32 groundY           = ht ? heightmapTerrainSample(ht, p.spawn[0], p.spawn[2]) : p.spawn[1];
@@ -313,11 +352,9 @@ void PlayerSystem::added() {
     // camera: the player exists (model at spawn) but the mode stays off so
     // WASD and the orbit camera never fight ENGINE_CAMERA/DOLLY framing.
     // ENGINE_AUTO_RUN is the exception — it IS the camera-follow test.
-    char automated = (getenv("ENGINE_SCREENSHOT") != nullptr) ||
-                     (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
-                     (getenv("ENGINE_RENDERDOC_CAPTURE") != nullptr) ||
-                     (getenv("ENGINE_NO_PLAYER") != nullptr);
+    char automated = automatedRun();
     p.autoRun = autoRunEnabled();
+    p.canTakeover = !automated;
     playerSetActive(!automated || p.autoRun);
 }
 
@@ -333,9 +370,23 @@ void PlayerSystem::removed() {
 }
 
 void PlayerSystem::preUpdate() {
+    // Fly-end edge: disabling the fly handed control back to the player (old
+    // engine behaviour — player mode is simply no longer suppressed). The
+    // follow has been parking the player under the camera all along and the
+    // orbit angles are already synced; re-engage the ground gate so
+    // unstreamed terrain under the landing spot can't swallow the character.
+    const char flying = flyingCameraFlying();
+    if (p.prevFlying && !flying && !p.active && p.canTakeover) {
+        p.waitingForGround = 1;
+        p.tpSmoothDist     = -1.0f;
+        p.skyPitchOffset   = 0.0f;
+        playerSetActive(1);
+    }
+    p.prevFlying = flying;
+
     // F started a fly this frame (the fly system runs first and already
     // captured the mouse): yield without touching the mouse mode.
-    if (p.active && flyingCameraFlying()) {
+    if (p.active && flying) {
         p.active = 0;
         p.dragging = 0;  // fly owns the capture now
         return;
@@ -343,17 +394,11 @@ void PlayerSystem::preUpdate() {
 
     if (input.pressed == SDL_SCANCODE_C) {
         if (!p.active) {
-            if (flyingCameraFlying()) {
-                // Take over from a fly: park the player where the camera was
-                // (the old engine's playerFollowFlyingCamera) — the first
-                // physics update drops it onto the ground.
-                f32 pos[3];
-                f32 f[3];
-                renderer::rendererCameraGet(pos, f);
-                p.pos[0] = pos[0];
-                p.pos[1] = pos[1] - 3.0f;
-                p.pos[2] = pos[2];
-                if (p.character) joltCharacterSetPositionD64(p.character, p.pos);
+            if (flying) {
+                // Explicit takeover from a fly: the follow already parked the
+                // player under the camera and synced the orbit — just stop
+                // the fly (the first physics update drops the player onto
+                // the ground).
                 flyingCameraStop();
             }
             playerSetActive(1);
@@ -607,6 +652,17 @@ static void playerUpdateAnimation(char moving, char onGround) {
 
 void PlayerSystem::update() {
     if (!p.spawned || !p.character) return;
+
+    // Fly mode: the player sticks to the camera (old engine's
+    // playerFollowFlyingCamera) — park under the eye, keep the Jolt body and
+    // orbit angles in sync, and return before the ground gate and physics:
+    // the character is teleported, not stepped, so gravity never fights the
+    // follow and WASD/mouse input is left to the fly camera.
+    if (flyingCameraFlying()) {
+        playerFollowFlyingCamera();
+        gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.modelYaw);
+        return;
+    }
 
     // Hold the character at its spawn position until the streaming heightfield
     // body under it exists (the old engine's waitingForGround gate — without

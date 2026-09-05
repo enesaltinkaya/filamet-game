@@ -7,8 +7,11 @@ namespace engine {
 // game-001-cpp c-game/game/player/Player.cpp, movement + character physics +
 // locomotion animation: no abilities, no DB yet).
 //
-//   C      toggle player mode (drag orbit + WASD)
-//   F      fly camera (takes over from player mode, ESC back to the camera)
+//   C      toggle player mode (drag orbit + WASD); from a fly it takes over
+//   F      fly camera (takes over from player mode); ending the fly (ESC or
+//          F) hands control back to the player — while flying the player
+//          sticks to the camera (parked just below the eye, old engine's
+//          playerFollowFlyingCamera), so it lands where the fly ended
 //   WASD   run (4 m/s; SHIFT walks at 2 m/s), camera-relative
 //   SPACE  jump (4 m/s impulse)
 //   wheel  orbit distance (1.5–20 m)
