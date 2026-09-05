@@ -553,68 +553,87 @@ void gltfUpdateDiligent(double elapsedSeconds) {
         }
 
         clipSampleTRS(src, srcScene, active, *animPoseA);
-        GLTF::ModelTransforms* poseB = nullptr;
-        f32 w = 1.0f;
         if (blendDuration > 0.0f && blendFrom.index >= 0) {
             clipSampleTRS(src, srcScene, blendFrom, *animPoseB);
-            poseB = animPoseB.get();
-            w = std::clamp(blendElapsed / blendDuration, 0.0f, 1.0f);
         }
-        const float4x4& root = placementRootMatrix();
-        posePipeline(*model, *transforms, animPoseA.get(), poseB, w, root);
-        if (getenv("ENGINE_JITTER_PROBE")) {
-            // Per-frame render-space position of the mesh node (anchor-space
-            // translation): with the f32 absolute-placement bug this sits on
-            // a 3.9 mm grid (a multiple of 2^-8 m) at |pos| ~ 4e4 m; fixed, it
-            // is a small value moving at sub-mm resolution.
-            static int jn = 0;
-            if ((jn++ % 5) == 0) {
-                const GLTF::Node* meshNode = model->Scenes[sceneIndex].LinearNodes[1];
-                const float4x4& mg = transforms->NodeGlobalMatrices[meshNode->Index];
-                utils::info("jitg: mesh node anchor-space %.9f %.9f %.9f", mg._41, mg._42, mg._43);
-            }
-        }
-        static int dbgFrames = 0;
-        if (getenv("ENGINE_GLTF_DEBUG") && dbgFrames++ < 3) {
-            utils::info("pose: root row4 %.2f %.2f %.2f %.2f", root._41, root._42, root._43, root._44);
-            utils::info("pose: clips — active '%s' t %.2f (idx %d), blend %d", src.Animations[active.index].Name.c_str(),
-                    active.time, active.index, (int)(poseB != nullptr));
-            const GLTF::Skin& skin = model->Skins[0];
+        // The pose matrices themselves are rebuilt in the render pass
+        // (worldDraw → poseRebuild) so the placement sees this frame's camera
+        // anchor, not the previous frame's.
+    }
+}
+
+// ── pose rebuild (render pass) ──────────────────────────────────────────────
+// Rebuilds the visible model's local/global/joint matrices with the
+// placement root derived from the CURRENT world anchor (this frame's camera
+// eye). Must run in the render pass, after the camera is set for this frame:
+// gltfUpdate runs in the update phase (Game.update, before the player system
+// moves the character and re-aims the orbit camera), so a pose built there
+// pins the model at the previous frame's position relative to this frame's
+// view — with a moving player and an orbiting camera the character visibly
+// lags behind the aim and sits off-centre on screen while the camera
+// rotates.
+static void poseRebuild(void) {
+    if (!model || !transforms || !haveBounds) {
+        return;
+    }
+
+    const float4x4& root = placementRootMatrix();
+    const bool playingNow = playing && active.index >= 0;
+    GLTF::ModelTransforms* poseB = nullptr;
+    f32 w = 1.0f;
+    if (playingNow && blendDuration > 0.0f && blendFrom.index >= 0) {
+        poseB = animPoseB.get();
+        w = std::clamp(blendElapsed / blendDuration, 0.0f, 1.0f);
+    }
+    posePipeline(*model, *transforms, playingNow ? animPoseA.get() : nullptr, poseB, w, root);
+
+    if (getenv("ENGINE_JITTER_PROBE")) {
+        // Per-frame render-space position of the mesh node (anchor-space
+        // translation): with the f32 absolute-placement bug this sits on
+        // a 3.9 mm grid (a multiple of 2^-8 m) at |pos| ~ 4e4 m; fixed, it
+        // is a small value moving at sub-mm resolution.
+        static int jn = 0;
+        if ((jn++ % 5) == 0) {
             const GLTF::Node* meshNode = model->Scenes[sceneIndex].LinearNodes[1];
-            utils::info("pose: mesh node skin idx %d, model skins %zu, skin joints %zu",
-                    meshNode->SkinTransformsIndex, transforms->Skins.size(), skin.Joints.size());
-            // walk up from joint0 to the root, printing local/global validity
-            const GLTF::Node* chain = skin.Joints[0];
-            for (const GLTF::Node* n = chain; n; n = n->Parent) {
-                const float4x4& lm = transforms->NodeLocalMatrices[n->Index];
-                const float4x4& gm = transforms->NodeGlobalMatrices[n->Index];
-                char nanL = std::isnan(lm._11) || std::isnan(lm._42) || std::isnan(lm._33) ? 'Y' : 'n';
-                char nanG = std::isnan(gm._11) || std::isnan(gm._42) || std::isnan(gm._33) ? 'Y' : 'n';
-                utils::info("pose: chain '%s' local nan %c [%.4f %.4f %.4f | %.4f] global nan %c [%.2f %.2f %.2f | %.2f]",
-                        n->Name.c_str(), nanL, lm._11, lm._21, lm._31, lm._41, nanG, gm._11, gm._21, gm._31, gm._41);
-                if (nanL == 'Y' || nanG == 'Y') break;
-            }
-            f32 minScale = 1e9f, maxScale = -1e9f;
-            for (size_t j = 0; j < skin.Joints.size(); j++) {
-                const float4x4& bm = transforms->Skins[0].JointMatrices[j];
-                const f32 sx = sqrtf(bm._11 * bm._11 + bm._12 * bm._12 + bm._13 * bm._13);
-                const f32 sy = sqrtf(bm._21 * bm._21 + bm._22 * bm._22 + bm._23 * bm._23);
-                const f32 sz = sqrtf(bm._31 * bm._31 + bm._32 * bm._32 + bm._33 * bm._33);
-                minScale = std::min(minScale, std::min(sx, std::min(sy, sz)));
-                maxScale = std::max(maxScale, std::max(sx, std::max(sy, sz)));
-            }
-            utils::info("pose: %zu joints, bone-matrix scale [%.4f .. %.4f]", skin.Joints.size(), minScale, maxScale);
-            const float4x4& mg = transforms->NodeGlobalMatrices[model->Scenes[sceneIndex].LinearNodes[1]->Index];
-            utils::info("pose: mesh node global row4 %.2f %.2f %.2f %.2f", mg._41, mg._42, mg._43, mg._44);
+            const float4x4& mg = transforms->NodeGlobalMatrices[meshNode->Index];
+            utils::info("jitg: mesh node anchor-space %.9f %.9f %.9f", mg._41, mg._42, mg._43);
         }
-    } else {
-        // no clip playing: a camera move re-anchors the world, so the pose
-        // matrices must track the anchor even for a static pose (a placement
-        // change — teleport / facing — also lands here via placementDirty)
-        const float4x4& root = placementRootMatrix();
-        if (placementRebuilt) {
-            posePipeline(*model, *transforms, nullptr, nullptr, 1.0f, root);
+    }
+    static int dbgFrames = 0;
+    if (getenv("ENGINE_GLTF_DEBUG") && dbgFrames++ < 3) {
+        utils::info("pose: root row4 %.2f %.2f %.2f %.2f", root._41, root._42, root._43, root._44);
+        if (playingNow) {
+            utils::info("pose: clips — active '%s' t %.2f (idx %d), blend %d",
+                    (animSource ? animSource : model)->Animations[active.index].Name.c_str(),
+                    active.time, active.index, (int)(poseB != nullptr));
         }
+        const GLTF::Skin& skin = model->Skins[0];
+        const GLTF::Node* meshNode = model->Scenes[sceneIndex].LinearNodes[1];
+        utils::info("pose: mesh node skin idx %d, model skins %zu, skin joints %zu",
+                meshNode->SkinTransformsIndex, transforms->Skins.size(), skin.Joints.size());
+        // walk up from joint0 to the root, printing local/global validity
+        const GLTF::Node* chain = skin.Joints[0];
+        for (const GLTF::Node* n = chain; n; n = n->Parent) {
+            const float4x4& lm = transforms->NodeLocalMatrices[n->Index];
+            const float4x4& gm = transforms->NodeGlobalMatrices[n->Index];
+            char nanL = std::isnan(lm._11) || std::isnan(lm._42) || std::isnan(lm._33) ? 'Y' : 'n';
+            char nanG = std::isnan(gm._11) || std::isnan(gm._42) || std::isnan(gm._33) ? 'Y' : 'n';
+            utils::info("pose: chain '%s' local nan %c [%.4f %.4f %.4f | %.4f] global nan %c [%.2f %.2f %.2f | %.2f]",
+                    n->Name.c_str(), nanL, lm._11, lm._21, lm._31, lm._41, nanG, gm._11, gm._21, gm._31, gm._41);
+            if (nanL == 'Y' || nanG == 'Y') break;
+        }
+        f32 minScale = 1e9f, maxScale = -1e9f;
+        for (size_t j = 0; j < skin.Joints.size(); j++) {
+            const float4x4& bm = transforms->Skins[0].JointMatrices[j];
+            const f32 sx = sqrtf(bm._11 * bm._11 + bm._12 * bm._12 + bm._13 * bm._13);
+            const f32 sy = sqrtf(bm._21 * bm._21 + bm._22 * bm._22 + bm._23 * bm._23);
+            const f32 sz = sqrtf(bm._31 * bm._31 + bm._32 * bm._32 + bm._33 * bm._33);
+            minScale = std::min(minScale, std::min(sx, std::min(sy, sz)));
+            maxScale = std::max(maxScale, std::max(sx, std::max(sy, sz)));
+        }
+        utils::info("pose: %zu joints, bone-matrix scale [%.4f .. %.4f]", skin.Joints.size(), minScale, maxScale);
+        const float4x4& mg = transforms->NodeGlobalMatrices[model->Scenes[sceneIndex].LinearNodes[1]->Index];
+        utils::info("pose: mesh node global row4 %.2f %.2f %.2f %.2f", mg._41, mg._42, mg._43, mg._44);
     }
 }
 
@@ -753,6 +772,11 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
     engine::renderer::diligent::setWorldDrew(true);
 
     fillFrameAttribs(ctx);
+
+    // Pose AFTER the view: the view above was derived from this frame's
+    // camera, and the placement root must use the same anchor or the model
+    // lags the aim by a frame (see poseRebuild).
+    poseRebuild();
 
     GLTF_PBR_Renderer* pbr = worldPbrRenderer();
     pbr->Begin(ctx);

@@ -185,6 +185,14 @@ void windowPollEvents(void) {
         input.mouseDy += ry;
     }
 
+    // Test hook: synthetic orbit drag (ENGINE_FAKE_DRAG=1) — holds RMB and
+    // sweeps yaw so automated runs exercise the interactive drag path (the
+    // player system picks the button up and enters its relative-mouse mode).
+    if (getenv("ENGINE_FAKE_DRAG")) {
+        input.mouseRight = 1;
+        input.mouseDx += 1.0f;
+    }
+
     // held key state (covers keys held before the window gained focus, etc.)
     int numkeys = 0;
     const bool* keys = SDL_GetKeyboardState(&numkeys);  // bool in SDL3
