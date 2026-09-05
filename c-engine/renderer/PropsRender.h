@@ -27,9 +27,11 @@
  *       refreshes the wind time
  *   propsRenderClearAll / Destroy    — world release / backend teardown
  *
- * Dispatch: every entry point currently lands in documented no-ops —
- * the backend-agnostic contract stays in place for the pending diligent
- * pass (see PropsRender.cpp).
+ * Dispatch: every entry point forwards 1:1 to the diligent backend's half
+ * (renderer/diligent/PropsRenderDiligent.cpp) — the HeightmapTerrainRender
+ * pattern. The filament implementation was removed with the filament
+ * backend (2026-09-05; it lives on in git history as the look/parity
+ * reference).
  */
 
 namespace engine {

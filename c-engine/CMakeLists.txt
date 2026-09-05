@@ -116,6 +116,7 @@ target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 set_source_files_properties(
     renderer/diligent/DiligentRenderer.cpp
     renderer/diligent/HeightmapTerrainDiligent.cpp
+    renderer/diligent/PropsRenderDiligent.cpp
     gltf/GltfDiligent.cpp
     gui/GuiDiligent.cpp
     PROPERTIES SKIP_PRECOMPILE_HEADERS ON
@@ -125,17 +126,21 @@ set_source_files_properties(
 target_include_directories(c-engine PUBLIC /home/enes/Apps/renderdoc/renderdoc/api/app)
 target_link_libraries(c-engine PUBLIC ${CMAKE_DL_LIBS})
 
-# ── heightmap terrain shaders (compiled at pass init) ────────────────────────
-# The .hlsl sources are shipped to the pak so the pass can read them with
+# ── heightmap terrain + props shaders (compiled at pass init) ────────────────
+# The .hlsl sources are shipped to the pak so the passes can read them with
 # dataManagerRead (same "source in-tree, artifact in pak" pattern as the
 # other build steps).
 set(HEIGHTMAP_TERRAIN_HLSL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_vs.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_ps.hlsl
 )
 set(HEIGHTMAP_TERRAIN_HLSL_OUT
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_vs.hlsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_ps.hlsl
 )
 add_custom_command(
     OUTPUT ${HEIGHTMAP_TERRAIN_HLSL_OUT}
@@ -146,8 +151,14 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
         ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_vs.hlsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_vs.hlsl
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_ps.hlsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_ps.hlsl
     DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_SRC}
-    COMMENT "copy heightmap terrain .hlsl sources into pak_1"
+    COMMENT "copy heightmap terrain + props .hlsl sources into pak_1"
     VERBATIM
 )
 add_custom_target(heightmap_terrain_hlsl DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_OUT})

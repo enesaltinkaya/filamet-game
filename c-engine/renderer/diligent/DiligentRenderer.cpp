@@ -13,7 +13,9 @@
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/Window.h"
+#include "renderer/PropsRender.h"
 #include "renderer/diligent/HeightmapTerrainDiligent.h"
+#include "renderer/diligent/PropsRenderDiligent.h"
 
 #include <SDL.h>
 #include <cmath>
@@ -202,11 +204,17 @@ public:
         // heightmap terrain: budgeted GPU tile uploads (the pass lazily
         // inits on the first update)
         heightmapTerrainRenderUpdate();
+        // azgaar props: apply queued scatter tiles (budgeted, nearest first)
+        propsRenderUpdate();
 
         worldDraw(context);
         // terrain draws over the same render targets after the glTF PBR draw;
         // it calls setWorldDrew(true) itself when it actually drew
         heightmapTerrainDiligentDraw();
+        // props draw last among the opaque world passes so the depth test
+        // resolves against terrain + model (contact bases sit exactly on the
+        // physics surface; the PSO depth func is LESS_EQUAL for them)
+        propsRenderDiligentDraw();
 
         bool uiDrew = false;
         if (gui::guiIsActive()) {
@@ -294,9 +302,11 @@ public:
     }
 
     void destroy() override {
-        // terrain GPU state first (its borrowed glTF GGX LUT texture view
-        // must be released while the glTF pass — and the device — still live)
+        // terrain + props GPU state first (the props' borrowed glTF GGX LUT
+        // texture view must be released while the glTF pass — and the device
+        // — still live)
         heightmapTerrainRenderDestroy();
+        propsRenderDestroy();
         guiOnBackendDestroy();
         if (context) {
             context->Flush();

@@ -254,8 +254,14 @@ placement, waterline.
 
 ## Out of scope (for now)
 
-Diligent backend for props/vegetation and the player model (the terrain
-render pass itself shipped 2026-09-05, see phase 6),
+Diligent backend for the player model (the terrain render pass shipped
+2026-09-05, see phase 6; the props/vegetation Diligent backend ALSO shipped
+2026-09-05 — `renderer/diligent/PropsRenderDiligent.cpp`: per-tile RGBA32F
+instance textures fetched with SV_InstanceID (per-instance vertex attributes
+don't work on the runtime-HLSL/Vulkan input-layout path), per-(species,
+variant) draw constants baked into the instance texels, DiligentFX-PBR
+lighting parity with the terrain pass, budgeted nearest-first tile applies +
+window eviction + frustum culling; pitfalls in `docs/lessons.md`),
 Per-ring LOD ladder (needs per-ring CPU corner sets, not VS math),
 TAA/HiZ/motion-vector pipeline on the Filament path (scene-wide, separate
 workstream), `AzgaarWeather`.
