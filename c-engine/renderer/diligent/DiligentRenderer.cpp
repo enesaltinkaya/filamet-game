@@ -595,14 +595,26 @@ namespace engine::renderer::diligent {
                 Diligent::ScopedDebugGroup ssrGbufferPass(context, "ssr_gbuffer");
                 ssrDiligentGbufferDraw();
             }
+            if (ssrDiligentEnabled()) {
+                taaPostFXExecute(context);
+            }
+            {
+                Diligent::ScopedDebugGroup ssrPass(context, "ssr");
+                ssrDiligentExecute();
+            }
 
             // Resolve the offscreen world into the backbuffer: TAA accumulation
             // (when enabled) or a plain blit of the scene color. Only when the
             // world drew — the UI passes' load op (LOAD over the world, CLEAR
             // for the bare menu) keys on diligentWorldDrew().
             if (worldDrewThisFrame) {
+                Diligent::ITextureView* ssrCompositeSRV = nullptr;
+                {
+                    Diligent::ScopedDebugGroup ssrCompositePass(context, "ssr_composite");
+                    ssrCompositeSRV = ssrDiligentComposite();
+                }
                 Diligent::ScopedDebugGroup taaResolve(context, "taa_resolve");
-                taaWorldResolve(context, rtv);
+                taaWorldResolve(context, rtv, ssrCompositeSRV);
             }
 
             bool uiDrew = false;

@@ -137,6 +137,8 @@ namespace game {
         // fires once. "pause" enters the world and opens the in-game menu (the
         // pause menu screenshot run; its own actions live in
         // ENGINE_PAUSE_AUTOTEST=back|mainmenu).
+        // Default: the menu loads (document above) but auto-enters the world.
+        // ENGINE_MENU=1 shows it instead and waits for a click.
         static char autotestRan = 0;
         if (!autotestRan) {
             const char* at = getenv("ENGINE_AUTOTEST");
@@ -153,6 +155,8 @@ namespace game {
                     engine::gui::guiAdd(&creditsGui);
                 else if (utils::strequals(at, "exit"))
                     exitGame();
+            } else if (!getenv("ENGINE_MENU")) {
+                enterWorld();
             }
         }
     }

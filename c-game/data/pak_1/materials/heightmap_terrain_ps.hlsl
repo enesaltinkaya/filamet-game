@@ -457,6 +457,7 @@ PSTerrainOut main(in PSTerrainIn vs)
     // Roughness follows the same material chain (snow smooth, sand rough).
     roughness = lerp(roughness, 0.6, snowT);
     roughness = lerp(roughness, 0.85, beachT);
+    roughness *= 0.15;
 
     // Micro-band roughness: perturb the shading normal with the 4-32 m value
     // noise (finite differences, 0.5 m step). Does not move geometry. Two

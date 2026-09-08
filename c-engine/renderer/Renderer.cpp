@@ -22,17 +22,19 @@ static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
 static u32 screenshotStartFrame = 3;
 
-static void selectScreenshotStartFrame(void) {
-    if (const char* env = getenv("ENGINE_SCREENSHOT_FRAME")) {
-        const unsigned long v = strtoul(env, nullptr, 10);
-        screenshotStartFrame = v ? (u32)v : 1;
-    }
-}
-
 // ── screenshot (ENGINE_SCREENSHOT=path: capture one frame, quit) ────────────
 static const char* screenshotPath = nullptr;
 static bool screenshotDone = false;
 static u32 screenshotFrame = 0;
+
+static void selectScreenshotStartFrame(void) {
+    if (const char* env = getenv("ENGINE_SCREENSHOT_FRAME")) {
+        const unsigned long v = strtoul(env, nullptr, 10);
+        screenshotStartFrame = v ? (u32)v : 1;
+    } else if (screenshotPath) {
+        screenshotStartFrame = 100;
+    }
+}
 
 // ENGINE_RENDERDOC_CAPTURE=1 + LD_PRELOAD librenderdoc.so — capture one frame
 // for inspection (ENGINE_RENDERDOC_CAPTURE_FRAMES, default 30)
@@ -89,12 +91,11 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     // apply the persisted graphics settings (scale/TAA/shadows/effects)
     rendererGraphicsLoad();
 
-    selectScreenshotStartFrame();
-
     const char* screenshotEnv = getenv("ENGINE_SCREENSHOT");
     if (screenshotEnv && screenshotEnv[0] != '\0') {
         screenshotPath = screenshotEnv;
     }
+    selectScreenshotStartFrame();
 
 #ifndef NDEBUG
     if (getenv("ENGINE_RENDERDOC_CAPTURE")) {

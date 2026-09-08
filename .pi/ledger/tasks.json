@@ -1,8 +1,10 @@
 [
-  {"id": 1, "desc": "API spike (read-only): confirm ScreenSpaceReflection.hpp signatures (PrepareResources/Execute/GetSSRRadianceSRV), Attribs fields, FrameDesc match with taaFrameBegin; append findings to notes.md", "status": "pending", "result": null},
-  {"id": 2, "desc": "Terrain gbuffer pass: GBUFFER_OUTPUT macro in heightmap_terrain_ps.hlsl (early-out after normal/roughness, out float4(worldNormal,roughness)); SsrDiligent pass draws terrain into RGBA16F (clear (0,0,1,1)) + taaDepthDSV read-only after props", "status": "pending", "result": null},
-  {"id": 3, "desc": "SSR pass: create ScreenSpaceReflection; per-frame Execute inside taaWorldResolve after postFXContext->Execute; inputs sceneColorTex, depth DSV, gbuffer SRV (normal+material), motion; IsRoughnessPerceptual=true; ENGINE_SSR=1 gate", "status": "pending", "result": null},
-  {"id": 4, "desc": "Composite SSR radiance: final blit/cas step does src.rgb + ssr.rgb*ssr.a when SSR on; 1x1 fallback texture when off so default output unchanged", "status": "pending", "result": null},
-  {"id": 5, "desc": "Reduce terrain roughness temporarily (~0.1) in heightmap_terrain_ps.hlsl; record original lines in notes.md for revert", "status": "pending", "result": null},
-  {"id": 6, "desc": "Visual check: ENGINE_SCREENSHOT=/tmp/ssr.jpg with ENGINE_SSR=1 vs baseline shot; confirm SSR visible on terrain", "status": "pending", "result": null}
+  {"id": 1, "desc": "TAA re-sequencing: taaPostFXExecute + SRV accessors", "status": "done", "result": "done; verified PASS; taa*SRV/ssrGbufferSRV/ssrRadianceSRV are non-owning GetDefaultView pointers"},
+  {"id": 2, "desc": "Wire DiligentFX ScreenSpaceReflection; expose ssrRadianceSRV()", "status": "done", "result": "done; RenderDoc confirms full SSR chain; verified PASS"},
+  {"id": 3, "desc": "Composite pass + taaWorldResolve source override + frame reorder", "status": "done", "result": "done (ssr_composite pass, ENGINE_SSR_GAIN default 0.5); verified PASS"},
+  {"id": 4, "desc": "Temporary terrain roughness x0.15; record revert hunk", "status": "done", "result": "done at hlsl line 460; REVERT hunk in notes.md"},
+  {"id": 5, "desc": "Remove ssrdbg fprintfs", "status": "done", "result": "removed"},
+  {"id": 6, "desc": "Final verify: build + ENGINE_SSR=1 in-world A/B shows reflections; no-SSR unchanged", "status": "done", "result": "PASS: verification command exit 0; in-world frame-300 A/B (ENGINE_SSR=1 ENGINE_SSR_GAIN=8 vs off) shows player reflection on sand present only with SSR; roughness line + REVERT hunk confirmed"},
+  {"id": 7, "desc": "Fix shutdown SEGV (double-release)", "status": "done", "result": "done; verified PASS, exit 0, no coredumps"},
+  {"id": 8, "desc": "Make SSR visually verifiable", "status": "done", "result": "stale RenderDoc capture explained (pre-roughness-cut, dead stencil mask); scene is dusk-dark, ENGINE_SSR_GAIN=8 for visible A/B; recipe in notes.md round 6. Open nit: PreparePostFX runs twice/frame with SSR on (redundant internal taaPostFXExecute call in ssrDiligentExecute)"}
 ]

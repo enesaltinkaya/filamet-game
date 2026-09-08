@@ -63,6 +63,7 @@ static u32 frameIdx = 0;
 static u32 targetWidth = 0;
 static u32 targetHeight = 0;
 
+static bool postFXExecutedThisFrame = false;
 static bool taaOn = false;
 static float taaWeight = 0.9f; // settings.taaWeight → TemporalStabilityFactor
 
@@ -824,6 +825,7 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
     }
 
     frameIdx++;
+    postFXExecutedThisFrame = false;
 
     // Resolution scale: the world renders into the offscreen chain at
     // scSize * renderScale; the post-world blit (or CAS) upsamples it to the
@@ -1008,6 +1010,50 @@ ITextureView* taaDepthDSV(void) {
                                   : nullptr;
 }
 
+ITextureView* taaDepthSRV(u32 frameIdx) {
+    const u32 i = frameIdx & 1;
+    return depthTex[i] ? depthTex[i]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+}
+
+ITextureView* taaMotionSRV(void) {
+    return motionTex ? motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+}
+
+ITextureView* taaColorSRV(void) {
+    return sceneColorTex ? sceneColorTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+}
+
+PostFXContext* taaPostFXContext(void) {
+    return postFXContext.get();
+}
+
+u32 taaFrameIndex(void) {
+    return frameIdx;
+}
+
+void taaPostFXExecute(IDeviceContext* ctx) {
+    if (!postFXContext || !cameraCB || !depthTex[0] || !depthTex[1]) {
+        return;
+    }
+
+    const u32 curr = frameIdx & 1;
+    const u32 prev = (frameIdx + 1) & 1;
+
+    PostFXContext::RenderAttributes pa;
+    pa.pDevice = device;
+    pa.pDeviceContext = ctx;
+    pa.pCameraAttribsCB = cameraCB;
+    pa.pCurrDepthBufferSRV = depthTex[curr]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    pa.pPrevDepthBufferSRV = depthTex[prev]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    pa.pMotionVectorsSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    if (!pa.pCurrDepthBufferSRV || !pa.pPrevDepthBufferSRV) {
+        return;
+    }
+
+    postFXContext->Execute(pa);
+    postFXExecutedThisFrame = true;
+}
+
 // IEEE half → float (the motion buffer is RG16F).
 static inline float f16tof32(u16 h) {
     const u32 sign = (u32)(h & 0x8000u) << 16;
@@ -1107,28 +1153,17 @@ static void taaDumpMotionVectors(IDeviceContext* ctx) {
     }
 }
 
-void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
+void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV, ITextureView* srcOverride) {
     if (!sceneColorTex || !backRTV) {
         return;
     }
 
-    ITextureView* srcColorSRV = sceneColorTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    ITextureView* srcColorSRV = srcOverride ? srcOverride
+                                            : sceneColorTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 
     if (taaOn && postFXContext && taa && cameraCB) {
-        const u32 curr = frameIdx & 1;
-        const u32 prev = (frameIdx + 1) & 1;
-
-        PostFXContext::RenderAttributes pa;
-        pa.pDevice = device;
-        pa.pDeviceContext = ctx;
-        pa.pCameraAttribsCB = cameraCB;
-        pa.pCurrDepthBufferSRV =
-                depthTex[curr] ? depthTex[curr]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
-        pa.pPrevDepthBufferSRV =
-                depthTex[prev] ? depthTex[prev]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
-        pa.pMotionVectorsSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-        if (pa.pCurrDepthBufferSRV && pa.pPrevDepthBufferSRV) {
-            postFXContext->Execute(pa);
+        if (!postFXExecutedThisFrame) {
+            taaPostFXExecute(ctx);
         }
 
         HLSL::TemporalAntiAliasingAttribs attribs{};
