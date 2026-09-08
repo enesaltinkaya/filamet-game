@@ -3,6 +3,7 @@ local cycleHandlers = {
   toggleShadows        = { prev = "toggleShadowsPrev",        next = "toggleShadows" },
   toggleShadowQuality  = { prev = "toggleShadowQualityPrev",  next = "toggleShadowQuality" },
   toggleAo        = { prev = "toggleAo",            next = "toggleAo" },
+  toggleSsaoAlgorithm = { prev = "toggleSsaoAlgorithmPrev", next = "toggleSsaoAlgorithm" },
   toggleSss       = { prev = "toggleSss",           next = "toggleSss" },
   toggleBloom     = { prev = "toggleBloom",       next = "toggleBloom" },
   toggleFog       = { prev = "toggleFog",         next = "toggleFog" },

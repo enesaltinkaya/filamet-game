@@ -203,6 +203,12 @@ static GraphicsSettings graphicsNormalize(GraphicsSettings s) {
     if (s.shadowMode > 4) s.shadowMode = 4;
     if (s.shadowQuality < 0) s.shadowQuality = 0;
     if (s.shadowQuality > 2) s.shadowQuality = 2;  // 0=low 1=medium 2=high (older 0..4 files clamp down)
+    if (s.ssaoRadius < 0.1f) s.ssaoRadius = 0.1f;
+    if (s.ssaoRadius > 10.0f) s.ssaoRadius = 10.0f;
+    if (s.ssaoAlgorithm < 0) s.ssaoAlgorithm = 0;
+    if (s.ssaoAlgorithm > 2) s.ssaoAlgorithm = 2;
+    if (s.ssaoIntensity < 0.0f) s.ssaoIntensity = 0.0f;
+    if (s.ssaoIntensity > 2.0f) s.ssaoIntensity = 2.0f;
     if (s.vignette < 0.0f) s.vignette = 0.0f;
     if (s.vignette > 1.0f) s.vignette = 1.0f;
     if (s.dofQuality < 1) s.dofQuality = 1;
@@ -232,6 +238,9 @@ void rendererGraphicsLoad(void) {
     s.shadowMode    = utils::settingsGetInt("shadowMode");
     s.shadowQuality = utils::settingsGetInt("shadowQuality");
     s.ssao          = !utils::settingsGetBool("aoDisabled");
+    s.ssaoRadius    = (float)utils::settingsGetDouble("ssaoRadius");
+    s.ssaoAlgorithm = utils::settingsGetInt("ssaoAlgorithm");
+    s.ssaoIntensity = (float)utils::settingsGetDouble("ssaoIntensity");
     s.bloom         = !utils::settingsGetBool("bloomDisabled");
     s.vignette      = (float)(utils::settingsGetDouble("lensVignette") / 100.0);
     s.dof           = utils::settingsGetBool("dofEnabled");

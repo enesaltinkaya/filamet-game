@@ -81,6 +81,7 @@ struct PSPropsOut
 {
     float4 Color : SV_Target0;
     float4 Motion : SV_Target1; // TAA motion vectors (xy = NDC delta)
+    float4 Normal : SV_Target2; // world-space normal (SSAO input)
 };
 
 // TAA motion vectors — the terrain PS' convention (RenderPBR.psh
@@ -219,5 +220,6 @@ PSPropsOut main(in PSPropsIn In)
     PSPropsOut result;
     result.Color = float4(color, 1.0);
     result.Motion = float4(taaMotionVector(In.Position, In.PrevClipPos), 0.0, 0.0);
+    result.Normal = float4(N, 1.0);
     return result;
 }

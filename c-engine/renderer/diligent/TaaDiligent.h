@@ -86,7 +86,11 @@ void taaTargetSize(u32* width, u32* height);
 
 Diligent::ITextureView* taaColorRTV(void);
 Diligent::ITextureView* taaMotionRTV(void);
+Diligent::ITextureView* taaNormalRTV(void);
+Diligent::ITextureView* taaNormalSRV(void);
 Diligent::ITextureView* taaDepthDSV(void);
+Diligent::ITextureView* taaDepthSRV(int idx);
+Diligent::PostFXContext* taaPostFXContext(void);
 
 // Post-world resolve: PostFXContext::Execute + TAA::Execute (when enabled),
 // then the RCAS sharpen pass (when casStrength > 0), then blit the result

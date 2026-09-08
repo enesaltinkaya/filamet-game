@@ -22,6 +22,7 @@
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/PropsRenderDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
+#include "renderer/diligent/SsaoDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 
 #include "Graphics/GraphicsEngine/interface/Texture.h"
@@ -346,6 +347,7 @@ namespace engine::renderer::diligent {
             cameraLookAt(eye, center, up);
             resize(window.width, window.height);
             taaInit();
+            ssaoInit();
             iblDiligentInit();
             return true;
         }
@@ -476,9 +478,9 @@ namespace engine::renderer::diligent {
                 // Target size = swapchain size * renderScale (taoFrameBegin just
                 // sized it) — the world viewport/scissor must match the target,
                 // not the backbuffer.
-                ITextureView* worldRTVs[2] = {worldRtv, taaMotionRTV()};
+                ITextureView* worldRTVs[3] = {worldRtv, taaMotionRTV(), taaNormalRTV()};
                 ITextureView* worldDSV     = taaDepthDSV();
-                context->SetRenderTargets(2,
+                context->SetRenderTargets(3,
                                           worldRTVs,
                                           worldDSV,
                                           RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -495,6 +497,9 @@ namespace engine::renderer::diligent {
                                            RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
                 const float zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                 context->ClearRenderTarget(worldRTVs[1],
+                                           zero,
+                                           RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+                context->ClearRenderTarget(worldRTVs[2],
                                            zero,
                                            RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
                 context->ClearDepthStencil(worldDSV,
@@ -730,6 +735,7 @@ namespace engine::renderer::diligent {
             }
 
             taaDestroy();
+            ssaoDestroy();
 
             swapChain = nullptr;
             device    = nullptr;
@@ -800,6 +806,7 @@ namespace engine::renderer::diligent {
         // no-op documents the contract).
         void applyGraphicsSettings(const GraphicsSettings& s) override {
             taaSettingsApply(s.taa, s.taaWeight, s.casStrength, s.renderScale);
+            ssaoSettingsApply(s.ssao, s.ssaoRadius, s.ssaoAlgorithm, s.ssaoIntensity);
         }
 
        public:

@@ -483,9 +483,10 @@ bool gltfInitDiligent(void) {
     GLTF_PBR_Renderer::CreateInfo rendererCI;
     // RT0: the linear offscreen scene color (TAA input). RT1: per-pixel
     // motion vectors (RG16F, NDC deltas) — the TAA reprojection input.
-    rendererCI.NumRenderTargets = 2;
+    rendererCI.NumRenderTargets = 3;
     rendererCI.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
     rendererCI.RTVFormats[1] = TEX_FORMAT_RG16_FLOAT;
+    rendererCI.RTVFormats[2] = TEX_FORMAT_RGBA16_FLOAT;
     rendererCI.DSVFormat = swapChain->GetDesc().DepthBufferFormat;
     rendererCI.FrontCounterClockwise = true;  // glTF front faces are CCW
     rendererCI.PackMatrixRowMajor = true;     // memcpy C++ float4x4 into shader CBs
@@ -507,6 +508,9 @@ bool gltfInitDiligent(void) {
         if ((flags & PBR_Renderer::PSO_FLAG_ENABLE_CUSTOM_DATA_OUTPUT) != 0) {
             src.OutputStruct += "    float4 CustomData : SV_Target1;\n";
         }
+        if ((flags & PBR_Renderer::PSO_FLAG_COMPUTE_MOTION_VECTORS) != 0) {
+            src.OutputStruct += "    float4 WorldNormal : SV_Target2;\n";
+        }
         src.OutputStruct += "};\n";
         src.Footer = R"FPS(
     PSOutput PSOut;
@@ -519,6 +523,14 @@ bool gltfInitDiligent(void) {
     {
         PSOut.CustomData = float4(MotionVector, 0.0, 0.0);
     }
+#endif
+#if COMPUTE_MOTION_VECTORS
+    PSOut.WorldNormal =
+#if USE_VERTEX_NORMALS
+        float4(VSOut.Normal, 1.0);
+#else
+        float4(0, 0, 1, 0);
+#endif
 #endif
     return PSOut;
 )FPS";
@@ -1122,17 +1134,18 @@ void gltfDiligentShadowDraw(Diligent::IDeviceContext* ctx,
     // ~stability/(1-stability) frames after the drag stops). poseRebuild is
     // idempotent within a frame — animation advances only in the update phase.
     poseRebuild();
-    // The PBR PSOs expect 2 color RTs beside the DSV. The full-res world RTs
+    // The PBR PSOs expect 3 color RTs beside the DSV. The full-res world RTs
     // are wider than the cascade atlas, which would push the render area past
     // the 2048 depth attachment (VUID-VkRenderingInfo-pNext-06079) — so use
     // throwaway cascade-sized dummies, recreated if the atlas size changes.
-    static RefCntAutoPtr<Diligent::ITexture> dummyColorTex, dummyMotionTex;
-    static RefCntAutoPtr<Diligent::ITextureView> dummyColorRTV, dummyMotionRTV;
+    static RefCntAutoPtr<Diligent::ITexture> dummyColorTex, dummyMotionTex, dummyNormalTex;
+    static RefCntAutoPtr<Diligent::ITextureView> dummyColorRTV, dummyMotionRTV, dummyNormalRTV;
     static Diligent::Uint32 dummySize = 0;
     const Diligent::Uint32 cascadeSize = cascadeDSV->GetTexture()->GetDesc().Width;
     if (dummySize != cascadeSize) {
         dummyColorRTV.Release(); dummyColorTex.Release();
         dummyMotionRTV.Release(); dummyMotionTex.Release();
+        dummyNormalRTV.Release(); dummyNormalTex.Release();
         Diligent::TextureDesc desc;
         desc.Type = Diligent::RESOURCE_DIM_TEX_2D;
         desc.Width = desc.Height = cascadeSize;
@@ -1147,11 +1160,15 @@ void gltfDiligentShadowDraw(Diligent::IDeviceContext* ctx,
         desc.Name = "pbrShadowDummyMotion";
         device->CreateTexture(desc, nullptr, &dummyMotionTex);
         dummyMotionRTV = dummyMotionTex->GetDefaultView(Diligent::TEXTURE_VIEW_RENDER_TARGET);
+        desc.Format = Diligent::TEX_FORMAT_RGBA16_FLOAT;
+        desc.Name = "pbrShadowDummyNormal";
+        device->CreateTexture(desc, nullptr, &dummyNormalTex);
+        dummyNormalRTV = dummyNormalTex->GetDefaultView(Diligent::TEXTURE_VIEW_RENDER_TARGET);
         dummySize = cascadeSize;
     }
 
-    Diligent::ITextureView* rtvs[2] = {dummyColorRTV, dummyMotionRTV};
-    ctx->SetRenderTargets(2, rtvs, cascadeDSV,
+    Diligent::ITextureView* rtvs[3] = {dummyColorRTV, dummyMotionRTV, dummyNormalRTV};
+    ctx->SetRenderTargets(3, rtvs, cascadeDSV,
             Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
     // DISCARD is required: frameAttribsCB is a dynamic buffer — mapping

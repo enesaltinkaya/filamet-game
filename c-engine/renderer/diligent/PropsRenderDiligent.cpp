@@ -484,9 +484,10 @@ bool buildLitPipeline(void) {
         // depth must pass, or every contact ring z-fights off).
         gp.DepthStencilDesc.DepthFunc           = COMPARISON_FUNC_LESS_EQUAL;
         gp.PrimitiveTopology                    = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        gp.NumRenderTargets                     = 2;
+        gp.NumRenderTargets                     = 3;
         gp.RTVFormats[0]                        = TEX_FORMAT_RGBA16_FLOAT;  // linear scene color (TAA input)
         gp.RTVFormats[1]                        = TEX_FORMAT_RG16_FLOAT;    // motion vectors (NDC deltas)
+        gp.RTVFormats[2]                        = TEX_FORMAT_RGBA16_FLOAT;  // world-space normals (SSAO input)
         gp.DSVFormat                            = swapChain->GetDesc().DepthBufferFormat;
 
         // AzgaarPropVertex layout, 52 B stride (ATTRIB semantics are the

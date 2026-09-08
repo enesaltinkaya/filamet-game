@@ -51,6 +51,12 @@ void settingsInit(void) {
      * existing settings.json files validate). */
     templates.push_back((Template{"rendererBackend", "int", 1.}));
     templates.push_back((Template{"aoDisabled", "boolean", 0.}));
+    /* SSAO (DiligentFX ScreenSpaceAmbientOcclusion) tunables, applied by the
+     * diligent backend via ssaoSettingsApply. Types must match exactly or the
+     * settings file validation rewrites the whole file (docs/lessons.md). */
+    templates.push_back((Template{"ssaoRadius", "double", 1.0}));
+    templates.push_back((Template{"ssaoAlgorithm", "int", 0.0}));
+    templates.push_back((Template{"ssaoIntensity", "double", 1.0}));
     /* Screen-space GI (plans/ssgi.md, phases 1-4 validated): on by
      * default; the GUI toggle persists "giDisabled". */
     templates.push_back((Template{"giDisabled", "boolean", 0.}));

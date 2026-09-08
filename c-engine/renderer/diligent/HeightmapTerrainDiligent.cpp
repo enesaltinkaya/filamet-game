@@ -804,9 +804,10 @@ bool buildLitPipeline(void) {
     gp.DepthStencilDesc.DepthWriteEnable    = true;
     gp.DepthStencilDesc.DepthFunc           = COMPARISON_FUNC_LESS;
     gp.PrimitiveTopology                   = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    gp.NumRenderTargets                    = 2;
+    gp.NumRenderTargets                    = 3;
     gp.RTVFormats[0]                       = TEX_FORMAT_RGBA16_FLOAT;  // linear scene color (TAA input)
     gp.RTVFormats[1]                       = TEX_FORMAT_RG16_FLOAT;    // motion vectors (NDC deltas)
+    gp.RTVFormats[2]                       = TEX_FORMAT_RGBA16_FLOAT;  // world-space normals (SSAO input)
     gp.DSVFormat                           = swapChain->GetDesc().DepthBufferFormat;
 
     static const LayoutElement inputLayout[] = {

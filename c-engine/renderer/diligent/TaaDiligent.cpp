@@ -24,6 +24,8 @@
 #include "Utils.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/SsaoDiligent.h"
+#include "Graphics/GraphicsTools/interface/ScopedDebugGroup.hpp"
 #include "stb/git/stb_image_write.h"
 
 #include <algorithm>
@@ -57,6 +59,8 @@ static RefCntAutoPtr<IBuffer> cameraCB;
 // Offscreen chain (swapped to backbuffer by the blit).
 static RefCntAutoPtr<ITexture> sceneColorTex;  // RGBA16F linear
 static RefCntAutoPtr<ITexture> motionTex;      // RG16F, NDC deltas
+static RefCntAutoPtr<ITexture> normalTex;
+static RefCntAutoPtr<ITexture> aoCompositeTex; // RGBA16F, AO-applied world color
 static RefCntAutoPtr<ITexture> depthTex[2];    // D32, double-buffered
 
 static u32 frameIdx = 0;
@@ -612,6 +616,159 @@ static bool casToBackbuffer(IDeviceContext* ctx, ITextureView* src, ITextureView
     return true;
 }
 
+// SSAO application: 1:1 point-tap multiply of the full-res AO map into the
+// resolved world color. The AO map is a 1:1 screen-space map of this frame
+// (SSAO resolves at the offscreen size), so the same UV lands on the same
+// pixel in both textures; a POINT sampler keeps the 1:1 composite from
+// averaging neighbours. strength = 1.0 is the unaltered AO, 0.0 a no-op.
+static constexpr char kAoCompositePS[] = R"(
+Texture2D<float4> g_Source;
+Texture2D<float> g_AO;
+SamplerState g_Source_sampler;
+
+struct AoCompositeAttribs
+{
+    float Strength;
+    float Pad;
+};
+cbuffer cbAoCompositeAttribs
+{
+    AoCompositeAttribs g_AoComposite;
+}
+
+struct PSIn
+{
+    float4 Pos : SV_Position;
+    float2 UV : UV;
+};
+
+float4 main(in PSIn In) : SV_Target
+{
+    float4 c = g_Source.Sample(g_Source_sampler, In.UV);
+    float ao = g_AO.Sample(g_Source_sampler, In.UV);
+    c.rgb *= 1.0 - (1.0 - ao) * g_AoComposite.Strength;
+    return c;
+}
+)";
+
+struct AoCompositeAttribs {
+    float strength;
+    float pad;
+};
+
+static RefCntAutoPtr<IShader> aoPS;
+static RefCntAutoPtr<IPipelineState> aoPSO;
+static RefCntAutoPtr<ISampler> aoSampler;
+static RefCntAutoPtr<IBuffer> aoCB;
+static std::unordered_map<ITexture*, RefCntAutoPtr<IShaderResourceBinding>> aoSrbs;
+
+static void createAoPSO(void) {
+    if (aoPSO) {
+        return;
+    }
+    if (!blitVS) {
+        createBlitPSO();
+    }
+
+    ShaderCreateInfo shaderCI;
+    shaderCI.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+    shaderCI.Desc.ShaderType = SHADER_TYPE_PIXEL;
+    shaderCI.EntryPoint = "main";
+    shaderCI.Desc.Name = "aoCompositePS";
+    shaderCI.Source = kAoCompositePS;
+    device->CreateShader(shaderCI, &aoPS);
+    if (!aoPS) {
+        utils::warn("taa: ao composite PS failed");
+        return;
+    }
+
+    GraphicsPipelineStateCreateInfo psoCI;
+    psoCI.PSODesc.Name = "aoComposite";
+    psoCI.pVS = blitVS;
+    psoCI.pPS = aoPS;
+    GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
+    gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+    gp.DepthStencilDesc.DepthEnable = False;
+    gp.NumRenderTargets = 1;
+    gp.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
+    PipelineResourceLayoutDesc& layout = psoCI.PSODesc.ResourceLayout;
+    ShaderResourceVariableDesc vars[4] = {
+            {SHADER_TYPE_PIXEL, "g_Source", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "g_AO", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "g_Source_sampler", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "cbAoCompositeAttribs", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+    };
+    layout.Variables = vars;
+    layout.NumVariables = 4;
+
+    device->CreateGraphicsPipelineState(psoCI, &aoPSO);
+    if (!aoPSO) {
+        utils::warn("taa: ao composite PSO failed");
+        return;
+    }
+
+    SamplerDesc sampDesc;
+    sampDesc.MagFilter = FILTER_TYPE_POINT;
+    sampDesc.MinFilter = FILTER_TYPE_POINT;
+    sampDesc.AddressU = TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressV = TEXTURE_ADDRESS_CLAMP;
+    device->CreateSampler(sampDesc, &aoSampler);
+    if (IShaderResourceVariable* v = aoPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_Source_sampler")) {
+        v->Set(aoSampler);
+    }
+    if (IShaderResourceVariable* v = aoPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cbAoCompositeAttribs")) {
+        v->Set(aoCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    }
+}
+
+static IShaderResourceBinding* aoSrbFor(ITextureView* src, ITextureView* ao) {
+    auto it = aoSrbs.find(src->GetTexture());
+    if (it != aoSrbs.end()) {
+        return it->second;
+    }
+    RefCntAutoPtr<IShaderResourceBinding> srb;
+    aoPSO->CreateShaderResourceBinding(&srb, true);
+    if (!srb) {
+        utils::warn("taa: ao composite SRB creation failed");
+        return nullptr;
+    }
+    if (IShaderResourceVariable* v = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Source")) {
+        v->Set(src);
+    }
+    if (IShaderResourceVariable* v = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_AO")) {
+        v->Set(ao);
+    }
+    auto inserted = aoSrbs.emplace(src->GetTexture(), std::move(srb));
+    return inserted.first->second;
+}
+
+// Multiplies src's color by the AO map into aoCompositeTex; returns its SRV
+// for the downsample/CAS/blit, or nullptr when the pass is unavailable (the
+// caller keeps the plain source).
+static ITextureView* aoCompositeApply(IDeviceContext* ctx, ITextureView* src, ITextureView* ao) {
+    if (!aoCompositeTex || !aoCB || !src || !ao) {
+        return nullptr;
+    }
+    createAoPSO();
+    if (!aoPSO) {
+        return nullptr;
+    }
+    {
+        MapHelper<AoCompositeAttribs> cb(ctx, aoCB, MAP_WRITE, MAP_FLAG_DISCARD);
+        cb[0].strength = ssaoIntensity();
+        cb[0].pad = 0.0f;
+    }
+    IShaderResourceBinding* srb = aoSrbFor(src, ao);
+    if (!srb) {
+        return nullptr;
+    }
+    ITextureView* rtv = aoCompositeTex->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+    drawFullscreenToRtv(ctx, aoPSO, srb, rtv,
+            aoCompositeTex->GetDesc().Width, aoCompositeTex->GetDesc().Height);
+    return aoCompositeTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+}
+
 static IShaderResourceBinding* blitSrbFor(ITextureView* src) {
     auto it = blitSrbs.find(src->GetTexture());
     if (it != blitSrbs.end()) {
@@ -668,6 +825,8 @@ static void blitToBackbuffer(IDeviceContext* ctx, ITextureView* src, ITextureVie
 static void destroyTargets(void) {
     sceneColorTex.Release();
     motionTex.Release();
+    normalTex.Release();
+    aoCompositeTex.Release();
     depthTex[0].Release();
     depthTex[1].Release();
     downTex.Release();
@@ -677,6 +836,7 @@ static void destroyTargets(void) {
     blitSrbs.clear();
     casSrbs.clear();
     downSrbs.clear();
+    aoSrbs.clear();
 }
 
 static void createTargets(u32 width, u32 height) {
@@ -704,6 +864,19 @@ static void createTargets(u32 width, u32 height) {
     desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
     device->CreateTexture(desc, nullptr, &motionTex);
 
+    desc.Name = "taaWorldNormal";
+    desc.Format = TEX_FORMAT_RGBA16_FLOAT;
+    desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+    device->CreateTexture(desc, nullptr, &normalTex);
+
+    desc.Name = "aoComposite";
+    desc.Format = TEX_FORMAT_RGBA16_FLOAT;
+    desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+    device->CreateTexture(desc, nullptr, &aoCompositeTex);
+    if (!aoCompositeTex) {
+        utils::warn("taa: ao composite target failed");
+    }
+
     // Downsample intermediate: backbuffer-sized (the box pass' output, the
     // CAS/blit input at renderScale > 1). Recreated with the swapchain here,
     // since createTargets fires on every resize via the target-size check.
@@ -730,7 +903,7 @@ static void createTargets(u32 width, u32 height) {
         device->CreateTexture(desc, nullptr, &depthTex[i]);
     }
 
-    if (!sceneColorTex || !motionTex || !depthTex[0] || !depthTex[1]) {
+    if (!sceneColorTex || !motionTex || !normalTex || !depthTex[0] || !depthTex[1]) {
         utils::warn("taa: offscreen target creation failed");
         destroyTargets();
         return;
@@ -773,6 +946,11 @@ void taaInit(void) {
         utils::warn("taa: downsample attribs buffer failed");
     }
 
+    CreateUniformBuffer(device, sizeof(AoCompositeAttribs), "taa ao composite attribs", &aoCB);
+    if (!aoCB) {
+        utils::warn("taa: ao composite attribs buffer failed");
+    }
+
     frameIdx = 0;
 }
 
@@ -780,7 +958,8 @@ void taaDestroy(void) {
     blitSrbs.clear();
     casSrbs.clear();
     downSrbs.clear();
-    blitPSO.Release();
+    aoSrbs.clear();
+    blitPSO.Release();;
     blitVS.Release();
     blitPS.Release();
     blitSampler.Release();
@@ -791,6 +970,10 @@ void taaDestroy(void) {
     downPSO.Release();
     downPS.Release();
     downCB.Release();
+    aoPSO.Release();
+    aoPS.Release();
+    aoSampler.Release();
+    aoCB.Release();
     destroyTargets();
     cameraCB.Release();
     taa.reset();
@@ -856,6 +1039,7 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
             TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER |
             TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE;
     taa->PrepareResources(device, ctx, postFXContext.get(), taaFlags);
+    ssaoFrameBegin(ctx);
 
     // Jitter this frame's projection (TAA picks the Halton phase for the
     // CURRENT frame — PrepareResources above stamped the frame index).
@@ -1001,11 +1185,27 @@ ITextureView* taaMotionRTV(void) {
     return motionTex ? motionTex->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) : nullptr;
 }
 
+ITextureView* taaNormalRTV(void) {
+    return normalTex ? normalTex->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) : nullptr;
+}
+
+ITextureView* taaNormalSRV(void) {
+    return normalTex ? normalTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+}
+
 ITextureView* taaDepthDSV(void) {
     // curr parity must match taaWorldResolve's prev selection: this frame's
     // depth is buffer (frameIdx & 1), last frame's is the other one.
     return depthTex[frameIdx & 1] ? depthTex[frameIdx & 1]->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL)
                                   : nullptr;
+}
+
+ITextureView* taaDepthSRV(int idx) {
+    return depthTex[idx] ? depthTex[idx]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+}
+
+PostFXContext* taaPostFXContext(void) {
+    return postFXContext.get();
 }
 
 // IEEE half → float (the motion buffer is RG16F).
@@ -1113,6 +1313,7 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     }
 
     ITextureView* srcColorSRV = sceneColorTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    bool ssaoRan = false;
 
     if (taaOn && postFXContext && taa && cameraCB) {
         const u32 curr = frameIdx & 1;
@@ -1126,6 +1327,11 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         pa.pPrevDepthBufferSRV = depthTex[prev]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         pa.pMotionVectorsSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         postFXContext->Execute(pa);
+
+        if (ssaoReady() && ssaoOn()) {
+            Diligent::ScopedDebugGroup ssaoGroup(ctx, "ssao");
+            ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr));
+        }
 
         HLSL::TemporalAntiAliasingAttribs attribs{};
         attribs.TemporalStabilityFactor = taaWeight;
@@ -1150,6 +1356,18 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     const bool debugMv = getenv("ENGINE_TAA_DEBUG_MV") != nullptr;
     if (debugMv) {
         srcColorSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    }
+
+    // AO after the TAA accumulation, before the downsample/CAS/blit: the
+    // composite is TARGET-sized 1:1, so the box downsample averages the
+    // AO'd color exactly as it does the plain one. Skipped on the debug-MV
+    // blit (the motion encoding must stay exact) and whenever SSAO did not
+    // produce this frame's AO map (TAA off / pending — the SSAO resolved
+    // texture is then undefined, not a no-op AO=1).
+    if (!debugMv && ssaoOn() && ssaoRan) {
+        if (ITextureView* c = aoCompositeApply(ctx, srcColorSRV, ssaoAOSRV())) {
+            srcColorSRV = c;
+        }
     }
 
     // renderScale > 1: box-filter to a backbuffer-sized intermediate first —

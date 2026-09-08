@@ -146,7 +146,7 @@ TEX_FORMAT_RGBA16_FLOAT;` (486-488).
     model in pak_1 has normals today (verified: eve 1/1, deciduous 24/24,
     deciduous_far 24/24 primitives), but wrap the write in
     `#if USE_VERTEX_NORMALS ... #else PSOut.WorldNormal = float4(0.0, 0.0, 1.0);
-    #endif` (the macro is per-PSO, PBR_Renderer.cpp:1553) so a future normal-less
+#endif` (the macro is per-PSO, PBR_Renderer.cpp:1553) so a future normal-less
     model degrades to a flat normal instead of failing runtime HLSL compilation.
   - `worldDraw` (1078-1084): add `| GLTF_PBR_Renderer::PSO_FLAG_FIRST_USER_DEFINED`
     to `renderInfo.Flags`.
