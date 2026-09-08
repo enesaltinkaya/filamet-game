@@ -3,6 +3,8 @@ Use renderdoc to debug graphical issues.
 Do not use comments in the code.
 Do not use "find / ...".
 Do not use git.
+Use ENGINE_HIDDEN_WINDOW env var while testing.
+
 
 ### File locations
 
