@@ -1,10 +1,12 @@
 #include "azgaar/AzgaarPropMesh.h"
 #include "azgaar/AzgaarProps.h"
+#include "treegen/TreeGen.h"
 #include "Utils.h"
 
 #include <cfloat>
 #include <math.h>
 #include <stdio.h>
+#include <string>
 
 /*
  * Procedural species mesh builders, ported verbatim from the old engine
@@ -386,15 +388,6 @@ void buildGrassCard(MeshBuilder* mb, float aspect, float vBottom) {
     mbQuad(mb, b0, b1, b2, b3);
 }
 
-void buildConifer(MeshBuilder* mb) {
-    u32 trunkStart = mb->vertCount;
-    mbCylinder(mb, 0, 0, 0.0f, 0.25f, 0.06f, 6);  // trunk
-    mbColorSince(mb, trunkStart, kTrunkColor);
-    mbCone(mb, 0, 0, 0.15f, 0.55f, 0.38f, 0.0f, 7);  // lower cone
-    mbCone(mb, 0, 0, 0.45f, 0.82f, 0.27f, 0.0f, 7);
-    mbCone(mb, 0, 0, 0.72f, 1.0f, 0.16f, 0.0f, 7);
-}
-
 void buildConiferFar(MeshBuilder* mb) {
     u32 trunkStart = mb->vertCount;
     mbCylinder(mb, 0, 0, 0.0f, 0.3f, 0.06f, 5);
@@ -402,27 +395,11 @@ void buildConiferFar(MeshBuilder* mb) {
     mbCone(mb, 0, 0, 0.2f, 1.0f, 0.34f, 0.0f, 6);
 }
 
-void buildDeciduous(MeshBuilder* mb) {
-    u32 trunkStart = mb->vertCount;
-    mbCylinder(mb, 0, 0, 0.0f, 0.5f, 0.05f, 6);
-    mbColorSince(mb, trunkStart, kTrunkColor);
-    // Rounded crown (UV sphere) instead of the flat diamond blob.
-    mbSphere(mb, 0.0f, 0.78f, 0.0f, 0.45f, 0.9f, 8, 6);
-}
-
 void buildDeciduousFar(MeshBuilder* mb) {
     u32 trunkStart = mb->vertCount;
     mbCylinder(mb, 0, 0, 0.0f, 0.45f, 0.05f, 5);
     mbColorSince(mb, trunkStart, kTrunkColor);
     mbSphere(mb, 0.0f, 0.72f, 0.0f, 0.45f, 0.85f, 6, 4);
-}
-
-void buildAcacia(MeshBuilder* mb) {
-    // slightly bent trunk + a flat, wide canopy disc near the top.
-    u32 trunkStart = mb->vertCount;
-    mbCone(mb, 0.05f, 0.0f, 0.0f, 0.7f, 0.07f, 0.05f, 6);
-    mbColorSince(mb, trunkStart, kTrunkColor);
-    mbCone(mb, 0.1f, 0.0f, 0.68f, 0.82f, 0.55f, 0.5f, 10);  // disc canopy
 }
 
 void buildPalm(MeshBuilder* mb) {
@@ -449,20 +426,8 @@ void buildCactus(MeshBuilder* mb) {
     mbCone(mb, -0.14f, 0.0f, 0.5f, 0.72f, 0.09f, 0.06f, 5);  // arm 2
 }
 
-void buildDeadTree(MeshBuilder* mb) {
-    u32 start = mb->vertCount;
-    mbCone(mb, 0, 0, 0.0f, 0.9f, 0.09f, 0.04f, 5);          // trunk
-    mbCone(mb, 0.12f, 0.0f, 0.5f, 0.85f, 0.05f, 0.01f, 4);  // branch
-    mbCone(mb, -0.1f, 0.1f, 0.6f, 0.95f, 0.04f, 0.01f, 4);
-    mbColorSince(mb, start, kTrunkColor);  // whole dead tree is woody brown
-}
-
 void buildReed(MeshBuilder* mb) {
     mbBlades(mb, 3, 1.0f, 0.06f, 0.2f);
-}
-
-void buildShrub(MeshBuilder* mb) {
-    mbBlob(mb, 0.0f, 0.45f, 0.0f, 0.6f, 0.6f, 51);
 }
 
 void buildRock(MeshBuilder* mb) {
@@ -476,6 +441,84 @@ void buildFlower(MeshBuilder* mb) {
 
 AzgaarPropMesh s_mesh;
 bool s_meshBuilt = false;
+
+static u32 kSpeciesVariantCount[AZGAAR_PROP_COUNT] = {
+    [AZGAAR_PROP_GRASS_TUFT] = 0,
+    [AZGAAR_PROP_CONIFER] = 4,
+    [AZGAAR_PROP_CONIFER_FAR] = 1,
+    [AZGAAR_PROP_DECIDUOUS] = 4,
+    [AZGAAR_PROP_DECIDUOUS_FAR] = 1,
+    [AZGAAR_PROP_ACACIA] = 3,
+    [AZGAAR_PROP_PALM] = 1,
+    [AZGAAR_PROP_CACTUS] = 1,
+    [AZGAAR_PROP_DEAD_TREE] = 2,
+    [AZGAAR_PROP_REED] = 1,
+    [AZGAAR_PROP_SHRUB] = 4,
+    [AZGAAR_PROP_ROCK] = 1,
+    [AZGAAR_PROP_FLOWER] = 1,
+};
+
+static const float kSpeciesLateralCap[AZGAAR_PROP_COUNT] = {
+    [AZGAAR_PROP_GRASS_TUFT] = 0.0f,
+    [AZGAAR_PROP_CONIFER] = 0.55f,
+    [AZGAAR_PROP_CONIFER_FAR] = 0.0f,
+    [AZGAAR_PROP_DECIDUOUS] = 0.80f,
+    [AZGAAR_PROP_DECIDUOUS_FAR] = 0.0f,
+    [AZGAAR_PROP_ACACIA] = 0.70f,
+    [AZGAAR_PROP_PALM] = 0.0f,
+    [AZGAAR_PROP_CACTUS] = 0.0f,
+    [AZGAAR_PROP_DEAD_TREE] = 0.45f,
+    [AZGAAR_PROP_REED] = 0.0f,
+    [AZGAAR_PROP_SHRUB] = 0.90f,
+    [AZGAAR_PROP_ROCK] = 0.0f,
+    [AZGAAR_PROP_FLOWER] = 0.0f,
+};
+
+static bool speciesUsesTreeGen(u32 s) {
+    return s == AZGAAR_PROP_CONIFER || s == AZGAAR_PROP_DECIDUOUS ||
+           s == AZGAAR_PROP_ACACIA || s == AZGAAR_PROP_DEAD_TREE || s == AZGAAR_PROP_SHRUB;
+}
+
+static treegen::Config treeGenConfig(u32 s) {
+    switch (s) {
+        case AZGAAR_PROP_CONIFER:
+            return treegen::configConifer();
+        case AZGAAR_PROP_DECIDUOUS:
+            return treegen::configDeciduous();
+        case AZGAAR_PROP_ACACIA:
+            return treegen::configAcacia();
+        case AZGAAR_PROP_DEAD_TREE:
+            return treegen::configDeadTree();
+        case AZGAAR_PROP_SHRUB:
+            return treegen::configShrub();
+        default:
+            return treegen::Config{};
+    }
+}
+
+MeshBuilder treeGenToBuilder(const treegen::Mesh& tm) {
+    MeshBuilder b;
+    mbInit(&b, static_cast<u32>(tm.verts.size()), static_cast<u32>(tm.idx.size()));
+    for (const treegen::Vertex& p : tm.verts) {
+        AzgaarPropVertex v = {};
+        v.position[0] = p.pos[0];
+        v.position[1] = p.pos[1];
+        v.position[2] = p.pos[2];
+        v.normal[0]   = p.nrm[0];
+        v.normal[1]   = p.nrm[1];
+        v.normal[2]   = p.nrm[2];
+        v.normal[3]   = 0.0f;
+        v.uv[0]       = p.uv[0];
+        v.uv[1]       = p.uv[1];
+        v.color[0]    = p.col[0];
+        v.color[1]    = p.col[1];
+        v.color[2]    = p.col[2];
+        v.color[3]    = p.col[3];
+        b.verts[b.vertCount++] = v;
+    }
+    for (u32 i : tm.idx) b.idx[b.idxCount++] = i;
+    return b;
+}
 
 const char* speciesKey(AzgaarPropSpecies s) {
     switch (s) {
@@ -525,8 +568,9 @@ void buildRangeInto(AzgaarPropMesh& mesh,
     mesh.ranges.push_back(r);
 }
 
-void validateMesh(const AzgaarPropMesh& mesh, const char* where) {
+void validateMesh(const AzgaarPropMesh& mesh, const char* where, double t0) {
     bool ok = true;
+    std::string perVariant;
     for (const AzgaarPropMeshRange& r : mesh.ranges) {
         if (r.indexCount % 3 != 0 || r.indexCount == 0 || r.vertexCount == 0) {
             utils::warn("azgaarPropMesh %s: bad range %s/%u (vc=%u ic=%u)", where,
@@ -557,13 +601,21 @@ void validateMesh(const AzgaarPropMesh& mesh, const char* where) {
                     r.aabbMax[1]);
             ok = false;
         }
+        if (!perVariant.empty()) perVariant += " ";
+        char chunk[64];
+        snprintf(chunk, sizeof(chunk), "%s/%u=%u",
+                 speciesKey((AzgaarPropSpecies)r.species), r.variant, r.indexCount / 3);
+        perVariant += chunk;
     }
-    utils::info("azgaarPropMesh %s: %zu verts / %zu idx / %zu ranges, validation %s", where,
-            mesh.vertices.size(), mesh.indices.size(), mesh.ranges.size(), ok ? "PASS" : "FAIL");
+    double ms = utils::elapsedEnd(t0);
+    utils::info("azgaarPropMesh %s: %zu verts / %zu idx / %zu ranges, build %.2f ms, validation %s, %s",
+            where, mesh.vertices.size(), mesh.indices.size(), mesh.ranges.size(), ms,
+            ok ? "PASS" : "FAIL", perVariant.c_str());
 }
 
-void buildMesh(void) {
+void buildMesh(u32 seed) {
     s_mesh = AzgaarPropMesh{};
+    double t0 = utils::elapsedBegin();
 
     // The 12 non-grass vegetation builders (one variant row each). The
     // *_FAR rows are never scattered (no far-LOD double-instances) but stay
@@ -571,16 +623,16 @@ void buildMesh(void) {
     using BuilderFn = void (*)(MeshBuilder*);
     static const BuilderFn builders[AZGAAR_PROP_COUNT] = {
             nullptr,          // grass (cards below)
-            buildConifer,
+            nullptr,          // conifer
             buildConiferFar,
-            buildDeciduous,
+            nullptr,          // deciduous
             buildDeciduousFar,
-            buildAcacia,
+            nullptr,          // acacia
             buildPalm,
             buildCactus,
-            buildDeadTree,
+            nullptr,          // dead_tree
             buildReed,
-            buildShrub,
+            nullptr,          // shrub
             buildRock,
             buildFlower,
     };
@@ -589,6 +641,7 @@ void buildMesh(void) {
     if (!dumpEnv) dumpEnv = getenv("ENGINE_AZGAAR_PROPS_MESH_DUMP");
 
     const u32 grassCount = azgaarPropsGrassVariantCount();
+    kSpeciesVariantCount[AZGAAR_PROP_GRASS_TUFT] = grassCount;
     u32 vOff = 0, iOff = 0;
 
     // Grass first (species 0): one crossed card per texture variant, in the
@@ -611,25 +664,44 @@ void buildMesh(void) {
     }
 
     for (u32 s = 1; s < AZGAAR_PROP_COUNT; s++) {
-        MeshBuilder b;
-        mbInit(&b, 256, 640);
-        builders[s](&b);
-        if (dumpEnv) {
-            char path[96];
-            snprintf(path, sizeof(path), "/tmp/azgaar_props_%s.obj",
-                    speciesKey((AzgaarPropSpecies)s));
-            propsDumpBuilder(path, &b);
+        u32 vc = kSpeciesVariantCount[s];
+        for (u32 v = 0; v < vc; v++) {
+            MeshBuilder b;
+            if (speciesUsesTreeGen(s)) {
+                u32 vs = seed ^ (s * 0x9E3779B9u) ^ (v * 0xC2B2AE35u);
+                treegen::Mesh tm =
+                    treegen::generate(treeGenConfig(s), vs, kSpeciesLateralCap[s]);
+                b = treeGenToBuilder(tm);
+            } else {
+                mbInit(&b, 256, 640);
+                builders[s](&b);
+            }
+            if (dumpEnv) {
+                char path[96];
+                if (speciesUsesTreeGen(s))
+                    snprintf(path, sizeof(path), "/tmp/azgaar_props_%s_%u.obj",
+                            speciesKey((AzgaarPropSpecies)s), v);
+                else
+                    snprintf(path, sizeof(path), "/tmp/azgaar_props_%s.obj",
+                            speciesKey((AzgaarPropSpecies)s));
+                propsDumpBuilder(path, &b);
+            }
+            buildRangeInto(s_mesh, b, s, v, vOff, iOff);
         }
-        buildRangeInto(s_mesh, b, s, 0, vOff, iOff);
     }
 
-    validateMesh(s_mesh, "build");
+    validateMesh(s_mesh, "build", t0);
     s_meshBuilt = true;
 }
 }
 
-void azgaarPropMeshBuild(void) {
-    buildMesh();
+u32 azgaarPropSpeciesVariantCount(u32 species) {
+    if (species >= AZGAAR_PROP_COUNT) return 1;
+    return kSpeciesVariantCount[species];
+}
+
+void azgaarPropMeshBuild(u32 seed) {
+    buildMesh(seed);
 }
 
 void azgaarPropMeshRelease(void) {

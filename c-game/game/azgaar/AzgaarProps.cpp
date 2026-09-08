@@ -700,7 +700,10 @@ static void propsScatterTile(const PropsScatterInput& in,
                 inst.phase   = propsRand(tileSeed, tx, tz, 0xE4) * 2.0f *
                                static_cast<float>(M_PI);
                 inst.species = sp;
-                inst.variant = 0;  // vegetation: one mesh variant each (grass picks above)
+                const u32 vc = azgaarPropSpeciesVariantCount(sp);
+                inst.variant = (vc > 1) ? static_cast<u32>(propsRand(tileSeed, tx, tz, 0xF8) *
+                                                                   static_cast<float>(vc))
+                                        : 0;
                 if (temp.size() < AZGAAR_PROPS_TILE_CAP) {
                     temp.push_back(inst);
                     outPerSpecies[sp]++;
@@ -742,9 +745,10 @@ static void propsScatterTile(const PropsScatterInput& in,
     {
         u32 a = 0;
         for (u32 s = 0; s < AZGAAR_PROP_COUNT; s++) {
+            u32 vc = azgaarPropSpeciesVariantCount(s);
             base[s] = a;
-            a += (s == AZGAAR_PROP_GRASS_TUFT) ? grassVc : 1;
-            totalV += (s == AZGAAR_PROP_GRASS_TUFT) ? grassVc : 1;
+            a += vc;
+            totalV += vc;
         }
     }
     std::vector<u32> counts(totalV, 0);
@@ -766,7 +770,7 @@ static void propsScatterTile(const PropsScatterInput& in,
     u32 pairCount = 0;
     u32 acc       = 0;
     for (u32 s = 0; s < AZGAAR_PROP_COUNT; s++) {
-        u32 vc = (s == AZGAAR_PROP_GRASS_TUFT) ? grassVc : 1;
+        u32 vc = azgaarPropSpeciesVariantCount(s);
         for (u32 v = 0; v < vc; v++) {
             u32 c = counts[base[s] + v];
             if (c > 0) {
@@ -1246,7 +1250,7 @@ void azgaarPropsInit(const AzgaarWorld* world) {
     // Merged species mesh (task 4). Race-free here: the worker was joined by
     // the destroy() above and is not restarted until below, so nothing else
     // reads s_grassVariants while the build reads it.
-    azgaarPropMeshBuild();
+    azgaarPropMeshBuild(seed);
 
     if (!s_worker) {
         s_shutdown = false;

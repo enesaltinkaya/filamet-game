@@ -46,13 +46,13 @@ output into the props pipeline's 52 B vertex layout.
 
 ## Geometry budgets (target, per variant)
 
-| species    | variants | skeleton                        | leaves          | tris/variant |
-|------------|----------|---------------------------------|-----------------|--------------|
-| conifer    | 4        | 3 levels, 3–5 children, 4 sect  | flattened blob per tip, OR 3-cone stack (classic) randomized (cone count 3–5, radii/angles jittered) | ≤ 400 |
-| deciduous  | 4        | 3 levels, 3–5 children, 4 sect  | 3–5 sphere blobs at tips (0.2–0.45 r, squashed) | ≤ 600 |
-| acacia     | 3        | 2–3 levels, 3–4 children, wide angles | small blobs, flat-wide canopy (y-clamped ≤ 0.9) | ≤ 400 |
-| dead_tree  | 2        | 3 levels, 4–6 children, high angles, taper → ~0 | none | ≤ 300 |
-| shrub      | 4        | 1–2 levels, 4–7 children, low   | dense small blobs (0.1–0.2 r) covering the crown | ≤ 200 |
+| species   | variants | skeleton                                        | leaves                                                                                               | tris/variant |
+| --------- | -------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------ |
+| conifer   | 4        | 3 levels, 3–5 children, 4 sect                  | flattened blob per tip, OR 3-cone stack (classic) randomized (cone count 3–5, radii/angles jittered) | ≤ 400        |
+| deciduous | 4        | 3 levels, 3–5 children, 4 sect                  | 3–5 sphere blobs at tips (0.2–0.45 r, squashed)                                                      | ≤ 600        |
+| acacia    | 3        | 2–3 levels, 3–4 children, wide angles           | small blobs, flat-wide canopy (y-clamped ≤ 0.9)                                                      | ≤ 400        |
+| dead_tree | 2        | 3 levels, 4–6 children, high angles, taper → ~0 | none                                                                                                 | ≤ 300        |
+| shrub     | 4        | 1–2 levels, 4–7 children, low                   | dense small blobs (0.1–0.2 r) covering the crown                                                     | ≤ 200        |
 
 Total ≈ 17 variants ≈ +13 instanced draws over today's baseline, ~6 k tris
 of unique geometry. Palm/cactus/rock/flower/reed stay single-variant
@@ -86,8 +86,8 @@ terrain/props system wants the trees, it uses `treegen::generate` directly.
 - Small seeded PRNG (mulberry32-style, 32-bit; mirror of ez-tree's `rng.js`
   shape — pure, no platform floats). Seed = `mapSeed ^ (species * C) ^ v`.
 - `TreeGenConfig` struct: per-level `levels, children[2..3], angleSpread,
-  length[2..3], radius[2..3], taper, twist, gnarliness, sections[2..3],
-  radialSegs[2..3], startFrac`, trunk color (baked into branch verts),
+length[2..3], radius[2..3], taper, twist, gnarliness, sections[2..3],
+radialSegs[2..3], startFrac`, trunk color (baked into branch verts),
   and a leaf strategy enum (`NONE / BLOBS / CONES / FAN` for the five
   species above).
 - All geometry primitives live INSIDE the module (small internal

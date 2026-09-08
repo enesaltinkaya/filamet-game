@@ -86,9 +86,9 @@ struct AzgaarPropMesh {
 // The merged mesh. Null before azgaarPropsInit / after azgaarPropsDestroy.
 const AzgaarPropMesh* azgaarPropMeshGet(void);
 
-// Build/release (called by azgaarPropsInit / azgaarPropsDestroy; not part of
-// the render-pass API).
-void azgaarPropMeshBuild(void);
+void azgaarPropMeshBuild(u32 seed);
 void azgaarPropMeshRelease(void);
+
+u32 azgaarPropSpeciesVariantCount(u32 species);
 
 }
