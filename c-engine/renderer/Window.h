@@ -1,0 +1,80 @@
+#pragma once
+
+#include "Defines.h"
+#include "shared/InputEventShared.h"
+
+#include <vector>
+
+struct SDL_Window;
+
+namespace engine {
+struct Input {
+    char keys[256] = {};
+    i32 pressed = 0;
+    i32 released = 0;
+    char ctrl = 0, shift = 0, alt = 0;
+
+    float mouseDx = 0.0f;  // relative mouse delta, accumulated across rendered frames;
+    float mouseDy = 0.0f;  // consumed + zeroed by the fixed-step camera system (not per frame)
+    float scrollY = 0.0f;
+
+    float mouseX = 0.0f, mouseY = 0.0f;
+    char mouseLeft = 0, mouseRight = 0, mouseMiddle = 0;
+    i32 mousePressed = -1, mouseReleased = -1;
+    char text[256] = {};
+
+    // Per-frame stream of old-engine-style InputEvents synthesized from the
+    // accumulated state above (see windowSynthesizeInputEvents). crmlui's input
+    // callbacks consume this (rmlSendInputEvent per event).
+    std::vector<InputEvent> events;
+};
+
+struct Window {
+    SDL_Window* handle;
+    u32 width;
+    u32 height;
+};
+
+extern Window window;
+
+bool windowCreate(const char* title, u32 width, u32 height);
+void windowDestroy(void);
+void* windowNativeHandle(void);  // X11 Window (Linux) / HWND (Windows)
+void windowPollEvents(void);     // pumps events; engineStop() on window close
+
+extern struct Input input;
+
+// SDL scancode -> old-engine KeyCode (0 = KEY_NONE for unmapped keys); the
+// rmlui gui manager uses it for its Ctrl+letter toggles.
+KeyCode windowMapScancode(int scancode);
+
+/* true: relative mode + hidden cursor (absolute position saved); false: exit
+ * relative mode, warp the cursor back to the pre-drag position, and show it
+ * (old engine's sdlWindowSystemHideCursor/ShowCursor save/restore). */
+void windowSetRelativeMouseMode(char on);
+void windowHideCursor(void);
+void windowShowCursor(void);
+
+/* Toggle desktop fullscreen (the video settings' Fullscreen row). The size
+ * change flows through the normal resize pipeline: SDL posts WINDOW_RESIZED,
+ * the renderer re-sizes the swapchain, and the rmlui manager gets its
+ * INPUT_EVENT_WINDOW_RESIZED (rmlSetDimensions). */
+void windowToggleFullscreen(char on);
+
+// Cursor support — arrow/hand are the old engine's custom images (pak
+// images/cursor{Arrow,Hand}.png.ktx2, uncompressed RGBA32 via
+// utils::imageLoadKtx — old engine's loader) built into SDL color cursors at
+// cursorScale, falling back to system cursors when an image is unavailable;
+// text is always a system cursor. The pointers are passed to the crmlui
+// wrapper (RmlParams.window) and windowSetCursor is used as its set-cursor
+// callback (0=arrow, 1=pointer/hand, 2=text, 3=move, 4=cross, 5=resize,
+// 6=unavailable). windowLoadCursors must be followed by
+// guiManagerUpdateCursors so the wrapper's own copy sees the new pointers.
+void windowLoadCursors(void);
+void windowDestroyCursors(void);
+void* windowGetArrowCursor(void);
+void* windowGetPointerCursor(void);  // pointing hand
+void* windowGetTextCursor(void);
+void windowSetCursor(int cursorType);
+bool windowIsCursorVisible(void);
+}

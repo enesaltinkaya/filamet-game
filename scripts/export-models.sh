@@ -1,0 +1,109 @@
+#!/bin/bash
+# Model exporter (port of the old engine's 1-blender-scene.sh, minus jolt):
+#   .blend -> glb (blender, scripts/blender-scene.py) -> packed glb (gltfpack)
+#          -> zstd -10 -> c-game/data/pak_1/models/<name>.zstd
+# The game reads models/<name>.zstd from pak_1.pak; the loader sniffs the
+# zstd magic, so .zstd is purely a naming choice (no more misleading .dat).
+# Repack after running: ./scripts/build.sh (data.sh rebuilds pak_1.pak when
+# its content md5 changed).
+set -e
+
+ROOT="$(dirname "$(realpath "$0")")/.."
+ASSETS_DIR="/home/enes/Projects/assets"
+GLTFPACK="/home/enes/Projects/c/cpp-thirdparty/meshoptimizer/git/build-linux/gltfpack"
+OUT_DIR="$ROOT/c-game/data/pak_1/models"
+SCRIPTS_TMP="$ROOT/scripts/.tmp"
+STAGE_DIR="$SCRIPTS_TMP/models"
+
+# gltfpack flags: -noq (no quantization — fp32 positions/uvs/normals AND
+# animation TRS), keep names/extras/materials, 30 Hz animation resample.
+# Animation data must be fp32: Diligent's GLTF loader only reads fp32 sampler
+# outputs (its int16 path is a compiled-out VERIFY — gltfpack's default
+# animation quantization loads as garbage floats and NaNs out the skeleton).
+# Vertex quantization would be fine (Diligent converts normalized ints), but
+# gltfpack offers no way to keep it while disabling animation quantization.
+# NOTE: no -cc (meshopt buffer compression) — the old engine's cgltf decoded
+# EXT_meshopt_compression, but Diligent's GLTF loader has no meshopt support
+# and reads compressed buffer views as garbage (bounding boxes and vertices).
+# The zstd pass below keeps the shipped files small instead.
+GLTFPACK_FLAGS=(-noq -ke -kn -kv -km -af 30)
+
+convertModel() {
+    local blendFile="$1"
+    local name
+    name="$(basename "${blendFile}")"
+    name="${name%.blend}"
+    local stamp="$SCRIPTS_TMP/${name}.blend.stamp"
+    local mtime
+    mtime="$(date -r "$blendFile" "+%Y%m%d%H%M%S")"
+
+    if [ -f "$OUT_DIR/${name}.zstd" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$mtime" ]; then
+        echo "up to date: ${name}.zstd"
+        return
+    fi
+
+    if [ ! -f "$blendFile" ]; then
+        echo "missing blend file: $blendFile" >&2
+        return 1
+    fi
+
+    mkdir -p "$OUT_DIR" "$STAGE_DIR"
+    local glb="$STAGE_DIR/${name}.glb"
+
+    echo "#############################################"
+    echo -n "blend -> glb ${name}... "
+    local log="$STAGE_DIR/${name}.blend.log"
+    if ! blender "$blendFile" --background --python "$ROOT/scripts/blender-scene.py" -- "$glb" > "$log" 2>&1; then
+        echo "FAILED (log: $log)" >&2
+        tail -n 20 "$log" >&2
+        return 1
+    fi
+    echo "$(du -sh "$glb" | cut -f1)"
+
+    # Standardize the character hierarchy (identity armature, metre-space
+    # bones) so standard glTF renderers place it correctly
+    # — Blender's exporter leaves the cm-authored armature transform on the
+    # node, which it then applies twice. No-op for assets without a
+    # transformed armature. See scripts/gltf-standardize.py.
+    echo -n "standardize... "
+    local std="$STAGE_DIR/${name}.std.glb"
+    if ! python3 "$ROOT/scripts/gltf-standardize.py" "$glb" "$std" >> "$log" 2>&1; then
+        echo "FAILED (log: $log)" >&2
+        tail -n 20 "$log" >&2
+        return 1
+    fi
+    echo ok
+    mv "$std" "$glb"
+
+    echo -n "gltfpack... "
+    export KTX_GEN_MIPMAP=1
+    "$GLTFPACK" "${GLTFPACK_FLAGS[@]}" -i "$glb" -o "$STAGE_DIR/${name}.pack.glb"
+    rm -f "$glb"
+    mv "$STAGE_DIR/${name}.pack.glb" "$glb"
+    echo "$(du -sh "$glb" | cut -f1)"
+
+    # gltfpack hard-codes animation rotation keys as int16 normalized snorm
+    # (no flag changes that); Diligent's loader only reads fp32 sampler
+    # outputs — rewrite them (see scripts/gltf-rotation-f32.py)
+    echo -n "rotation f32... "
+    local f32="$STAGE_DIR/${name}.f32.glb"
+    if ! python3 "$ROOT/scripts/gltf-rotation-f32.py" "$glb" "$f32" >> "$log" 2>&1; then
+        echo "FAILED (log: $log)"
+        tail -n 20 "$log"
+        return 1
+    fi
+    echo ok
+    mv "$f32" "$glb"
+
+    echo -n "zstd... "
+    zstd -q -10 --rm -f "$glb"
+    mv "${glb}.zst" "$OUT_DIR/${name}.zstd"
+    echo "$(du -sh "$OUT_DIR/${name}.zstd" | cut -f1)"
+
+    echo "$mtime" > "$stamp"
+}
+
+mkdir -p "$SCRIPTS_TMP"
+
+convertModel "$ASSETS_DIR/Scenes/Characters/eve.blend"
+convertModel "$ASSETS_DIR/Scenes/Characters/animations.blend"

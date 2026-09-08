@@ -1,0 +1,146 @@
+#include "Ecs.h"
+#include "Utils.h"
+#include "gui/rmlui/GuiManagerRmlUi.h"
+#include "system/lua/LuaSystem.h"
+#include "system/sound/SoundSystem.h"
+
+#include <cstdlib>
+
+namespace engine {
+struct Ecs ecs;
+
+void ecsInit(System* gameSystem) {
+    utils::info("ecs: initializing");
+    systemAdd(0, gameSystem);
+    systemAdd(2, &luaSystem);
+    systemAdd(3, &soundSystem);
+    // RmlUi gui manager: owns the crmlui wrapper (RmlParams, input pump,
+    // documents). After luaSystem — it needs the Lua state in added().
+    // ENGINE_NO_RMLUI drops the whole RMLUI stack (no rmlInitVulkan, no rml
+    // documents, no rmlui draw pass).
+    if (!rmluiDisabled()) {
+        systemAdd(4, &guiManagerRmlUi);
+    }
+}
+
+void ecsDestroy(void) {
+    utils::info("ecs: destroying");
+    // snapshot: a system's removed() may remove others (Game removes the
+    // flying camera), which would erase from ecs.systems mid-iteration
+    std::vector<System*> all = ecs.systems;
+    for (System* system : all) {
+        system->removed();
+    }
+    ecs.systems.clear();
+}
+
+void systemAdd(int order, System* system) {
+    system->priority = order;
+
+    size_t index = 0;
+    while (index < ecs.systems.size() && ecs.systems[index]->priority <= order) {
+        index++;
+    }
+    ecs.systems.insert(ecs.systems.begin() + index, system);
+
+    utils::info("ecs: system added (%s, priority %d)", system->name, order);
+    system->added();
+}
+
+void systemRemove(System* system) {
+    for (size_t i = 0; i < ecs.systems.size(); i++) {
+        if (ecs.systems[i] == system) {
+            ecs.systems.erase(ecs.systems.begin() + i);
+            break;
+        }
+    }
+    utils::info("ecs: system removed (%s)", system->name);
+    system->removed();
+}
+
+void ecsPreUpdate(void) {
+    for (System* system : ecs.systems) {
+        double start = utils::elapsedBegin();
+        system->preUpdate();
+        system->cpuElapsed = utils::elapsedEnd(start);
+        system->cpuElapsedLastFrame = system->cpuElapsed;
+    }
+}
+
+// One fixed-timestep tick (utils::timer.dt = 1/UPS): called 0..N times per
+// rendered frame by utils::timerUpdate from ecsUpdate, so simulation speed
+// is frame-rate independent (old engine's ecsUpdateForTimer — without it,
+// systems advancing by timer.dt move faster at >60fps).
+static void ecsUpdateForTimer(void) {
+    for (System* system : ecs.systems) {
+        double start = utils::elapsedBegin();
+        system->update();
+        system->cpuElapsed += utils::elapsedEnd(start);
+    }
+}
+
+void ecsUpdate(void) {  // might not run every frame, might run multiple times per frame
+    for (System* system : ecs.systems) system->cpuElapsed = 0.0;
+    utils::timerUpdate(ecsUpdateForTimer);
+    for (System* system : ecs.systems) system->cpuElapsedLastFrame = system->cpuElapsed;
+}
+
+void ecsPostUpdate(void) {
+    for (System* system : ecs.systems) {
+        double start = utils::elapsedBegin();
+        system->postUpdate();
+        system->cpuElapsed = utils::elapsedEnd(start);
+        system->cpuElapsedLastFrame = system->cpuElapsed;
+    }
+}
+
+// A system may request an add/remove from within its own callback (e.g. a GUI
+// button that transitions state). Applying that inline would mutate ecs.systems
+// while the phase loop is iterating it, so we queue it and apply at the top of
+// the next frame, outside any loop.
+static std::vector<System*> deferredAdds;
+static std::vector<int>     deferredAddOrder;
+static std::vector<System*> deferredRemoves;
+
+static bool deferredAddPending(System* s) {
+    for (System* x : deferredAdds) if (x == s) return true;
+    return false;
+}
+
+void ecsSystemAddDeferred(int order, System* system) {
+    // cancel a pending remove for the same system, then queue the add
+    for (size_t i = 0; i < deferredRemoves.size(); i++) {
+        if (deferredRemoves[i] == system) {
+            deferredRemoves.erase(deferredRemoves.begin() + i);
+            break;
+        }
+    }
+    if (!deferredAddPending(system)) {
+        deferredAdds.push_back(system);
+        deferredAddOrder.push_back(order);
+    }
+}
+
+void ecsSystemRemoveDeferred(System* system) {
+    // cancel a pending add for the same system, then queue the remove
+    for (size_t i = 0; i < deferredAdds.size(); i++) {
+        if (deferredAdds[i] == system) {
+            deferredAdds.erase(deferredAdds.begin() + i);
+            deferredAddOrder.erase(deferredAddOrder.begin() + i);
+            break;
+        }
+    }
+    for (System* x : deferredRemoves) if (x == system) return;
+    deferredRemoves.push_back(system);
+}
+
+void ecsApplyDeferred(void) {
+    for (System* s : deferredRemoves) systemRemove(s);
+    deferredRemoves.clear();
+    for (size_t i = 0; i < deferredAdds.size(); i++) {
+        systemAdd(deferredAddOrder[i], deferredAdds[i]);
+    }
+    deferredAdds.clear();
+    deferredAddOrder.clear();
+}
+}

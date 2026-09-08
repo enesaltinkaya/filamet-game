@@ -1,0 +1,42 @@
+<html>
+
+<head>
+  <link type="text/rcss" href="../milligram.css" />
+  <link type="text/rcss" href="pauseMenu.css" />
+  <script src="pauseMenu.lua"></script>
+  <script src="../global.lua"></script>
+</head>
+
+<!-- The in-game menu: a separate document from gui/mainMenu (the old engine's
+     pauseMenu). ESC while it is showing is handled by the focused document's
+     onkeydown below (pauseKeyDown -> pauseReturnToGame); the SETTINGS button
+     opens the settings slide-over over this document. -->
+<body id="pauseMenu" onkeydown="pauseKeyDown(event)" onload="documentInit(element)">
+  <div class="main">
+    <div class="top">
+      <span>Game Menu</span>
+    </div>
+
+    <div class="middle">
+      <div class="buttonContainer">
+        <button id="first" autofocus onclick="pauseSettingsOpen()">
+          <div>SETTINGS</div>
+        </button>
+
+        <div class="spacer"></div>
+
+        <button onclick="pauseExitGame()">
+          <div>MAIN MENU</div>
+        </button>
+
+        <div class="spacer spacer-large"></div>
+
+        <button id="last" onclick="pauseReturnToGame()">
+          <div>RETURN TO GAME</div>
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>
