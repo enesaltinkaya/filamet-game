@@ -22,9 +22,6 @@ struct GraphicsSettings {
     float ssaoIntensity = 1.0f;   // 0..2 composite strength (ao.r multiply)
     bool bloom = true;
     float vignette = 0.7f;         // 0..1
-    bool dof = false;
-    float dofFocus = 10.0f;        // focus distance in metres
-    int dofQuality = 4;            // 1..8 gather rings
     bool fog = true;
 };
 

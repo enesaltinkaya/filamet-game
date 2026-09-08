@@ -6,9 +6,7 @@ local cycleHandlers = {
   toggleSsaoAlgorithm = { prev = "toggleSsaoAlgorithmPrev", next = "toggleSsaoAlgorithm" },
   toggleSss       = { prev = "toggleSss",           next = "toggleSss" },
   toggleBloom     = { prev = "toggleBloom",       next = "toggleBloom" },
-  toggleFog       = { prev = "toggleFog",         next = "toggleFog" },
   toggleTaa       = { prev = "toggleTaa",         next = "toggleTaa" },
-  toggleFogMode   = { prev = "toggleFogMode",       next = "toggleFogMode" },
 }
 
 function graphicsSettingsKeyDown(event)

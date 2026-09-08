@@ -211,9 +211,6 @@ static GraphicsSettings graphicsNormalize(GraphicsSettings s) {
     if (s.ssaoIntensity > 2.0f) s.ssaoIntensity = 2.0f;
     if (s.vignette < 0.0f) s.vignette = 0.0f;
     if (s.vignette > 1.0f) s.vignette = 1.0f;
-    if (s.dofQuality < 1) s.dofQuality = 1;
-    if (s.dofQuality > 8) s.dofQuality = 8;
-    if (s.dofFocus < 0.1f) s.dofFocus = 0.1f;
     return s;
 }
 
@@ -243,9 +240,6 @@ void rendererGraphicsLoad(void) {
     s.ssaoIntensity = (float)utils::settingsGetDouble("ssaoIntensity");
     s.bloom         = !utils::settingsGetBool("bloomDisabled");
     s.vignette      = (float)(utils::settingsGetDouble("lensVignette") / 100.0);
-    s.dof           = utils::settingsGetBool("dofEnabled");
-    s.dofFocus      = (float)utils::settingsGetDouble("dofFocus");
-    s.dofQuality    = (int)utils::settingsGetDouble("dofQuality");
     s.fog           = utils::settingsGetDouble("fogMode") > 0.5;
     rendererGraphicsApply(s);
 }

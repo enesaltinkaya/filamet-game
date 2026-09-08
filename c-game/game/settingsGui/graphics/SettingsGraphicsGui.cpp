@@ -34,15 +34,6 @@ static int   ssaoAlgorithm         = 0;      // 0=GTAO 1=HBAO 2=VBAO
 static float ssaoIntensity         = 1.0f;   // AO composite strength 0..2
 static char  giEnabled             = 1;
 static char  bloomEnabled          = 1;
-static char  lensEnabled           = 1;
-static char  lensParamsDisabled    = 0;
-static float lensGrainPercent      = 0.0f;
-static float lensChromAbPercent    = 0.0f;
-static float lensVignettePercent   = 0.0f;
-static char  dofEnabled            = 0;
-static char  dofParamsDisabled     = 1;
-static float dofQuality            = 1.0f;
-static int   fogMode               = 1;       // Fog
 
 static const char* shadowModeNames[] = {
     "Off",
@@ -61,10 +52,6 @@ static const char* ssaoAlgorithmNames[] = {
     "HBAO",
     "VBAO",
 };
-static const char* fogModeNames[] = {
-    "Off",
-    "Fog",
-};
 
 static char* shadowsLabel;
 static char* shadowQualityLabel;
@@ -72,9 +59,6 @@ static char* aoLabel;
 static char* ssaoAlgorithmLabel;
 static char* giLabel;
 static char* bloomLabel;
-static char* lensLabel;
-static char* dofLabel;
-static char* fogLabel;
 static char* taaLabel;
 static char shadowsLabelText[16];
 static char shadowQualityLabelText[16];
@@ -82,9 +66,6 @@ static char aoLabelText[16];
 static char ssaoAlgorithmLabelText[16];
 static char giLabelText[16];
 static char bloomLabelText[16];
-static char lensLabelText[16];
-static char dofLabelText[16];
-static char fogLabelText[16];
 static char taaLabelText[16];
 
 static void syncLabels(void);
@@ -93,10 +74,6 @@ static int taaWeightChange(void* _);
 static int casStrengthChange(void* _);
 static int ssaoRadiusChange(void* _);
 static int ssaoIntensityChange(void* _);
-static int toggleLens(void* _);
-static int lensParamChange(void* _);
-static int toggleDof(void* _);
-static int dofParamChange(void* _);
 static int graphicsClose(void* _);
 static int toggleShadows(void* _);
 static int toggleShadowsPrev(void* _);
@@ -107,18 +84,14 @@ static int toggleSsaoAlgorithm(void* _);
 static int toggleSsaoAlgorithmPrev(void* _);
 static int toggleGi(void* _);
 static int toggleBloom(void* _);
-static int toggleFog(void* _);
 static int toggleTaa(void* _);
 
 // ── renderer + persistence plumbing ─────────────────────────────────────────
 
 // Push the page state to the live renderer. rendererGraphicsApply normalizes
 // (clamps/snaps) and stores the applied copy, so the page and the startup
-// load always agree on the effective values. Backends ignore fields they
-// have no equivalent for yet (RenderBackend::applyGraphicsSettings) — until
-// a pass lands, its toggle is apply+persist only. lensGrain/lensChromAb have
-// no GraphicsSettings field at all: persist-only, like the old engine's
-// grain/CA (only the vignette rides the settings block).
+// load always agree on the effective values. Fields the page no longer has
+// controls for (fog, vignette) keep the renderer's current values.
 static void applyRenderer(void) {
     auto g          = engine::renderer::rendererGraphicsSettings();
     g.taa           = taaEnabled != 0;
@@ -132,10 +105,6 @@ static void applyRenderer(void) {
     g.ssaoAlgorithm = ssaoAlgorithm;
     g.ssaoIntensity = ssaoIntensity;
     g.bloom         = bloomEnabled != 0;
-    g.vignette      = lensVignettePercent / 100.0f;
-    g.dof           = dofEnabled != 0;
-    g.dofQuality    = (int)dofQuality;
-    g.fog           = fogMode != 0;
     engine::renderer::rendererGraphicsApply(g);
 }
 
@@ -169,8 +138,6 @@ static void persistDouble(const char* key, double value) {
 static double lastChange = 0.0;
 static char   dirtyScale = 0;
 static char   dirtyAA    = 0;
-static char   dirtyLens  = 0;
-static char   dirtyDof   = 0;
 static char   dirtySsao  = 0;
 
 static void markSliderDirty(char* dirty) {
@@ -179,19 +146,15 @@ static void markSliderDirty(char* dirty) {
 }
 
 static void applySliderChanges(void) {
-    if (!(dirtyScale | dirtyAA | dirtyLens | dirtyDof | dirtySsao)) {
+    if (!(dirtyScale | dirtyAA | dirtySsao)) {
         return;
     }
-    dirtyScale = dirtyAA = dirtyLens = dirtyDof = dirtySsao = 0;
+    dirtyScale = dirtyAA = dirtySsao = 0;
 
     applyRenderer();
     persistDouble("renderScale", renderScalePercent / 100.0);
     persistDouble("taaWeight", taaWeightPercent / 100.0);
     persistDouble("casStrength", casStrengthPercent / 100.0);
-    persistDouble("lensGrain", lensGrainPercent);
-    persistDouble("lensChromAb", lensChromAbPercent);
-    persistDouble("lensVignette", lensVignettePercent);
-    persistDouble("dofQuality", dofQuality);
     persistDouble("ssaoRadius", ssaoRadius);
     persistDouble("ssaoIntensity", ssaoIntensity);
 
@@ -220,11 +183,6 @@ void SettingsGraphicsGui::added() {
     engine::luaRegisterFunction("ssaoIntensityChange", ssaoIntensityChange);
     engine::luaRegisterFunction("toggleGi", toggleGi);
     engine::luaRegisterFunction("toggleBloom", toggleBloom);
-    engine::luaRegisterFunction("toggleLens", toggleLens);
-    engine::luaRegisterFunction("lensParamChange", lensParamChange);
-    engine::luaRegisterFunction("toggleDof", toggleDof);
-    engine::luaRegisterFunction("dofParamChange", dofParamChange);
-    engine::luaRegisterFunction("toggleFog", toggleFog);
     engine::luaRegisterFunction("toggleTaa", toggleTaa);
 
     // Seed from the persisted settings (not the renderer's normalized block)
@@ -242,21 +200,11 @@ void SettingsGraphicsGui::added() {
     ssaoIntensity        = (float)utils::settingsGetDouble("ssaoIntensity");
     giEnabled            = (char)!utils::settingsGetBool("giDisabled");
     bloomEnabled         = (char)!utils::settingsGetBool("bloomDisabled");
-    fogMode              = (int)utils::settingsGetDouble("fogMode");
-    lensEnabled          = (char)utils::settingsGetBool("lensEnabled");
-    lensGrainPercent     = (float)utils::settingsGetDouble("lensGrain");
-    lensChromAbPercent   = (float)utils::settingsGetDouble("lensChromAb");
-    lensVignettePercent  = (float)utils::settingsGetDouble("lensVignette");
-    dofEnabled           = (char)utils::settingsGetBool("dofEnabled");
-    dofQuality           = (float)utils::settingsGetDouble("dofQuality");
-    lensParamsDisabled   = !lensEnabled;
-    dofParamsDisabled    = !dofEnabled;
     // clamp hand-edited files (the renderer re-clamps its own copy on apply)
     if (shadowsMode < 0 || shadowsMode > 4) shadowsMode = 1;
     if (shadowsQuality < 0 || shadowsQuality > 2) shadowsQuality = 2;
     if (ssaoAlgorithm < 0 || ssaoAlgorithm > 2) ssaoAlgorithm = 0;
     shadowQualityDisabled = shadowsMode == 0;
-    if (fogMode < 0 || fogMode > 1) fogMode = 1;
     syncLabels();
 
     model = rmlCreateModel("graphics");
@@ -265,12 +213,6 @@ void SettingsGraphicsGui::added() {
     rmlBindFloat(model, "casStrengthPercent", &casStrengthPercent);
     rmlBindFloat(model, "ssaoRadius", &ssaoRadius);
     rmlBindFloat(model, "ssaoIntensity", &ssaoIntensity);
-    rmlBindBool(model, "lensParamsDisabled", &lensParamsDisabled);
-    rmlBindFloat(model, "lensGrainPercent", &lensGrainPercent);
-    rmlBindFloat(model, "lensChromAbPercent", &lensChromAbPercent);
-    rmlBindFloat(model, "lensVignettePercent", &lensVignettePercent);
-    rmlBindBool(model, "dofParamsDisabled", &dofParamsDisabled);
-    rmlBindFloat(model, "dofQuality", &dofQuality);
     rmlBind(model, "shadowsLabel", &shadowsLabel);
     rmlBind(model, "shadowQualityLabel", &shadowQualityLabel);
     rmlBindBool(model, "shadowQualityDisabled", &shadowQualityDisabled);
@@ -278,9 +220,6 @@ void SettingsGraphicsGui::added() {
     rmlBind(model, "ssaoAlgorithmLabel", &ssaoAlgorithmLabel);
     rmlBind(model, "giLabel", &giLabel);
     rmlBind(model, "bloomLabel", &bloomLabel);
-    rmlBind(model, "lensLabel", &lensLabel);
-    rmlBind(model, "dofLabel", &dofLabel);
-    rmlBind(model, "fogLabel", &fogLabel);
     rmlBind(model, "taaLabel", &taaLabel);
 
     document = rmlNewDocument("gui/settings/graphics/graphics.html");
@@ -306,15 +245,10 @@ void SettingsGraphicsGui::added() {
             while (shadowsMode != 1) toggleShadows(nullptr);
             while (shadowsQuality != 1) toggleShadowQuality(nullptr);
             while (bloomEnabled) toggleBloom(nullptr);
-            while (fogMode != 0) toggleFog(nullptr);
             renderScalePercent  = 130.0f;
             taaWeightPercent    = 85.0f;
             casStrengthPercent  = 75.0f;
-            lensGrainPercent    = 33.0f;
-            lensChromAbPercent  = 44.0f;
-            lensVignettePercent = 55.0f;
-            dofQuality          = 6.0f;
-            dirtyScale = dirtyAA = dirtyLens = dirtyDof = 1;
+            dirtyScale = dirtyAA = 1;
             lastChange        = 0.0;  // settle on the first update()
             autotestWireClose = 1;
         }
@@ -328,10 +262,10 @@ void SettingsGraphicsGui::update() {
     // Slider settle: apply + persist 50 ms after the last change — always at
     // least one frame after the 'change' event, i.e. after RMLUI wrote the
     // fresh values into the bound floats.
-    if ((dirtyScale | dirtyAA | dirtyLens | dirtyDof | dirtySsao) && utils::millies() > lastChange + 50.0) {
+    if ((dirtyScale | dirtyAA | dirtySsao) && utils::millies() > lastChange + 50.0) {
         applySliderChanges();
     }
-    if (autotestWireClose && !(dirtyScale | dirtyAA | dirtyLens | dirtyDof | dirtySsao)) {
+    if (autotestWireClose && !(dirtyScale | dirtyAA | dirtySsao)) {
         autotestWireClose = 0;
         graphicsClose(nullptr);
     }
@@ -374,12 +308,6 @@ static void syncLabels(void) {
     giLabel = giLabelText;
     snprintf(bloomLabelText, sizeof(bloomLabelText), "%s", bloomEnabled ? "On" : "Off");
     bloomLabel = bloomLabelText;
-    snprintf(lensLabelText, sizeof(lensLabelText), "%s", lensEnabled ? "On" : "Off");
-    lensLabel = lensLabelText;
-    snprintf(dofLabelText, sizeof(dofLabelText), "%s", dofEnabled ? "On" : "Off");
-    dofLabel = dofLabelText;
-    snprintf(fogLabelText, sizeof(fogLabelText), "%s", fogModeNames[fogMode]);
-    fogLabel = fogLabelText;
 }
 
 // ── toggles: the handler computes the new value — apply + persist right away ─
@@ -489,35 +417,6 @@ static int toggleBloom(void* _) {
     return 0;
 }
 
-static int toggleLens(void* _) {
-    lensEnabled        = !lensEnabled;
-    lensParamsDisabled = !lensEnabled;
-    applyRenderer();
-    persistBool("lensEnabled", lensEnabled != 0);
-    syncLabels();
-    rmlUpdateDirtyAll(model);
-    return 0;
-}
-
-static int toggleDof(void* _) {
-    dofEnabled        = !dofEnabled;
-    dofParamsDisabled = !dofEnabled;
-    applyRenderer();
-    persistBool("dofEnabled", dofEnabled != 0);
-    syncLabels();
-    rmlUpdateDirtyAll(model);
-    return 0;
-}
-
-static int toggleFog(void* _) {
-    fogMode = (fogMode + 1) % 2;
-    applyRenderer();
-    persistDouble("fogMode", fogMode);
-    syncLabels();
-    rmlUpdateDirtyAll(model);
-    return 0;
-}
-
 int renderScaleChange(void* _) {
     markSliderDirty(&dirtyScale);
     return 0;
@@ -540,16 +439,6 @@ int ssaoRadiusChange(void* _) {
 
 int ssaoIntensityChange(void* _) {
     markSliderDirty(&dirtySsao);
-    return 0;
-}
-
-int lensParamChange(void* _) {
-    markSliderDirty(&dirtyLens);
-    return 0;
-}
-
-int dofParamChange(void* _) {
-    markSliderDirty(&dirtyDof);
     return 0;
 }
 

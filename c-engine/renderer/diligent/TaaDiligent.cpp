@@ -1174,6 +1174,10 @@ const void* taaPrevCameraAttribs(void) {
     return &camAttribs[1];
 }
 
+const void* taaCurrCameraAttribs(void) {
+    return &camAttribs[0];
+}
+
 ITextureView* taaColorRTV(void) {
     return sceneColorTex ? sceneColorTex->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) : nullptr;
 }
@@ -1352,7 +1356,8 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         }
     }
 
-    if (!taaOn && postFXContext && cameraCB && ssaoReady() && ssaoOn()) {
+    if (!taaOn && postFXContext && cameraCB &&
+            (ssaoReady() && ssaoOn())) {
         const u32 curr = frameIdx & 1;
         const u32 prev = (frameIdx + 1) & 1;
 
@@ -1365,8 +1370,10 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         pa.pMotionVectorsSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         postFXContext->Execute(pa);
 
-        Diligent::ScopedDebugGroup ssaoGroup(ctx, "ssao");
-        ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr));
+        {
+            Diligent::ScopedDebugGroup ssaoGroup(ctx, "ssao");
+            ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr));
+        }
     }
 
     // ENGINE_TAA_DEBUG_MV: blit the raw motion buffer instead of the TAA

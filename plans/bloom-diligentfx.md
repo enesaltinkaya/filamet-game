@@ -10,7 +10,7 @@ texture, no new RTV/PSO, no new shader. Reference:
 `DiligentSamples/Tutorials/Tutorial27_PostProcessing` (integration shape — the
 per-frame `PostFXContext::Execute` → TAA → `ComputeBloom` → `pHDRColorSRV =
 GetBloomTextureSRV()`), and `DiligentFX/Radient` (the high-level pipeline that
-composes bloom after TAA/DoF and before the final tonemap).
+composes bloom after TAA and before the final tonemap).
 
 The one-line delta versus the SSAO plan (`plans/ssao-diligentfx.md`): SSAO
 needed a new world-normal RTV + a multiply-composite pass; bloom's only

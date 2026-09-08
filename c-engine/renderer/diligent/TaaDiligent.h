@@ -65,6 +65,9 @@ float taaCurrentJitterY(void);
 // transpose as their cbuffer convention requires).
 const void* taaPrevCameraAttribs(void);
 
+// This frame's camera attribs (raw storage, as uploaded to the cbuffer).
+const void* taaCurrCameraAttribs(void);
+
 // The per-frame camera translation (eyeCurr - eyePrev) of the last frame,
 // metres. The world passes are camera-anchored (the VS subtracts the CURRENT
 // anchor and reuses that rel for PrevClipPos), so the prev-clip misses this

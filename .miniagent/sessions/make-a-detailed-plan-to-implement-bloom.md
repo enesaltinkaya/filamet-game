@@ -34,7 +34,7 @@ done — wrote the missing deliverable `plans/bloom-diligentfx.md` (mirroring `s
 - **The `bloom` settings flag already flows end-to-end** (`GraphicsSettings.bloom` → `bloomDisabled` key → settings GUI) — the *only* break is `applyGraphicsSettings` (DiligentRenderer.cpp:806-809) not forwarding `s.bloom`. That one line is the entire settings wiring.
 - **No new link target, no pak re-pack.** `libDiligentFX.a` is already in the `--start-group` and `nm` confirms all `Bloom` symbols; bloom reuses the prebuilt lib's `.fx` shaders, so unlike SSAO there's no shader edit / `pak_1.pak` regeneration.
 - **`SsaoDiligent.{h,cpp}` is the proven in-tree template** to copy for `BloomDiligent` (module-statics, `device` extern from DiligentRenderer.h:19, `taaPostFXContext()` accessor, `SKIP_PRECOMPILE_HEADERS` entry at CMakeLists.txt:141).
-- App point verified against both references (Tutorial27 + Radient: bloom runs after TAA/DoF, before the final tonemap), so the plan's placement (after the SSAO composite 1367-1371, before the renderScale downsample 1375-1381) is correct.
+- App point verified against both references (Tutorial27 + Radient: bloom runs after TAA, before the final tonemap), so the plan's placement (after the SSAO composite 1367-1371, before the renderScale downsample 1375-1381) is correct.
 - Main risk flagged: `R11G11B10_FLOAT` (3-channel) output bound to the existing `Texture2D<float4>` blit/CAS/downsample PS — low-risk because the present is opaque and the PS use `.rgb`; verify by screenshot.
 
 ## Remaining steps
