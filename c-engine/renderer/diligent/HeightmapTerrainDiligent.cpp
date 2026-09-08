@@ -1038,7 +1038,8 @@ void fillFrameAttribs(void) {
     renderer.WhitePoint = 3.0f;
     renderer.PrefilteredCubeLastMip = renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentPrefilteredLastMip() : 0.0f;
     renderer.EnvironmentRotation = float2(1.0f, 0.0f);  // no env rotation
-    renderer.IBLScale = float4{1.0f, 1.0f, 1.0f, 1.0f};
+    const f32 iblScale = renderer::diligent::iblDiligentGetIntensity();
+    renderer.IBLScale = float4{iblScale, iblScale, iblScale, 1.0f};
     renderer.HighlightColor = float4{1.0f, 0.0f, 0.0f, 0.0f};
     renderer.UnshadedColor = float4{0.5f, 0.5f, 0.5f, 1.0f};
     renderer.PointSize = 1.0f;

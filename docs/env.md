@@ -93,6 +93,16 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | `ENGINE_DEBUG_CAM`   | any value | Log the camera eye/center/up + view matrix every frame.                               |
 | `ENGINE_RML_PROBE`   | any value | Verbose rmlui log: frame commands/bounding boxes, texture table, per-batch draw info. |
 
+## IBL
+
+| Var                        | Value  | Effect                                                                                                              |
+| -------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------- |
+| `ENGINE_IBL_ENV`           | name   | Environment file from `images/studiolights/` (stem or filename); default `kloofendal_48d_partly_cloudy_puresky_1k`. |
+| `ENGINE_IBL_INTENSITY`     | float  | Global IBL scale (diffuse + specular, each path's IBLScale); also the DebugGui IBL intensity ±0.25 steps.            |
+| `ENGINE_IBL_SPEC_INTENSITY`| float  | Specular-only attenuation: scales the prefiltered env the spec lobe samples; diffuse irradiance stays full.         |
+| `ENGINE_IBL_SPEC_CLAMP`    | float  | Luminance clamp on the specular env copy (default 100, ≤0 disables). Blanks the HDRI's baked sun disk — the analytic |
+|                            |        | sun already supplies that energy; unclamped it prefiltered into a sheen spike on sun-facing reflections.            |
+
 ## GUI (rmlui)
 
 | Var                | Value     | Effect                                                                     |

@@ -1077,7 +1077,9 @@ void fillFrameAttribs(void) {
     // The 3x lift compensates the constant-cube placeholder; the real env
     // cubes carry physical radiance, so scale 1 once IBL is precomputed.
     renderer.IBLScale = renderer::diligent::iblDiligentReady()
-            ? float4{1.0f, 1.0f, 1.0f, 1.0f}
+            ? float4{renderer::diligent::iblDiligentGetIntensity(),
+                     renderer::diligent::iblDiligentGetIntensity(),
+                     renderer::diligent::iblDiligentGetIntensity(), 1.0f}
             : float4{3.0f, 3.0f, 3.0f, 1.0f};
     renderer.HighlightColor = float4{1.0f, 0.0f, 0.0f, 0.0f};
     renderer.UnshadedColor = float4{0.5f, 0.5f, 0.5f, 1.0f};

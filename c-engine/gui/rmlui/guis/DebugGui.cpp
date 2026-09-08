@@ -20,7 +20,8 @@ namespace engine {
 //     renderer::GraphicsSettings (rendererGraphicsApply);
 //   - the IBL env-file prev/next callbacks drive iblDiligentCyclePrev/Next and
 //     the env file label mirrors iblDiligentEnvName;
-//   - everything else without an equivalent here (IBL toggle, intensity,
+//   - the IBL intensity up/down drive iblDiligentSetIntensity (0.25 steps);
+//   - everything else without an equivalent here (IBL toggle,
 //     GI, POM, skybox, grid, reflection, LPM) is an inert stub: the state
 //     stays at its neutral value, the callback just resyncs + refreshes the doc.
 DebugGui debugGui;
@@ -73,6 +74,7 @@ static void syncFromPasses(void) {
         snprintf(iblFileLabelText, sizeof(iblFileLabelText), "none");
     }
     iblFileLabel = iblFileLabelText;
+    iblIntensityValue = renderer::diligent::iblDiligentGetIntensity();
 }
 
 static int refresh(void*) {
@@ -116,8 +118,14 @@ static int toggleVolumetricFog(void* _) {
 static int toggleIBL(void* _)          { return refresh(_); }
 static int iblFilePrev(void* _)        { renderer::diligent::iblDiligentCyclePrev(); return refresh(_); }
 static int iblFileNext(void* _)        { renderer::diligent::iblDiligentCycleNext(); return refresh(_); }
-static int iblIntensityDown(void* _)  { return refresh(_); }
-static int iblIntensityUp(void* _)     { return refresh(_); }
+static int iblIntensityDown(void* _) {
+    renderer::diligent::iblDiligentSetIntensity(renderer::diligent::iblDiligentGetIntensity() - 0.25f);
+    return refresh(_);
+}
+static int iblIntensityUp(void* _) {
+    renderer::diligent::iblDiligentSetIntensity(renderer::diligent::iblDiligentGetIntensity() + 0.25f);
+    return refresh(_);
+}
 static int toggleGi(void* _)           { return refresh(_); }
 static int toggleReflection(void* _)   { return refresh(_); }
 static int toggleSkybox(void* _)       { return refresh(_); }

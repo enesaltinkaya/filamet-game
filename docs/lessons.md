@@ -9,6 +9,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 - `ShaderCreateInfo.Source` is inline source, the stream-factory path is `FilePath` — a filename in `Source` compiles as code (":1: 'declaration' : Expected")
 - FX explicit sampler variables are named `<texture>_sampler` — `AddImmutableSampler` with the bare texture name leaves `g_EnvironmentMap_sampler` unbound ("No resource is assigned to static shader variable ... Implicit signature" + VUID-08114 per draw)
 - Envmap prefilter cubemap mips = full chain for the dim (256² → 9; 16 trips VUID-mipLevels-00958/02255 and the roughness→mip ramp)
+- IBL sheen too strong: the port dropped the old engine's specular-only IBL damp (0.5) — the prefilter pass now reads a spec-scaled env copy (`envSpecTex`); and the HDRI's own sun disk double-counts the analytic sun (aligned ~8° apart): the spec env copy is luminance-clamped (`ENGINE_IBL_SPEC_CLAMP`, default 100) so the disk no longer prefilters into a sheen spike (4.7× the sans-disk value at roughness 0.54, lobe center). Tune with `ENGINE_IBL_SPEC_INTENSITY` / `ENGINE_IBL_INTENSITY` / DebugGui IBL intensity
 
 ## 2026-09-07 — [entries](lessons/2026-09-07.md)
 

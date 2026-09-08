@@ -37,6 +37,7 @@ const char*  kEnvDirPrefix        = "images/studiolights/";
 const char*  kDefaultEnv          = "kloofendal_48d_partly_cloudy_puresky_1k.exr";
 
 Diligent::RefCntAutoPtr<Diligent::ITexture>      envTex;
+Diligent::RefCntAutoPtr<Diligent::ITexture>      envSpecTex;
 Diligent::RefCntAutoPtr<Diligent::ITexture>      irradianceCube;
 Diligent::RefCntAutoPtr<Diligent::ITexture>      prefilteredCube;
 Diligent::RefCntAutoPtr<Diligent::ITexture>      brdfLut;
@@ -51,6 +52,17 @@ int                                    envIndex     = -1;
 std::string                            envName;
 bool                                   inited     = false;
 bool                                   failed     = false;
+engine::EnvMapImage                    lastEnv;
+
+// Global IBL intensity (diffuse + specular; the old engine's
+// vulkanIblSetIntensity) and the specular-only attenuation (the old
+// engine's IBL_SPEC_INTENSITY). The specular env copy also luminance-clamps
+// the env's baked sun disk: the analytic sun already supplies that energy,
+// and the disk prefiltered into the spec lobe read as a sheen spike on
+// anything reflecting near it.
+float iblIntensity         = 1.0f;
+float iblSpecularIntensity = 0.35f;
+float iblSpecularClamp     = 100.0f;
 
 struct IblPrecomputeAttribs {
     Diligent::float4x4 Rotation;
@@ -245,7 +257,8 @@ void clearCubemap(Diligent::ITexture* cube) {
     });
 }
 
-bool uploadEnvironment(const engine::EnvMapImage& img) {
+bool createEnvTexture(const char* name, const engine::EnvMapImage& img,
+        Diligent::RefCntAutoPtr<Diligent::ITexture>& out) {
     const u32 width = (u32)img.width;
     const u32 height = (u32)img.height;
     u32 mipLevels = 1;
@@ -283,7 +296,7 @@ bool uploadEnvironment(const engine::EnvMapImage& img) {
     data.pContext = context;
 
     Diligent::TextureDesc desc;
-    desc.Name = "IBL environment equirect";
+    desc.Name = name;
     desc.Type = Diligent::RESOURCE_DIM_TEX_2D;
     desc.Usage = Diligent::USAGE_DEFAULT;
     desc.BindFlags = Diligent::BIND_SHADER_RESOURCE;
@@ -292,70 +305,118 @@ bool uploadEnvironment(const engine::EnvMapImage& img) {
     desc.Height = height;
     desc.MipLevels = mipLevels;
 
-    if (envTex) {
+    if (out) {
         if (irradianceSRB)
             Diligent::ShaderResourceVariableX{irradianceSRB, Diligent::SHADER_TYPE_PIXEL, "g_EnvironmentMap"}.Set(nullptr);
         if (prefilterSRB)
             Diligent::ShaderResourceVariableX{prefilterSRB, Diligent::SHADER_TYPE_PIXEL, "g_EnvironmentMap"}.Set(nullptr);
-        envTex = nullptr;
+        out.Release();
     }
 
     Diligent::RefCntAutoPtr<Diligent::ITexture> tex;
     device->CreateTexture(desc, &data, &tex);
     if (!tex) {
-        utils::warn("ibl: env texture creation failed");
+        utils::warn("ibl: env texture creation failed %s", name);
         return false;
     }
     context->GenerateMips(tex->GetDefaultView(Diligent::TEXTURE_VIEW_SHADER_RESOURCE));
     Diligent::StateTransitionDesc barrier{tex, Diligent::RESOURCE_STATE_UNKNOWN,
             Diligent::RESOURCE_STATE_SHADER_RESOURCE, Diligent::STATE_TRANSITION_FLAG_UPDATE_STATE};
     context->TransitionResourceState(barrier);
-    envTex = tex.Detach();
+    out = tex.Detach();
     return true;
 }
 
+bool uploadEnvironment(const engine::EnvMapImage& img) {
+    return createEnvTexture("IBL environment equirect", img, envTex);
+}
+
+// The specular IBL (prefiltered env) reads a scaled copy of the environment:
+// the diffuse (irradiance) pass keeps full strength, only the spec lobe is
+// attenuated (the old engine's IBL_SPEC_INTENSITY, applied to the prefilter
+// source so no per-frame uniform is needed). The copy also luminance-clamps
+// the env's baked sun disk: with the analytic sun aligned ~8 deg from the
+// disk, the prefiltered spec picked up a double-counted sun sheen (measured
+// 4.7x the sans-disk value at roughness 0.54).
+bool uploadSpecEnvironment(void) {
+    engine::EnvMapImage scaled;
+    scaled.width  = lastEnv.width;
+    scaled.height = lastEnv.height;
+    scaled.pixels.resize(lastEnv.pixels.size());
+    for (size_t i = 0; i < lastEnv.pixels.size(); i += 4) {
+        f32 r = lastEnv.pixels[i];
+        f32 g = lastEnv.pixels[i + 1];
+        f32 b = lastEnv.pixels[i + 2];
+        if (iblSpecularClamp > 0.0f) {
+            const f32 lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            if (lum > iblSpecularClamp) {
+                const f32 k = iblSpecularClamp / lum;
+                r *= k;
+                g *= k;
+                b *= k;
+            }
+        }
+        scaled.pixels[i]     = r * iblSpecularIntensity;
+        scaled.pixels[i + 1] = g * iblSpecularIntensity;
+        scaled.pixels[i + 2] = b * iblSpecularIntensity;
+        scaled.pixels[i + 3] = lastEnv.pixels[i + 3];
+    }
+    return createEnvTexture("IBL environment equirect (specular)", scaled, envSpecTex);
+}
+
+// +X -X +Y -Y +Z -Z
+static const Diligent::float4x4 kFaceMats[6] = {
+    Diligent::float4x4::RotationY(-Diligent::PI_F / 2.0f),
+    Diligent::float4x4::RotationY(+Diligent::PI_F / 2.0f),
+    Diligent::float4x4::RotationX(+Diligent::PI_F / 2.0f),
+    Diligent::float4x4::RotationX(-Diligent::PI_F / 2.0f),
+    Diligent::float4x4::Identity(),
+    Diligent::float4x4::RotationY(-Diligent::PI_F),
+};
+
+void runEnvPass(Diligent::IPipelineState* pso, Diligent::IShaderResourceBinding* srb,
+        Diligent::ITexture* cube, unsigned numSamples, bool perMipRoughness,
+        Diligent::ITexture* envSrc) {
+    const Diligent::TextureDesc& envDesc = envSrc->GetDesc();
+    context->SetPipelineState(pso);
+    Diligent::ITextureView* srv = envSrc->GetDefaultView(Diligent::TEXTURE_VIEW_SHADER_RESOURCE);
+    Diligent::ShaderResourceVariableX{ srb, Diligent::SHADER_TYPE_PIXEL, "g_EnvironmentMap" }.Set(srv);
+    context->CommitShaderResources(srb, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    Diligent::ShaderResourceVariableX cb{srb, Diligent::SHADER_TYPE_VERTEX, "cbConstants"};
+    processCubemapFaces(cube, [&cb, cube, numSamples, perMipRoughness, &envDesc](
+                    Diligent::ITextureView*, u32 mip, u32 face) {
+        IblPrecomputeAttribs a;
+        a.Rotation = kFaceMats[face];
+        a.EnvMapUVScaleBias = {1.0f, 1.0f, 0.0f, 0.0f};
+        a.Roughness = perMipRoughness && cube->GetDesc().MipLevels > 1 ?
+                (float)mip / (float)(cube->GetDesc().MipLevels - 1) : 0.0f;
+        a.EnvMapWidth = (float)envDesc.Width;
+        a.EnvMapHeight = (float)envDesc.Height;
+        a.EnvMipCount = (float)envDesc.MipLevels;
+        a.EnvMapSlice = 0.0f;
+        a.NumSamples = numSamples;
+        a.SphereMapRow0IsNegativeY = 0;
+        a.Padding = 0;
+        cb.SetInlineConstants(&a, 0, sizeof(a) / sizeof(Diligent::Uint32));
+        context->Draw(Diligent::DrawAttribs{4, Diligent::DRAW_FLAG_VERIFY_ALL});
+    });
+    Diligent::ShaderResourceVariableX{ srb, Diligent::SHADER_TYPE_PIXEL, "g_EnvironmentMap" }.Set(nullptr);
+}
+
+// Re-run the prefilter pass (reads envSpecTex, the specular-scaled env).
+void recomputePrefilter(void) {
+    if (!envSpecTex || !prefilteredCube) {
+        return;
+    }
+    runEnvPass(prefilterPSO, prefilterSRB, prefilteredCube, kSpecularSamples, true, envSpecTex);
+    Diligent::StateTransitionDesc barrier{prefilteredCube, Diligent::RESOURCE_STATE_UNKNOWN,
+            Diligent::RESOURCE_STATE_SHADER_RESOURCE, Diligent::STATE_TRANSITION_FLAG_UPDATE_STATE};
+    context->TransitionResourceState(barrier);
+}
+
 void precomputeCubemaps(void) {
-    const Diligent::TextureDesc& envDesc = envTex->GetDesc();
-
-    // +X -X +Y -Y +Z -Z
-    static const Diligent::float4x4 kFaceMats[6] = {
-        Diligent::float4x4::RotationY(-Diligent::PI_F / 2.0f),
-        Diligent::float4x4::RotationY(+Diligent::PI_F / 2.0f),
-        Diligent::float4x4::RotationX(+Diligent::PI_F / 2.0f),
-        Diligent::float4x4::RotationX(-Diligent::PI_F / 2.0f),
-        Diligent::float4x4::Identity(),
-        Diligent::float4x4::RotationY(-Diligent::PI_F),
-    };
-
-    auto runPass = [&](Diligent::IPipelineState* pso, Diligent::IShaderResourceBinding* srb,
-            Diligent::ITexture* cube, unsigned numSamples, bool perMipRoughness) {
-        context->SetPipelineState(pso);
-        Diligent::ITextureView* srv = envTex->GetDefaultView(Diligent::TEXTURE_VIEW_SHADER_RESOURCE);
-        Diligent::ShaderResourceVariableX{ srb, Diligent::SHADER_TYPE_PIXEL, "g_EnvironmentMap" }.Set(srv);
-        context->CommitShaderResources(srb, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        Diligent::ShaderResourceVariableX cb{srb, Diligent::SHADER_TYPE_VERTEX, "cbConstants"};
-        processCubemapFaces(cube, [&cb, cube, numSamples, perMipRoughness, &envDesc](
-                        Diligent::ITextureView*, u32 mip, u32 face) {
-            IblPrecomputeAttribs a;
-            a.Rotation = kFaceMats[face];
-            a.EnvMapUVScaleBias = {1.0f, 1.0f, 0.0f, 0.0f};
-            a.Roughness = perMipRoughness && cube->GetDesc().MipLevels > 1 ?
-                    (float)mip / (float)(cube->GetDesc().MipLevels - 1) : 0.0f;
-            a.EnvMapWidth = (float)envDesc.Width;
-            a.EnvMapHeight = (float)envDesc.Height;
-            a.EnvMipCount = (float)envDesc.MipLevels;
-            a.EnvMapSlice = 0.0f;
-            a.NumSamples = numSamples;
-            a.SphereMapRow0IsNegativeY = 0;
-            a.Padding = 0;
-            cb.SetInlineConstants(&a, 0, sizeof(a) / sizeof(Diligent::Uint32));
-            context->Draw(Diligent::DrawAttribs{4, Diligent::DRAW_FLAG_VERIFY_ALL});
-        });
-        Diligent::ShaderResourceVariableX{ srb, Diligent::SHADER_TYPE_PIXEL, "g_EnvironmentMap" }.Set(nullptr);
-    };
-
-    runPass(irradiancePSO, irradianceSRB, irradianceCube, kDiffuseSamples, false);
-    runPass(prefilterPSO, prefilterSRB, prefilteredCube, kSpecularSamples, true);
+    runEnvPass(irradiancePSO, irradianceSRB, irradianceCube, kDiffuseSamples, false, envTex);
+    recomputePrefilter();
 
     context->SetPipelineState(brdfPSO);
     Diligent::ITextureView* lutRtv = brdfLut->GetDefaultView(Diligent::TEXTURE_VIEW_RENDER_TARGET);
@@ -389,6 +450,10 @@ bool loadEnvironment(const char* path) {
     }
 
     if (!uploadEnvironment(img)) {
+        return false;
+    }
+    lastEnv = img;
+    if (!uploadSpecEnvironment()) {
         return false;
     }
     precomputeCubemaps();
@@ -447,6 +512,21 @@ void iblDiligentInit(void) {
         return;
     }
     inited = true;
+    if (const char* v = getenv("ENGINE_IBL_INTENSITY")) {
+        iblIntensity = (f32)atof(v);
+    }
+    if (const char* v = getenv("ENGINE_IBL_SPEC_INTENSITY")) {
+        iblSpecularIntensity = (f32)atof(v);
+    }
+    if (const char* v = getenv("ENGINE_IBL_SPEC_CLAMP")) {
+        iblSpecularClamp = (f32)atof(v);
+    }
+    if (iblIntensity < 0.0f) {
+        iblIntensity = 0.0f;
+    }
+    if (iblSpecularIntensity < 0.0f) {
+        iblSpecularIntensity = 0.0f;
+    }
     if (!device || !context) {
         utils::warn("ibl: no device/context, IBL stays off");
         failed = true;
@@ -519,6 +599,8 @@ void iblDiligentDestroy(void) {
     prefilterPSO.Release();
     brdfPSO.Release();
     envTex.Release();
+    envSpecTex.Release();
+    lastEnv = engine::EnvMapImage();
     irradianceCube.Release();
     prefilteredCube.Release();
     brdfLut.Release();
@@ -546,6 +628,43 @@ f32 iblDiligentPrefilteredLastMip(void) {
 
 const char* iblDiligentEnvName(void) {
     return envName.c_str();
+}
+
+// Global IBL intensity (scales the diffuse + specular IBL together; applied
+// through each path's IBLScale).
+f32 iblDiligentGetIntensity(void) {
+    return iblIntensity;
+}
+
+void iblDiligentSetIntensity(f32 intensity) {
+    if (intensity < 0.0f) {
+        intensity = 0.0f;
+    }
+    iblIntensity = intensity;
+}
+
+// Specular-only IBL attenuation (the old engine's IBL_SPEC_INTENSITY): scales
+// the prefiltered environment the spec lobe samples, leaving the diffuse
+// irradiance at full strength. Changing it re-runs the prefilter pass.
+f32 iblDiligentGetSpecularIntensity(void) {
+    return iblSpecularIntensity;
+}
+
+void iblDiligentSetSpecularIntensity(f32 intensity) {
+    if (intensity < 0.0f) {
+        intensity = 0.0f;
+    }
+    if (intensity == iblSpecularIntensity) {
+        return;
+    }
+    iblSpecularIntensity = intensity;
+    if (!inited || failed || !iblDiligentReady() || lastEnv.pixels.empty()) {
+        return;
+    }
+    if (!uploadSpecEnvironment()) {
+        return;
+    }
+    recomputePrefilter();
 }
 
 void iblDiligentCycleNext(void) {
