@@ -4,6 +4,7 @@
 #include "ecs/system/lua/LuaSystem.h"
 #include "gui/rmlui/GuiManagerRmlUi.h"
 #include "renderer/Renderer.h"
+#include "renderer/diligent/IblDiligent.h"
 
 #include "crmlui.h"
 
@@ -17,9 +18,11 @@ namespace engine {
 // Diligent backend actually exposes:
 //   - shadows / bloom / ssao / ssr(GI) / fog drive
 //     renderer::GraphicsSettings (rendererGraphicsApply);
-//   - everything without an equivalent here (IBL, POM, skybox, grid,
-//     reflection, LPM) is an inert stub: the state stays at
-//     its neutral value, the callback just resyncs + refreshes the doc.
+//   - the IBL env-file prev/next callbacks drive iblDiligentCyclePrev/Next and
+//     the env file label mirrors iblDiligentEnvName;
+//   - everything else without an equivalent here (IBL toggle, intensity,
+//     POM, skybox, grid, reflection, LPM) is an inert stub: the state stays
+//     at its neutral value, the callback just resyncs + refreshes the doc.
 DebugGui debugGui;
 
 DebugGui::DebugGui() : System("debugGui") {}
@@ -44,8 +47,6 @@ static char iblEnabled        = 0;
 static char* tonemapLabel;
 static char iblFileLabelText[128] = {0};
 static char* iblFileLabel;
-static char iblSunLabelText[64]   = {0};
-static char* iblSunLabel;
 static float iblIntensityValue = 0.0f;
 
 /* LPM tone/gamut sliders: inert in this engine (the Diligent backend uses
@@ -66,10 +67,13 @@ static void syncFromPasses(void) {
     volumetricFogEnabled = g.fog;
 
     tonemapLabel = (char*)"built-in";
-    snprintf(iblFileLabelText, sizeof(iblFileLabelText), "none");
+    if (renderer::diligent::iblDiligentReady()) {
+        snprintf(iblFileLabelText, sizeof(iblFileLabelText), "%s",
+                renderer::diligent::iblDiligentEnvName());
+    } else {
+        snprintf(iblFileLabelText, sizeof(iblFileLabelText), "none");
+    }
     iblFileLabel = iblFileLabelText;
-    snprintf(iblSunLabelText, sizeof(iblSunLabelText), "-");
-    iblSunLabel = iblSunLabelText;
 }
 
 static int refresh(void*) {
@@ -119,12 +123,8 @@ static int toggleVolumetricFog(void* _) {
 }
 
 static int toggleIBL(void* _)          { return refresh(_); }
-static int iblFilePrev(void* _)        { return refresh(_); }
-static int iblFileNext(void* _)        { return refresh(_); }
-static int iblSunLeft(void* _)         { return refresh(_); }
-static int iblSunRight(void* _)        { return refresh(_); }
-static int iblSunUp(void* _)           { return refresh(_); }
-static int iblSunDown(void* _)         { return refresh(_); }
+static int iblFilePrev(void* _)        { renderer::diligent::iblDiligentCyclePrev(); return refresh(_); }
+static int iblFileNext(void* _)        { renderer::diligent::iblDiligentCycleNext(); return refresh(_); }
 static int iblIntensityDown(void* _)  { return refresh(_); }
 static int iblIntensityUp(void* _)     { return refresh(_); }
 static int toggleReflection(void* _)   { return refresh(_); }
@@ -150,10 +150,6 @@ void DebugGui::added() {
     luaRegisterFunction("debugToggleIBL", toggleIBL);
     luaRegisterFunction("debugIblFilePrev", iblFilePrev);
     luaRegisterFunction("debugIblFileNext", iblFileNext);
-    luaRegisterFunction("debugIblSunLeft", iblSunLeft);
-    luaRegisterFunction("debugIblSunRight", iblSunRight);
-    luaRegisterFunction("debugIblSunUp", iblSunUp);
-    luaRegisterFunction("debugIblSunDown", iblSunDown);
     luaRegisterFunction("debugIblIntensityDown", iblIntensityDown);
     luaRegisterFunction("debugIblIntensityUp", iblIntensityUp);
     luaRegisterFunction("debugToggleSkybox", toggleSkybox);
@@ -172,7 +168,6 @@ void DebugGui::added() {
     rmlBind(model, "bloomEnabled", &bloomEnabled);
     rmlBind(model, "iblEnabled", &iblEnabled);
     rmlBind(model, "iblFileLabel", &iblFileLabel);
-    rmlBind(model, "iblSunLabel", &iblSunLabel);
     rmlBind(model, "iblIntensityValue", &iblIntensityValue);
     rmlBind(model, "skyboxEnabled", &skyboxEnabled);
     rmlBind(model, "gridEnabled", &gridEnabled);

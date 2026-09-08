@@ -10,6 +10,7 @@
 #include "renderer/RenderBackend.h"
 #include "renderer/Renderer.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 
@@ -134,7 +135,19 @@ struct DeferredDestroy {
 IPipelineState*        pipeline = nullptr;
 IPipelineResourceSignature* prs = nullptr;
 IShaderResourceBinding* srb = nullptr;
+// The SSR gbuffer pass renders the GBUFFER_OUTPUT build of the lit PS, which
+// samples none of the CSM shadow-map resources. The lit PRS therefore
+// declares two bindings the gbuffer shader never uses, and the Vulkan
+// backend's per-PSO layout optimization drops them: the gbuffer PSO's set
+// layout ends up with 16 descriptors while the shared SRB carries 18,
+// tripping VUID-vkCmdBindDescriptorSets-pDescriptorSets-00358 and leaving
+// the gbuffer undefined. A dedicated PRS/SRB built from exactly gResources
+// (the 16 bindings the gbuffer PS's layout keeps) binds cleanly, so the
+// SSR pass gets its own signature instead of reusing the lit pass' one.
+IPipelineResourceSignature* gbufferPrs = nullptr;
+IShaderResourceBinding*     gbufferSrb = nullptr;
 IShaderResourceVariable* prsVar(SHADER_TYPE stage, const char* name);
+void setBothVar(SHADER_TYPE stage, const char* name, IDeviceObject* res);
 IShader*               vs = nullptr;
 IShader*               ps = nullptr;
 
@@ -340,13 +353,13 @@ void rebuildIblCubes(const f32 color[3], f32 intensity) {
     if (iblPrefiltered) iblPrefiltered->Release();
     iblIrradiance  = irr;
     iblPrefiltered = pf;
-    if (prs) {
-        if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_IblIrradiance"))
-            v->Set(irr->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
-                    SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-        if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_IblPrefiltered"))
-            v->Set(pf->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
-                    SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    if (irr) {
+        setBothVar(SHADER_TYPE_PIXEL, "g_IblIrradiance",
+                irr->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+    }
+    if (pf) {
+        setBothVar(SHADER_TYPE_PIXEL, "g_IblPrefiltered",
+                pf->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     }
     rebuildSharedSRB();
 }
@@ -414,31 +427,61 @@ void rebuildSharedSRB(void) {
     IShaderResourceBinding* old = srb;
     srb = newSrb;
     if (old) old->Release();
+
+    // The gbuffer SRB is pure-static (no shadow-map entry in its PRS), so it
+    // only needs recreating when the PRS statics moved.
+    if (gbufferPrs) {
+        IShaderResourceBinding* newGbSrb = nullptr;
+        gbufferPrs->CreateShaderResourceBinding(&newGbSrb, true);
+        if (!newGbSrb) {
+            utils::warn("heightmapTerrain: gbuffer SRB creation failed");
+        } else {
+            IShaderResourceBinding* oldGb = gbufferSrb;
+            gbufferSrb = newGbSrb;
+            if (oldGb) oldGb->Release();
+        }
+    }
 }
 
 // Bind the currently-owned shared resources into the PRS' static variables
 // (ALLOW_OVERWRITE: the look textures, IBL cubes and the GGX LUT change
 // over the pass' lifetime).// Null-safe PRS static-variable lookup (a missing variable is a hard
 // init error; the pass must not crash on it, it must log and degrade).
-IShaderResourceVariable* prsVar(SHADER_TYPE stage, const char* name) {
-    if (!prs) return nullptr;
-    IShaderResourceVariable* v = prs->GetStaticVariableByName(stage, name);
+IShaderResourceVariable* sigVar(IPipelineResourceSignature* sig, SHADER_TYPE stage,
+        const char* name) {
+    if (!sig) return nullptr;
+    IShaderResourceVariable* v = sig->GetStaticVariableByName(stage, name);
     if (!v) {
         utils::warn("heightmapTerrain: no static PRS variable '%s'", name);
     }
     return v;
 }
 
+IShaderResourceVariable* prsVar(SHADER_TYPE stage, const char* name) {
+    return sigVar(prs, stage, name);
+}
+
+// Sets a static on BOTH signatures (lit + SSR gbuffer): the gbuffer PRS
+// declares the same gResources entries, and the look/IBL/GGX resources it
+// shares with the lit pass change over the pass' lifetime, so every rebind
+// must land in both places.
+void setBothVar(SHADER_TYPE stage, const char* name, IDeviceObject* res) {
+    if (IShaderResourceVariable* v = sigVar(prs, stage, name))
+        v->Set(res, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    if (IShaderResourceVariable* v = sigVar(gbufferPrs, stage, name))
+        v->Set(res, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+}
+
 void bindSharedStatics(void) {
-    if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_VERTEX, "cbFrameAttribs"))
+    if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_VERTEX, "cbFrameAttribs"))
+        v->Set(frameAttribsCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_VERTEX, "cbFrameAttribs"))
         v->Set(frameAttribsCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 
     auto bindSRV = [&](const char* name, ITexture* tex) {
         if (!tex) return;  // the slot keeps its previous (fallback) binding
-        IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, name);
-        if (v)
-            v->Set(tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
-                    SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+        setBothVar(SHADER_TYPE_PIXEL, name,
+                tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     };
     for (int i = 0; i < 6; i++) {
         bindSRV(kDefaultTextures[i].srvName, defaultTex[i] ? defaultTex[i] : fallbackTex);
@@ -446,26 +489,31 @@ void bindSharedStatics(void) {
     bindSRV("g_BiomeColor", lookRegistered && biomeColorTex ? biomeColorTex : fallbackTex);
     bindSRV("g_Climate", lookRegistered && climateTex ? climateTex : fallbackTex);
     bindSRV("g_ClimateNearest", lookRegistered && climateTex ? climateTex : fallbackTex);
-    bindSRV("g_IblIrradiance", iblIrradiance);
-    bindSRV("g_IblPrefiltered", iblPrefiltered);
+    bindSRV("g_IblIrradiance", renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentIrradianceCube() : iblIrradiance);
+    bindSRV("g_IblPrefiltered", renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentPrefilteredCube() : iblPrefiltered);
     if (ggxLUT) {
-        if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX"))
-            v->Set(ggxLUT, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+        setBothVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX", ggxLUT);
     } else {
         ITexture* fb = makeGgxFallbackLUT();
         if (fb)
             bindSRV("g_PreintegratedGGX", fb);
     }
-    if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_TilingSampler"))
+    if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_PIXEL, "g_TilingSampler"))
         v->Set(tilingSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_ClampSampler"))
+    if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_PIXEL, "g_ClampSampler"))
         v->Set(clampSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_ClampNearestSampler"))
+    if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_PIXEL, "g_ClampNearestSampler"))
+        v->Set(clampNearestSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_PIXEL, "g_TilingSampler"))
+        v->Set(tilingSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_PIXEL, "g_ClampSampler"))
+        v->Set(clampSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_PIXEL, "g_ClampNearestSampler"))
         v->Set(clampNearestSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 
     // CSM shadow resources: the texture is MUTABLE (bound per SRB in
     // rebuildSharedSRB); the sampler is an IMMUTABLE sampler of the
-    // signature. Nothing to bind here.
+    // signature. Nothing to bind here. (Only the lit PRS has them.)
 }
 
 // Shared 255-segment lattice index buffer (one per engine, all tiles).
@@ -619,8 +667,7 @@ void syncGgxLUT(void) {
         if (lut != ggxLUT) {
             if (ggxLUT) ggxLUT->Release();
             ggxLUT = lut;
-            if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX"))
-                v->Set(ggxLUT, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+            setBothVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX", ggxLUT);
             rebuildSharedSRB();
         } else {
             lut->Release();
@@ -630,9 +677,8 @@ void syncGgxLUT(void) {
         ggxLUT = nullptr;
         ITexture* fb = makeGgxFallbackLUT();
         if (fb) {
-            if (IShaderResourceVariable* v = prsVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX"))
-                v->Set(fb->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
-                        SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+            setBothVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX",
+                    fb->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
             rebuildSharedSRB();
         }
     }
@@ -777,6 +823,21 @@ bool buildLitPipeline(void) {
         utils::warn("heightmapTerrain: resource signature creation failed");
         return false;
     }
+
+    // The SSR gbuffer signature: the same shared gResources, WITHOUT the
+    // shadow-map entries (see the gbufferPrs declaration). It must exist
+    // before bindSharedStatics so the gbuffer statics are complete on the
+    // very first SRB build.
+    PipelineResourceSignatureDesc gbDesc;
+    gbDesc.Resources      = gResources;
+    gbDesc.NumResources   = sizeof(gResources) / sizeof(gResources[0]);
+    gbDesc.BindingIndex   = 0;
+    device->CreatePipelineResourceSignature(gbDesc, &gbufferPrs);
+    if (!gbufferPrs) {
+        utils::warn("heightmapTerrain: gbuffer resource signature creation failed");
+        return false;
+    }
+
     bindSharedStatics();
     rebuildSharedSRB();
     if (!srb) return false;
@@ -833,7 +894,9 @@ void destroyShadowPipeline(void) {
 
 void destroyLitPipeline(void) {
     if (srb) { srb->Release(); srb = nullptr; }
+    if (gbufferSrb) { gbufferSrb->Release(); gbufferSrb = nullptr; }
     if (prs) { prs->Release(); prs = nullptr; }
+    if (gbufferPrs) { gbufferPrs->Release(); gbufferPrs = nullptr; }
     if (pipeline) { pipeline->Release(); pipeline = nullptr; }
     if (vs) { vs->Release(); vs = nullptr; }
     if (ps) { ps->Release(); ps = nullptr; }
@@ -1027,7 +1090,7 @@ void fillFrameAttribs(void) {
     renderer.AverageLogLum = 0.25f;
     renderer.MiddleGray = 0.18f;
     renderer.WhitePoint = 3.0f;
-    renderer.PrefilteredCubeLastMip = 0.0f;  // constant env: one mip
+    renderer.PrefilteredCubeLastMip = renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentPrefilteredLastMip() : 0.0f;
     renderer.EnvironmentRotation = float2(1.0f, 0.0f);  // no env rotation
     renderer.IBLScale = float4{1.0f, 1.0f, 1.0f, 1.0f};
     renderer.HighlightColor = float4{1.0f, 0.0f, 0.0f, 0.0f};
@@ -1465,9 +1528,9 @@ void heightmapTerrainDiligentShadowDrawPSO(void* psoOverride, const FrustumCullP
 
 void heightmapTerrainDiligentGbufferDrawTiles(void* psoOverride) {
     IPipelineState* pso = (IPipelineState*)psoOverride;
-    if (!passReady || !pso || !srb) return;
+    if (!passReady || !pso || !gbufferSrb) return;
     context->SetPipelineState(pso);
-    context->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    context->CommitShaderResources(gbufferSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     context->SetIndexBuffer(latticeIbo, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     for (GpuTile& t : gpuTiles) {
         if (!t.inUse) continue;
@@ -1481,6 +1544,10 @@ void heightmapTerrainDiligentGbufferDrawTiles(void* psoOverride) {
 
 void* heightmapTerrainDiligentPRS(void) {
     return prs;
+}
+
+void* heightmapTerrainDiligentGbufferPRS(void) {
+    return gbufferPrs;
 }
 
 void* heightmapTerrainDiligentLitVS(void) {

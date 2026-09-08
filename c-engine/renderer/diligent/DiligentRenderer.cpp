@@ -19,6 +19,7 @@
 #include "renderer/Window.h"
 #include "renderer/PropsRender.h"
 #include "renderer/diligent/HeightmapTerrainDiligent.h"
+#include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/PropsRenderDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/SsrDiligent.h"
@@ -346,6 +347,7 @@ namespace engine::renderer::diligent {
             cameraLookAt(eye, center, up);
             resize(window.width, window.height);
             taaInit();
+            iblDiligentInit();
             return true;
         }
 
@@ -736,6 +738,7 @@ namespace engine::renderer::diligent {
             ssrDiligentDestroy();
             propsRenderDestroy();
             shadowDiligentDestroy();
+            iblDiligentDestroy();
             guiOnBackendDestroy();
             if (!engine::rmluiDisabled()) {
                 rmluiOnBackendDestroy();

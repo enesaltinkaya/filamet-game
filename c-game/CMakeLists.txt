@@ -36,6 +36,8 @@ target_link_libraries(c-game PRIVATE
     -Wl,--allow-multiple-definition
     ${thirdparty}/stb/${platform_dir}/libstb.a
     ${thirdparty}/ktx/git/${platform_dir}/libktx_read.a
+    ${thirdparty}/openexr/git/${platform_dir}/src/lib/OpenEXRCore/libOpenEXRCore-4_0.a
+    ${thirdparty}/openexr/git/${platform_dir}/external/OpenJPH/src/core/libopenjph.a
 
     # GUI (imgui rendered through imgui_impl_vulkan; yoga for flexbox layout)
     ${thirdparty}/imgui/git/${platform_dir}/libimgui.a

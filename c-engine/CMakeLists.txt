@@ -81,6 +81,13 @@ target_include_directories(c-engine PUBLIC
     ${vulkan_sdk_include}
 )
 
+# openexr (equirect HDR environment decode for IBL precompute)
+target_include_directories(c-engine PUBLIC
+    ${thirdparty}/openexr/git/src/lib/OpenEXRCore
+    ${thirdparty}/openexr/git/${platform_dir}/cmake
+    ${thirdparty}/openexr/git/${platform_dir}/_deps/imath-build/config
+)
+
 # prebuilt Diligent static libraries — linked by c-game (one --start-group on
 # the exe)
 set(DILIGENT_LIBS
@@ -128,6 +135,7 @@ target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 set_source_files_properties(
     renderer/diligent/DiligentRenderer.cpp
     renderer/diligent/HeightmapTerrainDiligent.cpp
+    renderer/diligent/IblDiligent.cpp
     renderer/diligent/PropsRenderDiligent.cpp
     renderer/diligent/SsrDiligent.cpp
     renderer/diligent/ShadowDiligent.cpp

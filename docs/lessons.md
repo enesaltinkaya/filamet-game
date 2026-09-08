@@ -4,6 +4,12 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-08 — [entries](lessons/2026-09-08.md)
+
+- `ShaderCreateInfo.Source` is inline source, the stream-factory path is `FilePath` — a filename in `Source` compiles as code (":1: 'declaration' : Expected")
+- FX explicit sampler variables are named `<texture>_sampler` — `AddImmutableSampler` with the bare texture name leaves `g_EnvironmentMap_sampler` unbound ("No resource is assigned to static shader variable ... Implicit signature" + VUID-08114 per draw)
+- Envmap prefilter cubemap mips = full chain for the dim (256² → 9; 16 trips VUID-mipLevels-00958/02255 and the roughness→mip ramp)
+
 ## 2026-09-07 — [entries](lessons/2026-09-07.md)
 
 - Camera-anchored casters must rebuild their placement with THIS frame's anchor before the shadow pass (`poseRebuild()` in `gltfDiligentShadowDraw`): the shadow pass runs before `worldDraw`, so the player caster was pinned to last frame's anchor — displaced by dEye (m/s during an orbit drag), and TAA's history makes the detached shadow converge for ~0.5 s after the drag stops

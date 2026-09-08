@@ -457,7 +457,11 @@ PSTerrainOut main(in PSTerrainIn vs)
     // Roughness follows the same material chain (snow smooth, sand rough).
     roughness = lerp(roughness, 0.6, snowT);
     roughness = lerp(roughness, 0.85, beachT);
-    roughness *= 0.15;
+    roughness *= 0.05;
+    // Keep the terrain glossy so the screen-space reflection reads: a matte
+    // dielectric spreads the GGX lobe into an imperceptible sheen, so SSR
+    // needs a smooth (low-roughness) surface to show a visible reflection.
+    roughness = min(roughness, 0.08);
 
     // Micro-band roughness: perturb the shading normal with the 4-32 m value
     // noise (finite differences, 0.5 m step). Does not move geometry. Two

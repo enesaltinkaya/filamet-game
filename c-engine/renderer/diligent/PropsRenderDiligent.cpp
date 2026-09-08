@@ -5,6 +5,7 @@
 #include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "renderer/diligent/HeightmapTerrainDiligent.h"
+#include "renderer/diligent/IblDiligent.h"
 #include "ecs/system/player/Player.h"
 #include "gltf/GltfInternal.h"
 #include "logger/Logger.h"
@@ -367,10 +368,10 @@ void bindSharedStatics(void) {
     if (IShaderResourceVariable* v = prs->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cbFrameAttribs"))
         v->Set(frameAttribsCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     if (IShaderResourceVariable* v = prs->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_IblIrradiance"))
-        v->Set(iblIrradiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
+        v->Set((renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentIrradianceCube() : iblIrradiance)->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
                 SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     if (IShaderResourceVariable* v = prs->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_IblPrefiltered"))
-        v->Set(iblPrefiltered->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
+        v->Set((renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentPrefilteredCube() : iblPrefiltered)->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
                 SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     if (IShaderResourceVariable* v = prs->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_PreintegratedGGX")) {
         if (ggxLUT) {
@@ -1070,13 +1071,13 @@ void fillFrameAttribs(void) {
     renderer.AverageLogLum = 0.25f;
     renderer.MiddleGray = 0.18f;
     renderer.WhitePoint = 3.0f;
-    renderer.PrefilteredCubeLastMip = 0.0f;
+    renderer.PrefilteredCubeLastMip = renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentPrefilteredLastMip() : 0.0f;
     renderer.EnvironmentRotation = float2(1.0f, 0.0f);
-    // Vegetation needs a stronger indirect fill than the terrain's ~1/9-of-sun
-    // ambient: with the shared constant cubes the canopy shadow sides read
-    // near-black (the old engine's props pass rode the scene IBL, which was
-    // effectively brighter on vegetation). ~3x lifts them to a soft mid-green.
-    renderer.IBLScale = float4{3.0f, 3.0f, 3.0f, 1.0f};
+    // The 3x lift compensates the constant-cube placeholder; the real env
+    // cubes carry physical radiance, so scale 1 once IBL is precomputed.
+    renderer.IBLScale = renderer::diligent::iblDiligentReady()
+            ? float4{1.0f, 1.0f, 1.0f, 1.0f}
+            : float4{3.0f, 3.0f, 3.0f, 1.0f};
     renderer.HighlightColor = float4{1.0f, 0.0f, 0.0f, 0.0f};
     renderer.UnshadedColor = float4{0.5f, 0.5f, 0.5f, 1.0f};
     renderer.PointSize = 1.0f;

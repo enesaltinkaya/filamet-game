@@ -19,6 +19,6 @@ if [[ $1 == "renderdoc" ]]; then
 fi
 
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
-# export ENGINE_HIDDEN_WINDOW=0
+export ENGINE_HIDDEN_WINDOW=0
 
 "$ROOT/build/c-game/c-game" "${@:2}"

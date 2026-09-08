@@ -40,6 +40,7 @@ namespace {
 
 IPipelineState* gbufferPipeline = nullptr;
 IShader*        gbufferPS       = nullptr;
+void*           gbufferPrsSeen  = nullptr;
 ITexture*       gbufferTex      = nullptr;
 ITextureView*   gbufferRtv      = nullptr;
 u32             gbufferW        = 0;
@@ -123,13 +124,18 @@ void createGbufferTexture(u32 w, u32 h) {
     gbufferRtv = gbufferTex->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 }
 
-bool initGbufferState(void) {
-    if (!heightmapTerrainDiligentPRS() || !heightmapTerrainDiligentLitVS()) return false;
-    gbufferPS = createGbufferPS();
-    if (!gbufferPS) return false;
-
+// The gbuffer PSO must be built from the terrain pass' GBUFFER PRS, not the
+// lit one: the GBUFFER_OUTPUT shader samples no shadow-map resources, so
+// the lit PRS' two shadow entries leave the shared SRB's 18-descriptor set
+// incompatible with the gbuffer PSO's 16-descriptor layout (VUID 00358,
+// undefined gbuffer). The terrain pass recreates the PRS on shadow-setting
+// rebuilds, so the cached pipeline is rebuilt whenever the pointer moves.
+bool createGbufferPipeline(void) {
     IPipelineResourceSignature* prs =
-            (IPipelineResourceSignature*)heightmapTerrainDiligentPRS();
+            (IPipelineResourceSignature*)heightmapTerrainDiligentGbufferPRS();
+    if (!heightmapTerrainDiligentLitVS() || !prs) return false;
+    if (gbufferPipeline) { gbufferPipeline->Release(); gbufferPipeline = nullptr; }
+
     GraphicsPipelineStateCreateInfo psoCI;
     psoCI.PSODesc.Name       = "ssrGbufferTerrain";
     psoCI.ppResourceSignatures    = &prs;
@@ -160,7 +166,17 @@ bool initGbufferState(void) {
         utils::warn("ssr: gbuffer PSO creation failed");
         return false;
     }
+    gbufferPrsSeen = prs;
     return true;
+}
+
+bool initGbufferState(void) {
+    if (!heightmapTerrainDiligentGbufferPRS() || !heightmapTerrainDiligentLitVS()) return false;
+    if (!gbufferPS) {
+        gbufferPS = createGbufferPS();
+        if (!gbufferPS) return false;
+    }
+    return createGbufferPipeline();
 }
 
 constexpr char kCompositeVS[] = R"(
@@ -181,9 +197,17 @@ VSOut main(in uint VertId : SV_VertexID)
 )";
 
 std::string makeCompositePS(float gain) {
-    char body[128];
-    snprintf(body, sizeof(body),
-             "    return float4(scene.rgb + %g * ssr.a * ssr.rgb, scene.a);\n}\n", gain);
+    // ENGINE_SSR_DEBUG visualizes the raw SSR radiance (RGB) instead of the
+    // composited frame, so the effect can be eyeballed directly.
+    const bool dbg = getenv("ENGINE_SSR_DEBUG") != nullptr;
+    char body[160];
+    if (dbg) {
+        snprintf(body, sizeof(body),
+                 "    return float4(ssr.rgb * 4.0, ssr.a);\n}\n");
+    } else {
+        snprintf(body, sizeof(body),
+                 "    return float4(scene.rgb + %g * ssr.a * ssr.rgb, scene.a);\n}\n", gain);
+    }
     return std::string(
                "Texture2D<float4> g_Scene;\n"
                "SamplerState g_Scene_sampler;\n"
@@ -322,6 +346,10 @@ IShaderResourceBinding* compositeSrbFor(ITexture* sceneTex, ITexture* ssrTex) {
 
 void ssrDiligentGbufferDraw(void) {
     if (!ssrEnabled()) return;
+    if (gbufferPipeline && gbufferPrsSeen != heightmapTerrainDiligentGbufferPRS()) {
+        gbufferPipeline->Release();
+        gbufferPipeline = nullptr;
+    }
     if (!gbufferPipeline && !initGbufferState()) return;
     if (!gbufferPipeline) return;
 
@@ -375,9 +403,25 @@ void ssrDiligentExecute(void) {
     ITextureView* motionSRV  = taaMotionSRV();
     if (!colorSRV || !depthSRV || !motionSRV) return;
 
+    // The CPU-side attribs must carry the effect's documented defaults:
+    // the HLSL DEFAULT_VALUE macros are documentation only (they expand
+    // away in the C++ include), and a value-initialized struct leaves
+    // RoughnessThreshold = 0 / DepthBufferThickness = 0 /
+    // MaxTraversalIntersections = 0 — every pixel fails the stencil mask's
+    // roughness test, the ray march runs zero iterations, the radiance is
+    // black.
     HLSL::ScreenSpaceReflectionAttribs attrs{};
-    attrs.RoughnessChannel      = 3;
-    attrs.IsRoughnessPerceptual = true;
+    attrs.DepthBufferThickness            = 0.025f;
+    attrs.RoughnessThreshold              = 0.2f;
+    attrs.MostDetailedMip                 = 0;
+    attrs.IsRoughnessPerceptual           = true;
+    attrs.RoughnessChannel                = 3;
+    attrs.MaxTraversalIntersections       = 128;
+    attrs.GGXImportanceSampleBias         = 0.3f;
+    attrs.SpatialReconstructionRadius     = 4.0f;
+    attrs.TemporalRadianceStabilityFactor = 1.0f;
+    attrs.TemporalVarianceStabilityFactor = 0.9f;
+    attrs.BilateralCleanupSpatialSigmaFactor = 0.9f;
 
     ScreenSpaceReflection::RenderAttributes ra{};
     ra.pDevice            = device;

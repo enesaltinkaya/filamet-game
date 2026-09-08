@@ -36,6 +36,7 @@ void heightmapTerrainDiligentSetDebugView(u32 mode);
 void heightmapTerrainDiligentStats(HeightmapTerrainRenderStats* out);
 void heightmapTerrainDiligentDestroy(void);
 void* heightmapTerrainDiligentPRS(void);
+void* heightmapTerrainDiligentGbufferPRS(void);
 void* heightmapTerrainDiligentLitVS(void);
 void heightmapTerrainDiligentGbufferDrawTiles(void* psoOverride);
 }

@@ -4,6 +4,7 @@
 #include "datamanager/DataManager.h"
 #include "logger/Logger.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 #include "renderer/RenderBackend.h"
@@ -95,9 +96,11 @@ static void pbrRefreshBindings(void) {
     }
     pbrShadowBoundGeneration = gen;
     modelBindings = pbrRenderer->CreateResourceBindings(*model, frameAttribsCB);
-    if (iblIrradiance && iblPrefiltered) {
-        auto* irrSRV = iblIrradiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-        auto* pfSRV  = iblPrefiltered->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    Diligent::ITexture* irr = iblDiligentReady() ? iblDiligentIrradianceCube() : iblIrradiance;
+    Diligent::ITexture* pf  = iblDiligentReady() ? iblDiligentPrefilteredCube() : iblPrefiltered;
+    if (irr && pf) {
+        auto* irrSRV = irr->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        auto* pfSRV  = pf->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         for (auto& srb : modelBindings.MaterialSRB) {
             if (srb) {
                 pbrRenderer->SetIBLResourceViews(srb, irrSRV, pfSRV);
@@ -713,34 +716,43 @@ void gltfIblUpdateDiligent(const f32 color[3], f32 intensity) {
         return;
     }
 
-    // ambient contract: color * (lux * exposure) / pi
-    const float exposure = 1.2f * (float)std::exp2(-15.0);
-    const float k = std::max(0.0f, intensity) * exposure * 0.318309886f;  // 1/pi
-    float rgb[3] = {std::min(1.0f, color[0] * k), std::min(1.0f, color[1] * k),
-            std::min(1.0f, color[2] * k)};
+    ITexture* irr;
+    ITexture* pf;
+    if (engine::renderer::diligent::iblDiligentReady()) {
+        irr = engine::renderer::diligent::iblDiligentIrradianceCube();
+        pf  = engine::renderer::diligent::iblDiligentPrefilteredCube();
+    } else {
+        // ambient contract: color * (lux * exposure) / pi
+        const float exposure = 1.2f * (float)std::exp2(-15.0);
+        const float k = std::max(0.0f, intensity) * exposure * 0.318309886f;  // 1/pi
+        float rgb[3] = {std::min(1.0f, color[0] * k), std::min(1.0f, color[1] * k),
+                std::min(1.0f, color[2] * k)};
 
-    iblIrradiance = makeConstantCube("IBL irradiance", rgb);
-    iblPrefiltered = makeConstantCube("IBL prefiltered env", rgb);
-    if (!iblIrradiance || !iblPrefiltered) {
-        utils::warn("gltf: IBL cube creation failed");
-        return;
+        iblIrradiance = makeConstantCube("IBL irradiance", rgb);
+        iblPrefiltered = makeConstantCube("IBL prefiltered env", rgb);
+        if (!iblIrradiance || !iblPrefiltered) {
+            utils::warn("gltf: IBL cube creation failed");
+            return;
+        }
+        // immutable textures start in the transfer layout; force the shader
+        // layout now so the first draw (possibly the next frame) is valid
+        StateTransitionDesc barrier{iblIrradiance, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE,
+                STATE_TRANSITION_FLAG_UPDATE_STATE};
+        context->TransitionResourceStates(1, &barrier);
+        barrier = {iblPrefiltered, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE,
+                STATE_TRANSITION_FLAG_UPDATE_STATE};
+        context->TransitionResourceStates(1, &barrier);
+        irr = iblIrradiance;
+        pf  = iblPrefiltered;
     }
 
-    // immutable textures start in the transfer layout; force the shader
-    // layout now so the first draw (possibly the next frame) is valid
-    StateTransitionDesc barrier{iblIrradiance, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE,
-            STATE_TRANSITION_FLAG_UPDATE_STATE};
-    context->TransitionResourceStates(1, &barrier);
-    barrier = {iblPrefiltered, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE,
-            STATE_TRANSITION_FLAG_UPDATE_STATE};
-    context->TransitionResourceStates(1, &barrier);
-
-    auto* irrSRV = iblIrradiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-    auto* pfSRV = iblPrefiltered->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    auto* irrSRV = irr->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    auto* pfSRV = pf->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     for (auto& srb : modelBindings.MaterialSRB) {
         pbrRenderer->SetIBLResourceViews(srb, irrSRV, pfSRV);
     }
-    utils::info("gltf: constant IBL set for %zu material SRB(s)", (size_t)modelBindings.MaterialSRB.size());
+    utils::info("gltf: IBL set for %zu material SRB(s) (%s)", modelBindings.MaterialSRB.size(),
+            engine::renderer::diligent::iblDiligentEnvName());
 }
 
 void gltfUpdateDiligent(double elapsedSeconds) {
@@ -950,7 +962,11 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
     renderer.AverageLogLum = 0.25f;
     renderer.MiddleGray = 0.18f;
     renderer.WhitePoint = 3.0f;
-    renderer.IBLScale = float4{1.0f, 1.0f, 1.0f, 1.0f};  // constant env, see gltfIblUpdateDiligent
+    renderer.PrefilteredCubeLastMip =
+            engine::renderer::diligent::iblDiligentReady()
+                    ? engine::renderer::diligent::iblDiligentPrefilteredLastMip() : 0.0f;
+    renderer.EnvironmentRotation = float2(1.0f, 0.0f);
+    renderer.IBLScale = float4{1.0f, 1.0f, 1.0f, 1.0f};
     renderer.HighlightColor = float4{1.0f, 0.0f, 0.0f, 0.0f};
     renderer.UnshadedColor = float4{0.5f, 0.5f, 0.5f, 1.0f};
     renderer.PointSize = 1.0f;

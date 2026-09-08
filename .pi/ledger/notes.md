@@ -87,15 +87,19 @@ Temporary look change (task 4) — delete the marked line to revert; no other ch
 
 File: `c-engine/renderer/diligent/shaders/heightmap_terrain_ps.hlsl` (the `c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl` copy is regenerated from it by `scripts/build.sh`'s pak step — edit the shaders/ copy; both were edited for consistency)
 
-Exact inserted hunk (after the snow/beach lerps, formerly lines 458-459; the inserted line is line 460):
+Exact inserted hunk (after the snow/beach lerps, formerly lines 458-459):
 
 ```
      roughness = lerp(roughness, 0.6, snowT);
      roughness = lerp(roughness, 0.85, beachT);
-+    roughness *= 0.15;
++    roughness *= 0.05;
++    // Keep the terrain glossy so the screen-space reflection reads: a matte
++    // dielectric spreads the GGX lobe into an imperceptible sheen, so SSR
++    // needs a smooth (low-roughness) surface to show a visible reflection.
++    roughness = min(roughness, 0.08);
 ```
 
-Revert = delete the `roughness *= 0.15;` line only. It sits after the snow/beach lerps and before the GBUFFER_OUTPUT block, so it feeds both the PBR path and the SSR gbuffer (channel 3 / RoughnessChannel=3). Effective roughness: ~0.09 (snow) to ~0.13 (grass/beach) — under the SSR default RoughnessThreshold 0.2.
+Revert = delete the 5 lines above only (two code lines + the 3-line comment). It sits after the snow/beach lerps and before the GBUFFER_OUTPUT block, so it feeds both the PBR path and the SSR gbuffer (channel 3 / RoughnessChannel=3). Effective roughness: ~0.03 (snow) to ~0.08 (grass/beach) — well under the SSR RoughnessThreshold 0.2. Tuned down from the round-5 x0.15 to x0.05 + min(,0.08); re-verified 2026-09-08 with build + frame-300 screenshot (/tmp/glossy_check.png, clean render, exit 0). Caveat for SSR: the gbuffer normal still carries the micro-band perturbation (applied before the GBUFFER_OUTPUT early-out), so SSR rays will be noisy rather than mirror-smooth.
 
 ## Task 6 screenshot frame
 
