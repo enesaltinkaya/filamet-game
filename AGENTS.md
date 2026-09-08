@@ -1,6 +1,3 @@
-Use ./scripts/run.sh to start the game.
-Use ENGINE_HIDDEN_WINDOW env var while testing.
-
 Use renderdoc to debug graphical issues.
 Do not use comments in the code.
 Do not use "find / ...".
@@ -10,8 +7,7 @@ Do not use git.
 
 Everything related to project is either here /media/extra/Projects/c/filament-game or in thirdparty directory /home/enes/Projects/c/cpp-thirdparty.
 
-use `./scripts/run.sh` (or its variants) to launch the game.
-`scripts/run.sh` runs clear under set -e and it fails when TERM env variable is unset.
+Set TERM env variable is to run the game.
 
 ### Screenshot feature
 
@@ -41,13 +37,11 @@ PYTHONPATH=/home/enes/Apps/renderdoc/build/lib python3 <script>  # headless repl
 
 ### Old engine
 
-We will porting our old engine /home/enes/Projects/c/game-001-cpp to this new engine.
+We will be porting our old engine /home/enes/Projects/c/game-001-cpp to this new engine.
 
 ### Render path
 
-We are only using diligent (filament was removed 2026-09-05; its
-implementation lives on in git history as the look/parity reference).
-
+We are only using diligent engine.
 Sources are here with samples and docs;
 /home/enes/Projects/c/cpp-thirdparty/diligent
 
