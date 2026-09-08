@@ -1,9 +1,24 @@
-# Plan — DiligentFX SSAO (implement `plans/ssao-diligentfx.md`)
+# Bloom (DiligentFX) — manager plan
 
 ## Strategy
 
-Implement the plan in `plans/ssao-diligentfx.md` in its five phases, in order, keeping every decision pinned there (GTAO + `FEATURE_FLAG_HALF_RESOLUTION`, AO applied after TAA, single shared `PostFXContext`, never call `UpdateUI`). Phase 1 adds the world-space normal buffer: a `normalTex` (RGBA16F) in `TaaDiligent::createTargets`/`destroyTargets` plus public accessors (`taaNormalRTV()`, `taaNormalSRV()`, `taaPostFXContext()`, `taaDepthSRV(idx)`), the world pass becomes 3 RTVs with a `(0,0,0,0)` clear in `DiligentRenderer.cpp`, and `NumRenderTargets`/`SV_Target2` normal outputs land in the three world PSOs and shaders (heightmap terrain, props, GLTF via the `GetPSMainSource` hook gated on `PSO_FLAG_FIRST_USER_DEFINED` set only by `worldDraw`, with a `USE_VERTEX_NORMALS` fallback; the GLTF shadow path gets a cascade-sized 3rd dummy RTV). Phase 2 adds a thin `SsaoDiligent.{h,cpp}` module driving `Diligent::ScreenSpaceAmbientOcclusion` on the TAA `PostFXContext` — `PrepareResources` every frame, `Execute` inside `taaWorldResolve` immediately after `postFXContext->Execute` under `ScopedDebugGroup{ctx,"ssao"}`. Phase 3 composites the AO R8 into the lit world color after TAA accumulation and before the renderScale downsample/CAS/blit via a new `aoCompositeTex` + inline point-sample multiply PS with a `strength` cbuffer, and forwards the settings from `applyGraphicsSettings`. Phase 4 wires `ssaoRadius`/`ssaoAlgorithm`/`ssaoIntensity` through `GraphicsSettings`, settings load/normalize, typed Settings.cpp templates (next to `aoDisabled`, types must match or settings.json is rewritten), and the graphics settings GUI + `graphics.html`, keeping `aoDisabled` as the persisted on/off key. Phase 5 verifies headlessly per the plan's phase 5: clean build with shader edits confirmed inside `pak_1.pak`, RenderDoc capture checks (`ssao` group present, world pass RT2 = unit normals, shadow pass unchanged, no new VUIDs), before/after `ENGINE_SCREENSHOT`s at multiple render scales, settings round-trip, and a GPU-time sanity pass.
+The deliverable of this task is a detailed implementation-plan document (the code-inspection
+is the input to it): write `plans/bloom-diligentfx.md` mirroring the structure of the existing
+`plans/ssao-diligentfx.md` precedent (current state, gaps, approach/decisions, concrete steps
+with file anchors). Workers first inspect the three required source areas under
+`/home/enes/Projects/c/cpp-thirdparty/diligent/git/`: the `DiligentFX/PostProcess/Bloom` module
+(README, `interface/Bloom.hpp`, `src/Bloom.cpp`, plus `PostProcess/Common` for the shared
+framebuffer/mip infrastructure), the integration shape from `DiligentSamples/Tutorials/
+Tutorial27_PostProcessing` and the samples/Hydrogent wiring that consume `PostFXContext`, and
+the `DiligentFX/Radient` high-level pipeline to see how bloom is composed with tonemap/
+auto-exposure there. The plan must then map those findings onto the engine's verified
+integration surface — TaaDiligent's existing `PostFXContext`, the `sceneColorTex` RGBA16F HDR
+offscreen chain, the post-TAA/pre-backbuffer application point and tonemap in DiligentRenderer,
+the `SsaoDiligent` thin-module C pattern, the `ssao` settings-flag flow to copy, and the
+`libDiligentFX.a` link path — identifying concrete gaps (no bloom settings flag, HDR/tonemap
+interaction, where the bloom SRV is consumed) and listing implementation steps, parameters
+(Intensity/Threshold/SoftThreshold/Radius), and risks.
 
-Shader edits only take effect after `./scripts/build.sh` regenerates `pak_1.pak` (runtime HLSL loads from the pak, not the loose tree — docs/lessons.md 2026-09-07), so any phase touching `.hlsl` sources must end with a successful `./scripts/build.sh` before any capture or screenshot verification.
+## Verification
 
 Verification: ./scripts/build.sh
