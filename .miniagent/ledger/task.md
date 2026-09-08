@@ -1,2 +1,1 @@
-make a detailed plan to implement bloom from diligentfx.
-inspect samples, tutorials and Radiant implementation.
+please make ambient occlusion work even when TAA is off.

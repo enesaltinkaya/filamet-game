@@ -23,6 +23,7 @@
 #include "renderer/diligent/PropsRenderDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/SsaoDiligent.h"
+#include "renderer/diligent/BloomDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 
 #include "Graphics/GraphicsEngine/interface/Texture.h"
@@ -348,6 +349,7 @@ namespace engine::renderer::diligent {
             resize(window.width, window.height);
             taaInit();
             ssaoInit();
+            bloomInit();
             iblDiligentInit();
             return true;
         }
@@ -736,6 +738,7 @@ namespace engine::renderer::diligent {
 
             taaDestroy();
             ssaoDestroy();
+            bloomDestroy();
 
             swapChain = nullptr;
             device    = nullptr;
@@ -807,6 +810,7 @@ namespace engine::renderer::diligent {
         void applyGraphicsSettings(const GraphicsSettings& s) override {
             taaSettingsApply(s.taa, s.taaWeight, s.casStrength, s.renderScale);
             ssaoSettingsApply(s.ssao, s.ssaoRadius, s.ssaoAlgorithm, s.ssaoIntensity);
+            bloomSettingsApply(s.bloom);
         }
 
        public:

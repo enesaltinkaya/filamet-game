@@ -25,6 +25,7 @@
 #include "renderer/RenderBackend.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/SsaoDiligent.h"
+#include "renderer/diligent/BloomDiligent.h"
 #include "Graphics/GraphicsTools/interface/ScopedDebugGroup.hpp"
 #include "stb/git/stb_image_write.h"
 
@@ -1040,6 +1041,7 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
             TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE;
     taa->PrepareResources(device, ctx, postFXContext.get(), taaFlags);
     ssaoFrameBegin(ctx);
+    bloomFrameBegin(ctx);
 
     // Jitter this frame's projection (TAA picks the Halton phase for the
     // CURRENT frame — PrepareResources above stamped the frame index).
@@ -1350,6 +1352,23 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         }
     }
 
+    if (!taaOn && postFXContext && cameraCB && ssaoReady() && ssaoOn()) {
+        const u32 curr = frameIdx & 1;
+        const u32 prev = (frameIdx + 1) & 1;
+
+        PostFXContext::RenderAttributes pa;
+        pa.pDevice = device;
+        pa.pDeviceContext = ctx;
+        pa.pCameraAttribsCB = cameraCB;
+        pa.pCurrDepthBufferSRV = depthTex[curr]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        pa.pPrevDepthBufferSRV = depthTex[prev]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        pa.pMotionVectorsSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        postFXContext->Execute(pa);
+
+        Diligent::ScopedDebugGroup ssaoGroup(ctx, "ssao");
+        ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr));
+    }
+
     // ENGINE_TAA_DEBUG_MV: blit the raw motion buffer instead of the TAA
     // result (encoded mv+0.5; 128-ish sRGB ≈ zero motion). AFTER the TAA
     // block so the accumulated-frame result cannot overwrite the source.
@@ -1362,11 +1381,19 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     // composite is TARGET-sized 1:1, so the box downsample averages the
     // AO'd color exactly as it does the plain one. Skipped on the debug-MV
     // blit (the motion encoding must stay exact) and whenever SSAO did not
-    // produce this frame's AO map (TAA off / pending — the SSAO resolved
-    // texture is then undefined, not a no-op AO=1).
+    // produce this frame's AO map (pending — the SSAO resolved texture is
+    // then undefined, not a no-op AO=1).
     if (!debugMv && ssaoOn() && ssaoRan) {
         if (ITextureView* c = aoCompositeApply(ctx, srcColorSRV, ssaoAOSRV())) {
             srcColorSRV = c;
+        }
+    }
+
+    if (!debugMv && bloomOn()) {
+        Diligent::ScopedDebugGroup g(ctx, "bloom");
+        if (bloomExecute(ctx, srcColorSRV)) {
+            if (ITextureView* b = bloomSRV())
+                srcColorSRV = b;
         }
     }
 

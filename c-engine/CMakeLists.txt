@@ -139,6 +139,7 @@ set_source_files_properties(
     renderer/diligent/PropsRenderDiligent.cpp
     renderer/diligent/ShadowDiligent.cpp
     renderer/diligent/SsaoDiligent.cpp
+    renderer/diligent/BloomDiligent.cpp
     renderer/diligent/TaaDiligent.cpp
     gltf/GltfDiligent.cpp
     gui/GuiDiligent.cpp

@@ -1,32 +1,32 @@
 [
   {
     "id": 1,
-    "desc": "Inspect the DiligentFX Bloom module at /home/enes/Projects/c/cpp-thirdparty/diligent/git/DiligentFX/PostProcess/Bloom (README.md, interface/Bloom.hpp, src/Bloom.cpp) plus PostProcess/Common shared helpers: extract the host API (ctor/PrepareResources/Execute/SRV getters), required inputs (HDR color buffer format, BloomAttribs: Intensity/Threshold/SoftThreshold/Radius), internal buffers/mip chain and feature flags, and note the exact exported symbols available in the prebuilt libDiligentFX.a (check via nm).",
-    "status": "done",
-    "result": "Host API = Bloom(device, CreateInfo{EnableAsyncCreation}) / PrepareResources(device, ctx, PostFXContext, FEATURE_FLAGS) / Execute(RenderAttributes{pColorBufferSRV (only input), pBloomAttribs, pPostFXContext}) -> READY|PENDING / GetBloomTextureSRV(). BloomAttribs = Intensity(0.15)/Threshold(1.0)/SoftTreshold(0.125)/Radius(0.75) + internal AlphaInterpolation (BloomStructures.fxh). Internal chain = downsampled/upsampled/output pyramids, all R11G11B10_FLOAT, sized from FrameDesc.Width/Height (FEATURE_FLAGS only has FEATURE_FLAG_NONE). Output = SourceColor + bloom (upsample shader uInstID==0: return SourceColor+ColorSum) -> pointer-swap, not a composite. nm on build-linux libDiligentFX.a exports Bloom::{ctor,dtor,PrepareResources,Execute,GetBloomTextureSRV,UpdateUI} + all private compute methods."
+    "desc": "Fix taaWorldResolve (c-engine/renderer/diligent/TaaDiligent.cpp:1312). Add a TAA-off branch guarded by !taaOn && postFXContext && cameraCB && ssaoReady() && ssaoOn(). CRITICAL: ssaoExecute is a DEPENDENT pass - it silently returns PENDING (no-op, ssaoRan stays false, composite skipped) unless PostFXContext::Execute has run first (the only place IsPSOsReady() is set and the blue-noise texture is filled), and the TAA-off path never calls it. So the TAA-off branch MUST build PostFXContext::RenderAttributes pa identically to the TAA-on block (lines 1324-1330: device, ctx, cameraCB, depthTex[curr]/depthTex[prev] default SRVs with curr=frameIdx&1 prev=(frameIdx+1)&1, motionTex SRV), call postFXContext->Execute(pa), then under a Diligent::ScopedDebugGroup(ctx,\"ssao\") do ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr)). The existing AO-composite guard at line 1369 (ssaoOn() && ssaoRan) then fires unchanged. Leave the TAA-on block (lines 1320-1353) byte-identical. Remove the stale 'TAA off / pending' clause from the AO-composite comment (lines ~1363-1368) since SSAO now runs with TAA off (do not add new comments). No shader/PSO/texture/DiligentRenderer.cpp changes.",
+    "status": "pending",
+    "result": null
   },
   {
     "id": 2,
-    "desc": "Inspect the integration-shape references: DiligentSamples/Tutorials/Tutorial27_PostProcessing and any sample that drives a post-process effect through PostFXContext (check Hydrogent HnPostProcessTask.cpp wiring too), and record the per-frame sequence (context PrepareResources/Execute, resource binding, RTV/DSV usage) that the engine plan should mirror.",
-    "status": "done",
-    "result": "Tutorial27 per-frame: PostFXContext::PrepareResources (FrameDesc=target size) -> context->Execute(cameraCB/depth/mv) -> per-effect PrepareResources(device,ctx,context,flags) then Execute -> ComputeBloom: Bloom RenderAttributes{pDevice,pDeviceContext,pPostFXContext,pColorBufferSRV=HDR color SRV,pBloomAttribs} -> Execute -> pHDRColorSRV = GetBloomTextureSRV() (lines 314-317, 606-609, 898-906). Order in the resolve: SSAO -> TAA -> bloom -> tonemap (774, 811, 895, 316). Confirms bloom is a color->color pointer swap after TAA, driven by an existing context + a single HDR color SRV."
+    "desc": "Build via the pinned verification's run.sh path (build.sh is called from it) and confirm a clean compile: no C++ errors in /tmp/ao_taa_off.log, no 'ssao'/'aoComposite' PSO or shader warnings at startup, and the 'taa: targets' info line present.",
+    "status": "pending",
+    "result": null
   },
   {
     "id": 3,
-    "desc": "Inspect the Radient implementation at /home/enes/Projects/c/cpp-thirdparty/diligent/git/DiligentFX/Radient (note: directory is spelled Radient, not Radiant): how the high-level pipeline composes bloom with tonemapping/auto-exposure, which render-target chain it uses, and which parts are reusable vs which we would bypass for a direct module integration.",
-    "status": "done",
-    "result": "Radient reuses the same Bloom module directly: RadientTesseraPostProcessPipeline.cpp makes m_pBloom=Bloom(device, CreateInfo{}), PrepareResources(...,FEATURE_FLAG_NONE), and in the pass chain context->Execute(431) -> SSR(452) -> SSAO(467) -> TAA(503) -> DoF(533) -> Bloom::Execute(540) with MakeBloomAttribs(RadientBloomDesc)(RadientPostFXParameters.cpp:95); pCurrentColorSRV = GetBloomTextureSRV()(344) flows into the final tonemap. RadientBloomDesc{Enabled,Intensity,Threshold,SoftThreshold,Radius}, IsValidBloom clamps SoftThreshold<=1/Radius<=1. Reusable: the Bloom module + BloomAttribs + the make-attribs mapping. Bypass: Radient's scene/camera/tessera-pipeline/auto-exposure stack (we keep our own PostFXContext + encode-on-store)."
+    "desc": "Run the pinned Verification command from plan.md and require exit code 0: the TAA-off + AO-on frame must be measurably darker than the TAA-off + AO-off frame (mean diff > 0 and >1% of pixels differ by more than 3/255). Inspect /tmp/ao_taa_off.png visually: AO darkening visible in crevices/under geometry, not a uniform full-screen dim, no black screen or artifacts.",
+    "status": "pending",
+    "result": null
   },
   {
     "id": 4,
-    "desc": "Audit the in-engine integration surface: c-engine/renderer/diligent/DiligentRenderer.cpp offscreen chain (sceneColorTex RGBA16F HDR, TAA resolve/tonemap/blit-to-backbuffer points), the existing SsaoDiligent/TaaDiligent thin-module C patterns (init/destroy/settings/frameBegin/execute/SRV getters), the ssao settings-flag end-to-end flow to copy (Renderer.h/GraphicsSettings, settings persistence, debug overlay, settings GUI), and the libDiligentFX.a link path in c-engine/CMakeLists.txt -> c-game.",
-    "status": "done",
-    "result": "taaWorldResolve(TaaDiligent.cpp:1310): srcColorSRV=sceneColorTex SRV(1315) -> context->Execute + taa->Execute(1335-1351) -> SSAO composite aoCompositeApply(1367-1371) -> renderScale downsample(1375-1381) -> CAS/blit(1385-1394); all blit/CAS/downsample PS sample Texture2D<float4>, present opaque (alpha inert). SsaoDiligent.{h,cpp} is the proven thin-module template (module-statics, device extern from DiligentRenderer.h:19, taaPostFXContext()/taaDepthSRV()/taaNormalSRV() accessors TaaDiligent.h:90-93). The bloom flag ALREADY flows: GraphicsSettings.bloom(Renderer.h:23, default true) -> rendererGraphicsLoad s.bloom=!settingsGetBool(\"bloomDisabled\")(Renderer.cpp:244) -> Settings.cpp:63 template -> SettingsGraphicsGui (bloomEnabled:36/244/484, g.bloom:134); ONLY break = applyGraphicsSettings(DiligentRenderer.cpp:806-809) does not forward s.bloom. libDiligentFX.a in --start-group (c-engine/CMakeLists.txt:93-94 -> c-game:11,64), Bloom.hpp via ${diligent_git}/DiligentFX include root(:77)."
+    "desc": "Regression, TAA on: repeat the screenshot run with taaEnabled=true, aoDisabled=false (e.g. /tmp/ao_taa_on.png) and confirm AO still applies with TAA on (compare against a taaEnabled=true, aoDisabled=true baseline: same darkening check as task 3). The TAA-on code path must be unchanged — diff the file to prove only the TAA-off branch and comment changed.",
+    "status": "pending",
+    "result": null
   },
   {
     "id": 5,
-    "desc": "Write the deliverable plan document plans/bloom-diligentfx.md mirroring plans/ssao-diligentfx.md structure: summary + reference paths, verified current state in-tree, the gaps to close, approach/decisions (module shape, buffer/RTV changes, bloom application point relative to TAA and tonemapping, HDR source, settings flag wiring), concrete implementation steps with file:line anchors, parameters/UI surface, and risks (Vulkan format constraints, PostFXContext sharing with TAA/SSAO, performance).",
-    "status": "done",
-    "result": "Wrote plans/bloom-diligentfx.md (24.7 KB) mirroring ssao-diligentfx.md: summary+refs, verified current state (in-tree + Bloom module contract, nm-verified), 2 gaps, 7 approach decisions (thin module on existing PostFXContext, pointer-swap not composite, app point after TAA/SSAO-composite before downsample/CAS/blit = last HDR pass pre-encode, target-size invariance, no ready-gate, toggle idiom, no new include/link target), Phase 1 BloomDiligent module (BloomDiligent.h/.cpp + CMake SKIP_PRECOMPILE_HEADERS), Phase 2 lifecycle/frame-begin hooks, Phase 3 execute+pointer-swap in taaWorldResolve, Phase 4 settings flag forwarding + optional 4 sliders, Phase 5 headless verification (build/rdc.py list+dump/before-after/renderScale sweep/resize/lessons checks), 5 risks (R11G11B10->float4 blit, post-TAA/SSAO placement, PostFXContext sharing, start-group link, first-frame PENDING), out of scope."
+    "desc": "Edge checks in the TAA-off path: (a) first frame (frameIdx continuity) and (b) window resize while TAA off (createTargets recreation, aoCompositeTex sized with the target) do not crash or produce a black frame — verify in /tmp/ao_taa_off.log that no new warnings appear and the screenshot path still passes. Note: ssaoFrameBegin/ssaoExecute must not depend on taaOn or on the TAA Execute having run.",
+    "status": "pending",
+    "result": null
   }
 ]
