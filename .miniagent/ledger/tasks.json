@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "id": 1,
+    "desc": "Inspect DiligentSamples/Tutorials/Tutorial27_PostProcessing (readme.md + src/Tutorial27_PostProcessing.cpp): record the PostFXContext integration shape (context init, per-frame RenderAttributes fill, Execute, final blit), then diff it against c-engine/renderer/diligent/TaaDiligent.cpp and list exactly what the engine already reuses vs what SSAO adds. Record findings in .miniagent/ledger/notes.md.",
+    "status": "done",
+    "result": "Tutorial27 shape = TAA shape: shared PostFXContext, per-frame PrepareResources (TaaDiligent.cpp:843-849) + Execute (1121-1128) with depth SRV at 1125; SSAO adds only pNormalBufferSRV + a thin module (notes.md: brainstorm lemmas 1, 6)."
+  },
+  {
+    "id": 2,
+    "desc": "Inspect DiligentFX/PostProcess/ScreenSpaceAmbientOcclusion (README.md, interface/ScreenSpaceAmbientOcclusion.hpp, src/ScreenSpaceAmbientOcclusion.cpp, Shaders/PostProcess/ScreenSpaceAmbientOcclusion/public/*.fxh): document the complete API surface (CreateInfo, PrepareResources, Execute RenderAttributes fields, GetAmbientOcclusionSRV, UpdateUI), GTAO/HBAO/VBAO algorithm options, FEATURE_FLAGS (half precision depth, half resolution), ScreenSpaceAmbientOcclusionAttribs fields with defaults, the 8 internal compute techniques and their ordering, and the input contracts (depth 1xF32 SRV, world-space normals 3xF in [-1,1]). Verify the prebuilt build-linux/DiligentFX/libDiligentFX.a exports these symbols and that c-engine's include paths resolve the headers. Record findings in notes.md.",
+    "status": "done",
+    "result": "Full API/algorithm/feature-flag/8-technique surface + attrib defaults + input contracts recorded; libDiligentFX.a nm-verified to export Diligent::ScreenSpaceAmbientOcclusion::* (notes.md: Setup findings 'SSAO API'/'Build facts'). Open item for plan: whether c-engine CMake include paths reach PostProcess/ScreenSpaceAmbientOcclusion/interface."
+  },
+  {
+    "id": 3,
+    "desc": "Inspect full-engine SSAO wiring: DiligentFX/Hydrogent/src/Tasks/HnPostProcessTask.cpp (how GBuffer GBUFFER_TARGET_NORMAL + FrameTargets depth SRV feed SSAO, how GetAmbientOcclusionSRV is multiplied into the main lighting pass) and DiligentFX/Radient (src/Render/RadientPostFXParameters.cpp, src/Render/Tessera/Passes/RadientTesseraPostProcessPipeline.cpp, matching headers) for parameterization and feature-flag handling. Record the concrete call sequence an integrator follows, in notes.md.",
+    "status": "done",
+    "result": "Hydrogent sequence recorded: GBuffer GBUFFER_TARGET_NORMAL feeds pNormalBufferSRV (HnPostProcessTask.cpp:294/829), SSAOScale>0 gate (:651), depth SRV from FrameTargets, AO multiplied into main lighting per README diffuse formula (notes.md: Setup findings + brainstorm lemmas 3/4)."
+  },
+  {
+    "id": 4,
+    "desc": "Inventory c-engine's current state for the SSAO gaps: TaaDiligent.cpp offscreen chain (sceneColorTex RGBA16F, motionTex RG16F, depthTex[2] D32 with BIND_SHADER_RESOURCE SRV passed to PostFXContext), DiligentRenderer.cpp pass order (shadow/player/terrain/props/taa_resolve/gui/rmlui debug groups) and where the world render target is created, the world-pass HLSL shaders (renderer/diligent/shaders/*.hlsl) and the CMake custom command copying them into c-game/data/pak_1/materials, and the dangling ssao flag path (Renderer.cpp:234 'aoDisabled', DebugGui.cpp:65/103, SettingsGraphicsGui.cpp:116, Renderer.h:19). Confirm nothing in the render path consumes g.ssao today. Record findings in notes.md.",
+    "status": "done",
+    "result": "Inventory recorded: offscreen chain + D32 SRV, pass order with SSAO slot after props/before taa_resolve, no normal buffer anywhere, dangling g.ssao flag, pak shader-copy step; player pass = glTF via GltfDiligent GetPSMainSource PS surgery (:504-526), NumRenderTargets=2 (:486), shadow dummy-RT PSOs (:1129-1153) (notes.md: Setup findings 'Engine state' + brainstorm lemma 3)."
+  },
+  {
+    "id": 5,
+    "desc": "Write the deliverable: detailed phased implementation plan at plans/ssao-diligentfx.md (matching the style of existing plans/*.md). Phases with exact files to create/modify: (a) world-space normal buffer RT added to the offscreen chain + normal output in terrain/props PS + pak shader-copy step; (b) new SsaoDiligent module (SsaoDiligent.h/.cpp, SKIP_PRECOMPILE_HEADERS + CMake wiring) using the existing PostFXContext, PrepareResources on resize, per-frame Execute after the props pass and before taa_resolve, with GTAO + half-resolution defaults; (c) AO compositing: multiply GetAmbientOcclusionSRV into world color before TAA resolve/blit honoring renderScale; (d) wire the existing ssao settings flag + radius/algorithm into applyGraphicsSettings/DebugGui/graphics settings page; (e) verification: RenderDoc capture (confirm the SSAO pass appears in scripts/rdc.py list), ENGINE_SCREENSHOT before/after, lessons.md pitfall check. Include a risks section (D32-as-SRV on Vulkan, TAA interaction, normal RT bandwidth at render scale, c-game --start-group link line). Every claim must cite the source file/line it came from. Before writing, resolve the two open items in notes.md and record the answers in notes.md: (1) do c-engine CMake include paths already reach DiligentFX/PostProcess/ScreenSpaceAmbientOcclusion/interface (check c-engine/CMakeLists.txt target_include_directories vs the SSAO interface/fxh dirs; the plan must state exactly which include dirs to add if missing); (2) confirm the player pass specifics in GltfDiligent.cpp (which PSO/RT config the glTF world pass uses, the UNSHADED variant, and where the final world-space normal lives in the GLTF_PBR PS source so the SV_Target2 output can gate correctly; note the shadow-pass PSO flag needed).",
+    "status": "done",
+    "result": "plans/ssao-diligentfx.md written (396 lines, 5 phases, file/line-cited): normal RT, SsaoDiligent module, post-TAA composite, settings, verification; both open items resolved (no new include dirs; GLTF normal = VSOut.Normal, Execute after postFXContext->Execute:1128) (notes.md round 1)."
+  },
+  {
+    "id": 6,
+    "desc": "Cross-check the finished plan: verify it builds the correct mental model (run the pinned verification command to confirm the tree still builds), that all cited file paths/symbols exist (Spot-check against the real trees, no 'find /'), that phases are ordered so each depends only on completed prior phases, and that verification steps are runnable headless. Append sign-off findings to notes.md.",
+    "status": "pending",
+    "result": null
+  }
+]

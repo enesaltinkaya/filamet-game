@@ -232,7 +232,6 @@ void rendererGraphicsLoad(void) {
     s.shadowMode    = utils::settingsGetInt("shadowMode");
     s.shadowQuality = utils::settingsGetInt("shadowQuality");
     s.ssao          = !utils::settingsGetBool("aoDisabled");
-    s.ssr           = !utils::settingsGetBool("ssrDisabled");
     s.bloom         = !utils::settingsGetBool("bloomDisabled");
     s.vignette      = (float)(utils::settingsGetDouble("lensVignette") / 100.0);
     s.dof           = utils::settingsGetBool("dofEnabled");

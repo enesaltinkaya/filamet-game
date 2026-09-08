@@ -135,19 +135,8 @@ struct DeferredDestroy {
 IPipelineState*        pipeline = nullptr;
 IPipelineResourceSignature* prs = nullptr;
 IShaderResourceBinding* srb = nullptr;
-// The SSR gbuffer pass renders the GBUFFER_OUTPUT build of the lit PS, which
-// samples none of the CSM shadow-map resources. The lit PRS therefore
-// declares two bindings the gbuffer shader never uses, and the Vulkan
-// backend's per-PSO layout optimization drops them: the gbuffer PSO's set
-// layout ends up with 16 descriptors while the shared SRB carries 18,
-// tripping VUID-vkCmdBindDescriptorSets-pDescriptorSets-00358 and leaving
-// the gbuffer undefined. A dedicated PRS/SRB built from exactly gResources
-// (the 16 bindings the gbuffer PS's layout keeps) binds cleanly, so the
-// SSR pass gets its own signature instead of reusing the lit pass' one.
-IPipelineResourceSignature* gbufferPrs = nullptr;
-IShaderResourceBinding*     gbufferSrb = nullptr;
 IShaderResourceVariable* prsVar(SHADER_TYPE stage, const char* name);
-void setBothVar(SHADER_TYPE stage, const char* name, IDeviceObject* res);
+void setLitVar(SHADER_TYPE stage, const char* name, IDeviceObject* res);
 IShader*               vs = nullptr;
 IShader*               ps = nullptr;
 
@@ -354,11 +343,11 @@ void rebuildIblCubes(const f32 color[3], f32 intensity) {
     iblIrradiance  = irr;
     iblPrefiltered = pf;
     if (irr) {
-        setBothVar(SHADER_TYPE_PIXEL, "g_IblIrradiance",
+        setLitVar(SHADER_TYPE_PIXEL, "g_IblIrradiance",
                 irr->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     }
     if (pf) {
-        setBothVar(SHADER_TYPE_PIXEL, "g_IblPrefiltered",
+        setLitVar(SHADER_TYPE_PIXEL, "g_IblPrefiltered",
                 pf->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     }
     rebuildSharedSRB();
@@ -427,20 +416,6 @@ void rebuildSharedSRB(void) {
     IShaderResourceBinding* old = srb;
     srb = newSrb;
     if (old) old->Release();
-
-    // The gbuffer SRB is pure-static (no shadow-map entry in its PRS), so it
-    // only needs recreating when the PRS statics moved.
-    if (gbufferPrs) {
-        IShaderResourceBinding* newGbSrb = nullptr;
-        gbufferPrs->CreateShaderResourceBinding(&newGbSrb, true);
-        if (!newGbSrb) {
-            utils::warn("heightmapTerrain: gbuffer SRB creation failed");
-        } else {
-            IShaderResourceBinding* oldGb = gbufferSrb;
-            gbufferSrb = newGbSrb;
-            if (oldGb) oldGb->Release();
-        }
-    }
 }
 
 // Bind the currently-owned shared resources into the PRS' static variables
@@ -461,26 +436,18 @@ IShaderResourceVariable* prsVar(SHADER_TYPE stage, const char* name) {
     return sigVar(prs, stage, name);
 }
 
-// Sets a static on BOTH signatures (lit + SSR gbuffer): the gbuffer PRS
-// declares the same gResources entries, and the look/IBL/GGX resources it
-// shares with the lit pass change over the pass' lifetime, so every rebind
-// must land in both places.
-void setBothVar(SHADER_TYPE stage, const char* name, IDeviceObject* res) {
+void setLitVar(SHADER_TYPE stage, const char* name, IDeviceObject* res) {
     if (IShaderResourceVariable* v = sigVar(prs, stage, name))
-        v->Set(res, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = sigVar(gbufferPrs, stage, name))
         v->Set(res, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 }
 
 void bindSharedStatics(void) {
     if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_VERTEX, "cbFrameAttribs"))
         v->Set(frameAttribsCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_VERTEX, "cbFrameAttribs"))
-        v->Set(frameAttribsCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 
     auto bindSRV = [&](const char* name, ITexture* tex) {
         if (!tex) return;  // the slot keeps its previous (fallback) binding
-        setBothVar(SHADER_TYPE_PIXEL, name,
+        setLitVar(SHADER_TYPE_PIXEL, name,
                 tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     };
     for (int i = 0; i < 6; i++) {
@@ -492,7 +459,7 @@ void bindSharedStatics(void) {
     bindSRV("g_IblIrradiance", renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentIrradianceCube() : iblIrradiance);
     bindSRV("g_IblPrefiltered", renderer::diligent::iblDiligentReady() ? renderer::diligent::iblDiligentPrefilteredCube() : iblPrefiltered);
     if (ggxLUT) {
-        setBothVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX", ggxLUT);
+        setLitVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX", ggxLUT);
     } else {
         ITexture* fb = makeGgxFallbackLUT();
         if (fb)
@@ -503,12 +470,6 @@ void bindSharedStatics(void) {
     if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_PIXEL, "g_ClampSampler"))
         v->Set(clampSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     if (IShaderResourceVariable* v = sigVar(prs, SHADER_TYPE_PIXEL, "g_ClampNearestSampler"))
-        v->Set(clampNearestSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_PIXEL, "g_TilingSampler"))
-        v->Set(tilingSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_PIXEL, "g_ClampSampler"))
-        v->Set(clampSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
-    if (IShaderResourceVariable* v = sigVar(gbufferPrs, SHADER_TYPE_PIXEL, "g_ClampNearestSampler"))
         v->Set(clampNearestSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 
     // CSM shadow resources: the texture is MUTABLE (bound per SRB in
@@ -667,7 +628,7 @@ void syncGgxLUT(void) {
         if (lut != ggxLUT) {
             if (ggxLUT) ggxLUT->Release();
             ggxLUT = lut;
-            setBothVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX", ggxLUT);
+            setLitVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX", ggxLUT);
             rebuildSharedSRB();
         } else {
             lut->Release();
@@ -677,7 +638,7 @@ void syncGgxLUT(void) {
         ggxLUT = nullptr;
         ITexture* fb = makeGgxFallbackLUT();
         if (fb) {
-            setBothVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX",
+            setLitVar(SHADER_TYPE_PIXEL, "g_PreintegratedGGX",
                     fb->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
             rebuildSharedSRB();
         }
@@ -824,20 +785,6 @@ bool buildLitPipeline(void) {
         return false;
     }
 
-    // The SSR gbuffer signature: the same shared gResources, WITHOUT the
-    // shadow-map entries (see the gbufferPrs declaration). It must exist
-    // before bindSharedStatics so the gbuffer statics are complete on the
-    // very first SRB build.
-    PipelineResourceSignatureDesc gbDesc;
-    gbDesc.Resources      = gResources;
-    gbDesc.NumResources   = sizeof(gResources) / sizeof(gResources[0]);
-    gbDesc.BindingIndex   = 0;
-    device->CreatePipelineResourceSignature(gbDesc, &gbufferPrs);
-    if (!gbufferPrs) {
-        utils::warn("heightmapTerrain: gbuffer resource signature creation failed");
-        return false;
-    }
-
     bindSharedStatics();
     rebuildSharedSRB();
     if (!srb) return false;
@@ -894,9 +841,7 @@ void destroyShadowPipeline(void) {
 
 void destroyLitPipeline(void) {
     if (srb) { srb->Release(); srb = nullptr; }
-    if (gbufferSrb) { gbufferSrb->Release(); gbufferSrb = nullptr; }
     if (prs) { prs->Release(); prs = nullptr; }
-    if (gbufferPrs) { gbufferPrs->Release(); gbufferPrs = nullptr; }
     if (pipeline) { pipeline->Release(); pipeline = nullptr; }
     if (vs) { vs->Release(); vs = nullptr; }
     if (ps) { ps->Release(); ps = nullptr; }
@@ -1524,34 +1469,6 @@ void heightmapTerrainDiligentShadowDrawPSO(void* psoOverride, const FrustumCullP
             utils::info("terrain shadow cull: tiles %u/%u kept", dbgKept, dbgTotal);
         }
     }
-}
-
-void heightmapTerrainDiligentGbufferDrawTiles(void* psoOverride) {
-    IPipelineState* pso = (IPipelineState*)psoOverride;
-    if (!passReady || !pso || !gbufferSrb) return;
-    context->SetPipelineState(pso);
-    context->CommitShaderResources(gbufferSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-    context->SetIndexBuffer(latticeIbo, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-    for (GpuTile& t : gpuTiles) {
-        if (!t.inUse) continue;
-        IBuffer* vbo = t.vbo;
-        context->SetVertexBuffers(0, 1, &vbo, nullptr,
-                RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-        context->DrawIndexed(DrawIndexedAttribs{
-                latticeIdxCount, VT_UINT32, DRAW_FLAG_NONE, 1, 0, 0, 0});
-    }
-}
-
-void* heightmapTerrainDiligentPRS(void) {
-    return prs;
-}
-
-void* heightmapTerrainDiligentGbufferPRS(void) {
-    return gbufferPrs;
-}
-
-void* heightmapTerrainDiligentLitVS(void) {
-    return vs;
 }
 
 void heightmapTerrainDiligentRegisterLook(const HeightmapTerrainLook* lookPtr) {

@@ -22,7 +22,6 @@
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/PropsRenderDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
-#include "renderer/diligent/SsrDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 
 #include "Graphics/GraphicsEngine/interface/Texture.h"
@@ -593,30 +592,13 @@ namespace engine::renderer::diligent {
                 Diligent::ScopedDebugGroup propsPass(context, "props");
                 propsRenderDiligentDraw();
             }
-            {
-                Diligent::ScopedDebugGroup ssrGbufferPass(context, "ssr_gbuffer");
-                ssrDiligentGbufferDraw();
-            }
-            if (ssrDiligentEnabled()) {
-                taaPostFXExecute(context);
-            }
-            {
-                Diligent::ScopedDebugGroup ssrPass(context, "ssr");
-                ssrDiligentExecute();
-            }
-
             // Resolve the offscreen world into the backbuffer: TAA accumulation
             // (when enabled) or a plain blit of the scene color. Only when the
             // world drew — the UI passes' load op (LOAD over the world, CLEAR
             // for the bare menu) keys on diligentWorldDrew().
             if (worldDrewThisFrame) {
-                Diligent::ITextureView* ssrCompositeSRV = nullptr;
-                {
-                    Diligent::ScopedDebugGroup ssrCompositePass(context, "ssr_composite");
-                    ssrCompositeSRV = ssrDiligentComposite();
-                }
                 Diligent::ScopedDebugGroup taaResolve(context, "taa_resolve");
-                taaWorldResolve(context, rtv, ssrCompositeSRV);
+                taaWorldResolve(context, rtv);
             }
 
             bool uiDrew = false;
@@ -735,7 +717,6 @@ namespace engine::renderer::diligent {
             // texture view must be released while the glTF pass — and the device
             // — still live)
             heightmapTerrainRenderDestroy();
-            ssrDiligentDestroy();
             propsRenderDestroy();
             shadowDiligentDestroy();
             iblDiligentDestroy();

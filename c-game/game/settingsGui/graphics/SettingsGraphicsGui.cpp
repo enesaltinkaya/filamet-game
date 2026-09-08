@@ -28,7 +28,6 @@ static float renderScalePercent    = 100.0f;  // render resolution scale, % (50.
 static int   shadowsMode           = 1;       // PCF
 static int   shadowsQuality        = 2;       // Medium
 static char  shadowQualityDisabled = 0;
-static char  ssrEnabled            = 0;
 static char  aoEnabled             = 1;
 static char  giEnabled             = 1;
 static char  bloomEnabled          = 1;
@@ -61,7 +60,6 @@ static const char* fogModeNames[] = {
 
 static char* shadowsLabel;
 static char* shadowQualityLabel;
-static char* ssrLabel;
 static char* aoLabel;
 static char* giLabel;
 static char* bloomLabel;
@@ -71,7 +69,6 @@ static char* fogLabel;
 static char* taaLabel;
 static char shadowsLabelText[16];
 static char shadowQualityLabelText[16];
-static char ssrLabelText[16];
 static char aoLabelText[16];
 static char giLabelText[16];
 static char bloomLabelText[16];
@@ -93,7 +90,6 @@ static int toggleShadows(void* _);
 static int toggleShadowsPrev(void* _);
 static int toggleShadowQuality(void* _);
 static int toggleShadowQualityPrev(void* _);
-static int toggleSsr(void* _);
 static int toggleAo(void* _);
 static int toggleGi(void* _);
 static int toggleBloom(void* _);
@@ -117,7 +113,6 @@ static void applyRenderer(void) {
     g.renderScale   = renderScalePercent / 100.0f;
     g.shadowMode    = shadowsMode;
     g.shadowQuality = shadowsQuality;
-    g.ssr           = ssrEnabled != 0;
     g.ssao          = aoEnabled != 0;
     g.bloom         = bloomEnabled != 0;
     g.vignette      = lensVignettePercent / 100.0f;
@@ -198,7 +193,6 @@ void SettingsGraphicsGui::added() {
     engine::luaRegisterFunction("toggleShadowsPrev", toggleShadowsPrev);
     engine::luaRegisterFunction("toggleShadowQuality", toggleShadowQuality);
     engine::luaRegisterFunction("toggleShadowQualityPrev", toggleShadowQualityPrev);
-    engine::luaRegisterFunction("toggleSsr", toggleSsr);
     engine::luaRegisterFunction("toggleAo", toggleAo);
     engine::luaRegisterFunction("toggleGi", toggleGi);
     engine::luaRegisterFunction("toggleBloom", toggleBloom);
@@ -218,7 +212,6 @@ void SettingsGraphicsGui::added() {
     renderScalePercent   = (float)(utils::settingsGetDouble("renderScale") * 100.0);
     shadowsMode          = utils::settingsGetInt("shadowMode");
     shadowsQuality       = utils::settingsGetInt("shadowQuality");
-    ssrEnabled           = (char)!utils::settingsGetBool("ssrDisabled");
     aoEnabled            = (char)!utils::settingsGetBool("aoDisabled");
     giEnabled            = (char)!utils::settingsGetBool("giDisabled");
     bloomEnabled         = (char)!utils::settingsGetBool("bloomDisabled");
@@ -251,7 +244,6 @@ void SettingsGraphicsGui::added() {
     rmlBind(model, "shadowsLabel", &shadowsLabel);
     rmlBind(model, "shadowQualityLabel", &shadowQualityLabel);
     rmlBindBool(model, "shadowQualityDisabled", &shadowQualityDisabled);
-    rmlBind(model, "ssrLabel", &ssrLabel);
     rmlBind(model, "aoLabel", &aoLabel);
     rmlBind(model, "giLabel", &giLabel);
     rmlBind(model, "bloomLabel", &bloomLabel);
@@ -282,7 +274,6 @@ void SettingsGraphicsGui::added() {
             while (taaEnabled) toggleTaa(nullptr);
             while (shadowsMode != 1) toggleShadows(nullptr);
             while (shadowsQuality != 1) toggleShadowQuality(nullptr);
-            while (ssrEnabled) toggleSsr(nullptr);
             while (bloomEnabled) toggleBloom(nullptr);
             while (fogMode != 0) toggleFog(nullptr);
             renderScalePercent  = 130.0f;
@@ -343,8 +334,6 @@ static void syncLabels(void) {
     snprintf(shadowQualityLabelText, sizeof(shadowQualityLabelText), "%s",
              shadowQualityNames[shadowsQuality]);
     shadowQualityLabel = shadowQualityLabelText;
-    snprintf(ssrLabelText, sizeof(ssrLabelText), "%s", ssrEnabled ? "On" : "Off");
-    ssrLabel = ssrLabelText;
     snprintf(aoLabelText, sizeof(aoLabelText), "%s", aoEnabled ? "On" : "Off");
     aoLabel = aoLabelText;
     snprintf(giLabelText, sizeof(giLabelText), "%s", giEnabled ? "On" : "Off");
@@ -415,15 +404,6 @@ static int toggleShadowQuality(void* _) {
 static int toggleShadowQualityPrev(void* _) {
     int count = (int)(sizeof(shadowQualityNames) / sizeof(shadowQualityNames[0]));
     shadowsQualityApply((shadowsQuality + count - 1) % count);
-    return 0;
-}
-
-static int toggleSsr(void* _) {
-    ssrEnabled = !ssrEnabled;
-    applyRenderer();
-    persistBool("ssrDisabled", ssrEnabled == 0);
-    syncLabels();
-    rmlUpdateDirtyAll(model);
     return 0;
 }
 

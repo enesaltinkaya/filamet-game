@@ -44,9 +44,6 @@
 #ifndef ENABLE_CSM_SHADOWS
 #   define ENABLE_CSM_SHADOWS 0
 #endif
-#ifndef GBUFFER_OUTPUT
-#   define GBUFFER_OUTPUT 0
-#endif
 #ifndef SHADOW_DEBUG_VIS
 #   define SHADOW_DEBUG_VIS 0
 #endif
@@ -457,11 +454,6 @@ PSTerrainOut main(in PSTerrainIn vs)
     // Roughness follows the same material chain (snow smooth, sand rough).
     roughness = lerp(roughness, 0.6, snowT);
     roughness = lerp(roughness, 0.85, beachT);
-    roughness *= 0.05;
-    // Keep the terrain glossy so the screen-space reflection reads: a matte
-    // dielectric spreads the GGX lobe into an imperceptible sheen, so SSR
-    // needs a smooth (low-roughness) surface to show a visible reflection.
-    roughness = min(roughness, 0.08);
 
     // Micro-band roughness: perturb the shading normal with the 4-32 m value
     // noise (finite differences, 0.5 m step). Does not move geometry. Two
@@ -484,15 +476,6 @@ PSTerrainOut main(in PSTerrainIn vs)
         float   grazingGain    = smoothstep(0.05, 0.30, geomNdotV);
         N                      = safeNormalize(N + microN * (MICRO_NOISE_STRENGTH * grazingGain), N);
     }
-
-#if GBUFFER_OUTPUT
-    {
-        PSTerrainOut gb;
-        gb.Color  = float4(N, roughness);
-        gb.Motion = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        return gb;
-    }
-#endif
 
     bool   dbgOn    = debugView > 0.5;
     float3 dbgColor = float3(1.0);

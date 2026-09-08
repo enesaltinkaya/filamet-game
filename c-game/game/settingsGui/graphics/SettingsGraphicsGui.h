@@ -5,7 +5,7 @@
 namespace game {
 // The graphics settings sub-page (gui/settings/graphics/graphics.html):
 // TAA, resolution scale, shadows quality,
-// reflections (SSR), ambient occlusion, global illumination, bloom, lens
+// ambient occlusion, global illumination, bloom, lens
 // effects (grain / chromatic aberration / vignette), depth of field
 // (+ quality) and fog. BACK returns to the main settings page. (The old
 // engine's FSR3 upscaler selector is gone — the manual resolution scale is

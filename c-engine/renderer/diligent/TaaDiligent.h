@@ -88,18 +88,9 @@ Diligent::ITextureView* taaColorRTV(void);
 Diligent::ITextureView* taaMotionRTV(void);
 Diligent::ITextureView* taaDepthDSV(void);
 
-Diligent::ITextureView* taaColorSRV(void);
-Diligent::ITextureView* taaMotionSRV(void);
-Diligent::ITextureView* taaDepthSRV(u32 frameIdx);
-void taaPostFXExecute(Diligent::IDeviceContext* ctx);
-
-Diligent::PostFXContext* taaPostFXContext(void);
-u32 taaFrameIndex(void);
-
 // Post-world resolve: PostFXContext::Execute + TAA::Execute (when enabled),
 // then the RCAS sharpen pass (when casStrength > 0), then blit the result
 // (or the raw scene color when both are off) into the swapchain backbuffer.
-void taaWorldResolve(Diligent::IDeviceContext* ctx, Diligent::ITextureView* backRTV,
-                     Diligent::ITextureView* srcOverride = nullptr);
+void taaWorldResolve(Diligent::IDeviceContext* ctx, Diligent::ITextureView* backRTV);
 
 }

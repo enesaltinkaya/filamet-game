@@ -16,13 +16,13 @@ namespace engine {
 // debug.html) is unchanged; the toggle callbacks that had old-engine Vulkan
 // passes (shadow/bloom/AO/GI/volumetric/LPM/IBL/...) are adapted to what the
 // Diligent backend actually exposes:
-//   - shadows / bloom / ssao / ssr(GI) / fog drive
+//   - shadows / bloom / ssao / fog drive
 //     renderer::GraphicsSettings (rendererGraphicsApply);
 //   - the IBL env-file prev/next callbacks drive iblDiligentCyclePrev/Next and
 //     the env file label mirrors iblDiligentEnvName;
 //   - everything else without an equivalent here (IBL toggle, intensity,
-//     POM, skybox, grid, reflection, LPM) is an inert stub: the state stays
-//     at its neutral value, the callback just resyncs + refreshes the doc.
+//     GI, POM, skybox, grid, reflection, LPM) is an inert stub: the state
+//     stays at its neutral value, the callback just resyncs + refreshes the doc.
 DebugGui debugGui;
 
 DebugGui::DebugGui() : System("debugGui") {}
@@ -34,11 +34,11 @@ static void* model    = nullptr;
 static char shadowsEnabled;
 static char bloomEnabled;
 static char aoEnabled;
-static char giEnabled;
 static char volumetricFogEnabled;
 
 // Stub state — the feature doesn't exist in this engine; kept bound so the
 // document renders with its neutral (disabled/zero) values.
+static char giEnabled         = 0;
 static char reflectionEnabled = 0;
 static char skyboxEnabled     = 0;
 static char gridEnabled       = 0;
@@ -63,7 +63,6 @@ static void syncFromPasses(void) {
     shadowsEnabled     = g.shadowMode != 0;
     bloomEnabled       = g.bloom;
     aoEnabled          = g.ssao;
-    giEnabled          = g.ssr;
     volumetricFogEnabled = g.fog;
 
     tonemapLabel = (char*)"built-in";
@@ -106,14 +105,6 @@ static int toggleAo(void* _) {
     return refresh(_);
 }
 
-static int toggleGi(void* _) {
-    (void)_;
-    auto g = renderer::rendererGraphicsSettings();
-    g.ssr = !g.ssr;  // screen-space reflections: this engine's closest "GI"
-    renderer::rendererGraphicsApply(g);
-    return refresh(_);
-}
-
 static int toggleVolumetricFog(void* _) {
     (void)_;
     auto g = renderer::rendererGraphicsSettings();
@@ -127,6 +118,7 @@ static int iblFilePrev(void* _)        { renderer::diligent::iblDiligentCyclePre
 static int iblFileNext(void* _)        { renderer::diligent::iblDiligentCycleNext(); return refresh(_); }
 static int iblIntensityDown(void* _)  { return refresh(_); }
 static int iblIntensityUp(void* _)     { return refresh(_); }
+static int toggleGi(void* _)           { return refresh(_); }
 static int toggleReflection(void* _)   { return refresh(_); }
 static int toggleSkybox(void* _)       { return refresh(_); }
 static int toggleGrid(void* _)         { return refresh(_); }

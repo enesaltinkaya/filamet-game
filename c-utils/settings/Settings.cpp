@@ -50,7 +50,6 @@ void settingsInit(void) {
     /* Render backend: diligent is the only renderer (legacy key, kept so
      * existing settings.json files validate). */
     templates.push_back((Template{"rendererBackend", "int", 1.}));
-    templates.push_back((Template{"ssrDisabled", "boolean", 0.}));
     templates.push_back((Template{"aoDisabled", "boolean", 0.}));
     /* Screen-space GI (plans/ssgi.md, phases 1-4 validated): on by
      * default; the GUI toggle persists "giDisabled". */

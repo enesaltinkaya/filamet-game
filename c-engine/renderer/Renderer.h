@@ -17,7 +17,6 @@ struct GraphicsSettings {
     int shadowMode = 1;            // 0 off, 1 PCF, 2 VSM, 3 EVSM2, 4 EVSM4 (DiligentFX SHADOW_MODE_*)
     int shadowQuality = 1;         // 0 low, 1 medium, 2 high (ignored while mode == off)
     bool ssao = true;
-    bool ssr = true;
     bool bloom = true;
     float vignette = 0.7f;         // 0..1
     bool dof = false;

@@ -137,7 +137,6 @@ set_source_files_properties(
     renderer/diligent/HeightmapTerrainDiligent.cpp
     renderer/diligent/IblDiligent.cpp
     renderer/diligent/PropsRenderDiligent.cpp
-    renderer/diligent/SsrDiligent.cpp
     renderer/diligent/ShadowDiligent.cpp
     renderer/diligent/TaaDiligent.cpp
     gltf/GltfDiligent.cpp
