@@ -39,26 +39,12 @@ namespace engine {
 
     static void windowSynthesizeInputEvents(void);
 
-    // window hidden when ENGINE_HIDDEN_WINDOW is set, or for automated runs
-    // (screenshot / renderdoc capture): rendering still works, the swapchain just
-    // presents to an unmapped window. Same gating as rendererInit in Renderer.cpp
     static bool hiddenRun(void) {
-        const char* value = getenv("ENGINE_HIDDEN_WINDOW");
-
-        if (value != nullptr && strcmp(value, "0") == 0) {
-            return false;
-        }
-
-        const char* screenshot = getenv("ENGINE_SCREENSHOT");
-        if (screenshot && screenshot[0] != '\0') {
+        if (getenv("ENGINE_HIDDEN_WINDOW")) {
             return true;
         }
-#ifndef NDEBUG
-        if (getenv("ENGINE_RENDERDOC_CAPTURE")) {
-            return true;
-        }
-#endif
-        return true;
+
+        return false;
     }
 
     bool windowCreate(const char* title, u32 width, u32 height) {

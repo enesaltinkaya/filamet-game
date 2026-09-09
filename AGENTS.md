@@ -2,6 +2,8 @@ Use renderdoc to debug graphical issues.
 Do not use comments in the code.
 Do not use "find / ...".
 Do not use git.
+Always use export ENGINE_HIDDEN_WINDOW=1 env variable.
+Always use export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json env variable.
 
 ### File locations
 

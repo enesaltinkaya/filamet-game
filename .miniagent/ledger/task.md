@@ -1,6 +1,5 @@
-this is from eztree /var/home/enes/Downloads/tree.png
-/tmp/ez-tree
-
-
-we implemented its logic in our engine
-but our trees look nothing like it is from ez-tree /var/home/enes/Screenshots/Screenshot_20260909_023005.jpeg
+we ported /tmp/ez-tree to our engine.
+tree leaves are blocky.
+i can tell the square/plane look on the leaves.
+they dont look like natural leaves.
+can you fix it please?
