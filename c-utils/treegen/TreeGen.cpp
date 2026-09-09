@@ -296,15 +296,15 @@ namespace treegen {
                 V3 nB      = w;
                 float size = cfg.cardSize * (1.0f + cfg.cardVariance * (2.0f * rng.unit() - 1.0f));
                 if (size < 0.001f) size = 0.001f;
-                float hs = 0.5f * size;
-                float uw = kLeafUvRect.u1 - kLeafUvRect.u0;
-                float vw = kLeafUvRect.v1 - kLeafUvRect.v0;
-                float fw = 0.45f + 0.45f * rng.unit();
-                float fh = 0.45f + 0.45f * rng.unit();
-                float u0 = kLeafUvRect.u0 + (1.0f - fw) * uw * rng.unit();
-                float v0 = kLeafUvRect.v0 + (1.0f - fh) * vw * rng.unit();
-                float u1 = u0 + fw * uw;
-                float v1 = v0 + fh * vw;
+                float hs            = 0.5f * size;
+                float uw            = kLeafUvRect.u1 - kLeafUvRect.u0;
+                float vw            = kLeafUvRect.v1 - kLeafUvRect.v0;
+                float fw            = 0.9f + 0.1f * rng.unit();
+                float fh            = 0.9f + 0.1f * rng.unit();
+                float u0            = kLeafUvRect.u0 + (1.0f - fw) * 0.5f * uw;
+                float v0            = kLeafUvRect.v0 + (1.0f - fh) * 0.5f * vw;
+                float u1            = u0 + fw * uw;
+                float v1            = v0 + fh * vw;
                 const V3 widths[2]  = {w, z};
                 const V3 normals[2] = {nA, nB};
                 for (u32 q = 0; q < 2; q++) {
@@ -547,13 +547,13 @@ namespace treegen {
         c.gnarliness          = 0.03f;
         c.lift                = 0.6f;
         c.leaf                = LeafStrategy::CARDS;
-        c.cardCountMin        = 5;
-        c.cardCountMax        = 7;
+        c.cardCountMin        = 11;
+        c.cardCountMax        = 15;
         c.cardSize            = 0.055f;
         c.cardVariance        = 0.6f;
         c.cardTilt            = 0.9599f;
         c.cardStartFrac       = 0.0f;
-        c.maxTris             = 3300;
+        c.maxTris             = 6000;
         return c;
     }
 

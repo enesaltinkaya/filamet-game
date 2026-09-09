@@ -1,32 +1,26 @@
 [
   {
     "id": 1,
-    "desc": "Baseline: run the pinned verification command, save the screenshot as the before-image; run once more with ENGINE_AZGAAR_PROPS_MESH_DUMP=1 and inspect /tmp/azgaar_props_*.obj to confirm the geometry side of the blockiness (4-sided conifer cones, 3x2 blob spheres, 1-2 large quads per deciduous tip).",
-    "status": "done",
-    "result": "Baseline saved /tmp/ledger_leaf_before.jpg + OBJ dumps; conifer_0 241 tris, deciduous_0 2352, acacia_0 196, shrub_0 115 — confirmed 4-sided cones / 3x2 blobs / large quads."
+    "desc": "Regenerate the leaf texture as ONE dense cluster (NOT an edge-to-edge field): rewrite scripts/make_leaf_sprite.py for a 256px canvas — top ~80 rows = fully opaque bark band where kBarkUvRect samples; leaf region below = one dense leaflet cluster (~150-250 leaflets, 6-14px, varied hue 78-158/sat/val, ~70-85% core fill, fluffy outline) surrounded by a guaranteed transparent moat (alpha < 128, >= ~8px) around the whole region border, so every sampled rect's cutout silhouette is the cluster outline, never a rectangle. Keep the seeded RNG, extend self-checks (bark band rows 100% opaque, moat clear, core coverage >= 0.6), run it, verify the PNG by eye, then repack (scripts/data.sh, cwd c-game, BIN_DIR=build/c-game).",
+    "status": "pending",
+    "result": null
   },
   {
     "id": 2,
-    "desc": "Regenerate the leaf sprite: extend/run scripts/make_leaf_sprite.py so the ash.png leaf region (below the bark strip, v=0.34..0.99) contains small, irregular, overlapping leaflets with color and alpha variation instead of big rounded-square blobs; rebuild paks via scripts/build.sh so pak_1 updates.",
+    "desc": "Densify the canopy (config + emitCards, no texture dependency): in c-utils/treegen/TreeGen.cpp configDeciduous() raise maxTris 3300 -> 6000 (MANDATORY: 15 cards x 32 tips x 4 tris exceeds the 3300 cap and Gen::room in TreeGen.cpp:86 silently clips terminal foliage), cardCountMin 1 -> 11, cardCountMax 2 -> 15, keep cardSize ~0.055 (5.5% of height, matches original 5-6%). In emitCards (~TreeGen.cpp:302-307) replace the random 45-90% sub-rect sampling with whole-region sampling (fw=fh=1.0, optional 0.9-1.0 centered crop for variety) so each card's cutout silhouette is the full cluster, never an arbitrary rectangle crop. Verify: 'azgaarPropMesh build' log shows deciduous tri count ~3600-4100 with validation PASS, and the frame-1200 screenshot shows a visibly denser canopy (still coarse until task 1 lands — acceptable for this task).",
     "status": "done",
-    "result": "Rewrote make_leaf_sprite.py: 70 clipped 8-15px irregular leaflets, per-leaflet hue/lightness/rotation + dither, Gaussian 0.55 edge; strip/bark/border assertions pass, region fill 0.42; repacked pak_1 (zipping pak_1 size:69M)."
+    "result": "maxTris 6000, cardCount 11/15, whole-region centered-crop sampling (fw=fh 0.9-1.0); deciduous ~4500-4600 tris (< 6000 cap, Gen::room never clips), validation PASS; canopy now a dense crown with irregular silhouette — cards still show old sparse ash.png content (task 1)."
   },
   {
     "id": 3,
-    "desc": "Improve deciduous CARDS leaf geometry in TreeGen.cpp: more, smaller, more-jittered cards per tip (cardCountMin/Max, cardSize, cardVariance in configDeciduous, and emitCards placement/distribution along the section) so canopy silhouettes look natural, staying within maxTris=3300.",
-    "status": "done",
-    "result": "cardCount 1-2 -> 5-7, per-card tilt jitter +-0.45rad, per-card UV sub-window jitter (45-90% of leaf region); deciduous dumps now 3204-3247 tris, all within maxTris=3300."
+    "desc": "Align UV rects with the regenerated texture: update kLeafUvRect/kBarkUvRect in c-utils/treegen/TreeGen.h to the new 256px ash.png layout under the engine's v=0=image-top convention (bark rect fully inside the opaque bark band; leaf rect fully inside the cluster region INCLUDING the moat so no card sample touches the border), and confirm the DECIDUOUS AZGAAR_PROPS_FLAG_ALPHA_TEST cutout path (props_ps.hlsl alpha-discard + shadow pass) still discards the transparent moat — no renderer changes expected. Depends on task 1 (needs the new layout).",
+    "status": "pending",
+    "result": null
   },
   {
     "id": 4,
-    "desc": "De-blockify non-deciduous leaves in TreeGen.cpp: make addCone use 6-8 radial sides instead of hardcoded 4 (conifer), and raise leafSeg/leafRing for BLOBS/FAN (configAcacia/configShrub), keeping each species within its maxTris budget.",
-    "status": "done",
-    "result": "addCone now takes sides; emitCones rolls 6-8 sides per cone with room(3*sides); acacia+shrub leafSeg 3->4, leafRing 2->3; conifer ~316-334 tris (<=400), acacia ~268 (<=400), shrub ~175-193 (<=200)."
-  },
-  {
-    "id": 5,
-    "desc": "Verify visually: run the pinned verification command, compare /tmp/ledger_leaf.jpg against the task-1 baseline (leaves must no longer read as squares/planes at normal camera distance); if the screenshot is inconclusive, capture the props pass with RenderDoc (read docs/renderdoc-capture.md first) and iterate on tasks 2-4.",
-    "status": "done",
-    "result": "After /tmp/ledger_leaf_after.jpg vs /tmp/ledger_leaf_before.jpg (+ side-by-side 1200x1000 zooms): leaves now read as small irregular tufts with color/alpha variation at camera distance; square/plane look gone. Screenshot conclusive, no RenderDoc needed."
+    "desc": "Screenshot A/B until it matches: run the pinned verification command from plan.md, compare /tmp/tree_after.png against /var/home/enes/Downloads/tree.png — canopy must read as a dense natural leaf tangle with a fluffy outer silhouette and NO square card silhouettes at the framed close-up range (compare canopy character, not pixel positions — camera auto-frames a different cell each run); confirm trunk bark, grass cards, and conifer/acacia/shrub (other treegen strategies) are unaffected, and the 'azgaarPropMesh build' log line shows validation PASS with sane deciduous tri counts. Depends on tasks 1+3.",
+    "status": "pending",
+    "result": null
   }
 ]
