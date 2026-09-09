@@ -1522,6 +1522,7 @@ u32 azgaarPropsSpeciesRenderFlags(u32 species) {
         // half of every tuft near-black, so these species light both faces with
         // the unflipped normal.
         case AZGAAR_PROP_GRASS_TUFT:  return AZGAAR_PROPS_FLAG_ALPHA_TEST | AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
+        case AZGAAR_PROP_DECIDUOUS:   return AZGAAR_PROPS_FLAG_ALPHA_TEST | AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
         case AZGAAR_PROP_PALM:        return AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
         case AZGAAR_PROP_REED:        return AZGAAR_PROPS_FLAG_DOUBLE_SIDED;
         case AZGAAR_PROP_FLOWER:      return AZGAAR_PROPS_FLAG_FLOWER | AZGAAR_PROPS_FLAG_DOUBLE_SIDED;

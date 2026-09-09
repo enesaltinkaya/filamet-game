@@ -109,11 +109,13 @@ void addBand(Gen& g,
              float r0,
              float r1,
              u32 sides,
+             const UvRect& uvRect,
              const float trunkCol[3],
              bool baseCap,
              bool topCap) {
     float len     = sqrtf(vDot(vSub(o2, o), vSub(o2, o)));
     float col[4]  = {trunkCol[0], trunkCol[1], trunkCol[2], 1.0f};
+    float ub      = uvRect.u0 + (uvRect.u1 - uvRect.u0) * 0.5f;
     u32 first     = static_cast<u32>(g.m.verts.size());
     for (u32 s = 0; s < sides; s++) {
         float a0 = kTwoPi * static_cast<float>(s) / static_cast<float>(sides);
@@ -123,15 +125,17 @@ void addBand(Gen& g,
         V3 w1 = vAdd(vScale(u, cosf(a1)), vScale(v, sinf(a1)));
         V3 w  = vAdd(vScale(u, cosf(am)), vScale(v, sinf(am)));
         V3 n  = vAdd(vScale(w, len), vScale(axis, r0 - r1));
-        u32 b0 = g.vert(vAdd(o, vScale(w0, r0)), n, 0.0f, 0.0f, col);
-        u32 b1 = g.vert(vAdd(o, vScale(w1, r0)), n, 0.0f, 0.0f, col);
-        u32 t0 = g.vert(vAdd(o2, vScale(w0, r1)), n, 0.0f, 1.0f, col);
-        u32 t1 = g.vert(vAdd(o2, vScale(w1, r1)), n, 0.0f, 1.0f, col);
+        float u0u = uvRect.u0 + (uvRect.u1 - uvRect.u0) * a0 / kTwoPi;
+        float u1u = uvRect.u0 + (uvRect.u1 - uvRect.u0) * a1 / kTwoPi;
+        u32 b0 = g.vert(vAdd(o, vScale(w0, r0)), n, u0u, uvRect.v0, col);
+        u32 b1 = g.vert(vAdd(o, vScale(w1, r0)), n, u1u, uvRect.v0, col);
+        u32 t0 = g.vert(vAdd(o2, vScale(w0, r1)), n, u0u, uvRect.v1, col);
+        u32 t1 = g.vert(vAdd(o2, vScale(w1, r1)), n, u1u, uvRect.v1, col);
         g.tri(b0, t1, b1);
         g.tri(b0, t0, t1);
     }
     if (topCap && r1 > 0.004f) {
-        u32 c = g.vert(o2, axis, 0.5f, 1.0f, col);
+        u32 c = g.vert(o2, axis, ub, uvRect.v1, col);
         for (u32 s = 0; s < sides; s++) {
             u32 t0 = first + 4u * s + 2u;
             u32 t1 = first + 4u * s + 3u;
@@ -139,7 +143,7 @@ void addBand(Gen& g,
         }
     }
     if (baseCap && r0 > 0.004f) {
-        u32 c = g.vert(o, vScale(axis, -1.0f), 0.5f, 0.0f, col);
+        u32 c = g.vert(o, vScale(axis, -1.0f), ub, uvRect.v0, col);
         for (u32 s = 0; s < sides; s++) {
             u32 b0 = first + 4u * s;
             u32 b1 = first + 4u * s + 1u;
@@ -192,7 +196,7 @@ void addCone(Gen& g, const V3& base, float baseR, float topR, float height) {
     V3 axis = {0.0f, 1.0f, 0.0f};
     V3 u    = {1.0f, 0.0f, 0.0f};
     V3 v    = {0.0f, 0.0f, 1.0f};
-    addBand(g, o, o2, axis, u, v, baseR, topR, 4, white, false, true);
+    addBand(g, o, o2, axis, u, v, baseR, topR, 4, kFullUvRect, white, false, true);
 }
 
 void emitBlobs(Gen& g, const Config& cfg, Rng& rng, const V3& tip, bool fan) {
@@ -233,6 +237,69 @@ void emitCones(Gen& g, const Config& cfg, Rng& rng, const V3& tip) {
     }
 }
 
+void emitCards(Gen& g,
+               const Config& cfg,
+               Rng& rng,
+               const std::vector<V3>& origins,
+               u32 nsec) {
+    u32 count = cfg.cardCountMin;
+    if (cfg.cardCountMax > count)
+        count += (u32)(rng.unit() * (static_cast<float>(cfg.cardCountMax + 1u) -
+                                    static_cast<float>(cfg.cardCountMin)));
+    float span = 1.0f - cfg.cardStartFrac;
+    if (span <= 0.0f) span = 1.0f;
+    float ct   = cosf(cfg.cardTilt);
+    float st   = sinf(cfg.cardTilt);
+    static const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    for (u32 k = 0; k <= count; k++) {
+        if (!g.room(4u)) return;
+        float t;
+        if (k == count)
+            t = 1.0f;
+        else
+            t = cfg.cardStartFrac + (static_cast<float>(k) + rng.unit()) * span /
+                static_cast<float>(count);
+        float f  = t * static_cast<float>(nsec);
+        u32 s0   = static_cast<u32>(f);
+        if (s0 >= nsec) s0 = nsec - 1;
+        u32 s1     = s0 + 1 < nsec ? s0 + 1 : s0;
+        float fr  = f - static_cast<float>(s0);
+        V3 c  = vLerp(origins[s0], origins[s1], fr);
+        V3 ax = vNorm(vSub(origins[s1], origins[s0]));
+        V3 u  = vOrthonormal(ax);
+        V3 v  = vCross(u, ax);
+        float az = kTwoPi * (static_cast<float>(k) + 0.5f) / static_cast<float>(count + 1u) +
+                   (rng.unit() - 0.5f) * 1.2f;
+        V3 w = vNorm(vAdd(vScale(u, cosf(az)), vScale(v, sinf(az))));
+        V3 z = vCross(w, ax);
+        V3 d = vNorm(vAdd(vScale(ax, ct), vScale(z, st)));
+        V3 nA = vAdd(vScale(z, ct), vScale(w, -st));
+        V3 nB = w;
+        float size = cfg.cardSize * (1.0f + cfg.cardVariance * (2.0f * rng.unit() - 1.0f));
+        if (size < 0.001f) size = 0.001f;
+        float hs = 0.5f * size;
+        float u0 = kLeafUvRect.u0, v0 = kLeafUvRect.v0;
+        float u1 = kLeafUvRect.u1, v1 = kLeafUvRect.v1;
+        const V3 widths[2] = {w, z};
+        const V3 normals[2] = {nA, nB};
+        for (u32 q = 0; q < 2; q++) {
+            V3 p[4];
+            p[0] = vSub(vSub(c, vScale(widths[q], hs)), vScale(d, hs));
+            p[1] = vSub(vAdd(c, vScale(widths[q], hs)), vScale(d, hs));
+            p[2] = vAdd(vSub(c, vScale(widths[q], hs)), vScale(d, hs));
+            p[3] = vAdd(vAdd(c, vScale(widths[q], hs)), vScale(d, hs));
+            const float uvu[4] = {u0, u1, u0, u1};
+            const float uvt[4] = {v0, v0, v1, v1};
+            u32 idx[4];
+            for (u32 i = 0; i < 4; i++)
+                idx[i] = g.vert(p[i], vAdd(normals[q], vSub(p[i], c)),
+                                 uvu[i], uvt[i], white);
+            g.tri(idx[2], idx[0], idx[1]);
+            g.tri(idx[2], idx[1], idx[3]);
+        }
+    }
+}
+
 struct Job {
     u32 level;
     u32 seed;
@@ -246,23 +313,26 @@ void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
     Rng rng(j.seed);
     const LevelCfg& lv = cfg.lev[j.level];
     u32 nsec           = lv.sections < 1 ? 1 : lv.sections;
-    if (nsec > 6) nsec = 6;
+    if (nsec > 12) nsec = 12;
     u32 sides = lv.radialSegs < 3 ? 3 : lv.radialSegs;
-    if (sides > 8) sides = 8;
+    if (sides > 12) sides = 12;
+    float startFrac = lv.startFrac > -1.0f ? lv.startFrac : cfg.startFrac;
+    float lvTwist   = lv.twist > -1.0f ? lv.twist : cfg.twist;
+    float lvGnar    = lv.gnarliness > -1.0f ? lv.gnarliness : cfg.gnarliness;
+    const UvRect& bandUv = cfg.leaf == LeafStrategy::CARDS ? kBarkUvRect : kFullUvRect;
     V3 dir = vNorm(j.dir);
     V3 u   = vOrthonormal(dir);
     V3 v   = vCross(u, dir);
     float len   = j.length * (1.0f + 0.15f * (2.0f * rng.unit() - 1.0f));
     V3 o         = j.origin;
-    V3 origins[7];
+    std::vector<V3> origins(nsec + 1);
     origins[0] = o;
-    float twistSign = rng.unit() < 0.5f ? 1.0f : -1.0f;
     float rBase     = j.radius;
     for (u32 s = 0; s < nsec; s++) {
         float t0 = static_cast<float>(s) / static_cast<float>(nsec);
         float t1 = static_cast<float>(s + 1) / static_cast<float>(nsec);
         float rc = rBase * (1.0f - lv.taper * t1);
-        float perturb = cfg.gnarliness * (0.4f + 0.6f * rng.unit()) /
+        float perturb = lvGnar * (0.4f + 0.6f * rng.unit()) /
                         fmaxf(0.15f, sqrtf(rc));
         if (perturb > 0.001f) {
             V3 axis = vAdd(vScale(u, cosf(kTwoPi * rng.unit())),
@@ -276,7 +346,7 @@ void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
         float pl = sqrtf(vDot(perp, perp));
         u = pl > 1e-5f ? vScale(perp, 1.0f / pl) : vOrthonormal(dir);
         v   = vCross(u, dir);
-        float tw = twistSign * cfg.twist * (t1 - t0);
+        float tw = lvTwist * (t1 - t0);
         vRotate(&u, dir, tw);
         vRotate(&v, dir, tw);
         float step = (len / static_cast<float>(nsec)) * (0.9f + 0.2f * rng.unit());
@@ -286,7 +356,7 @@ void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
         float r0    = rBase * (1.0f - lv.taper * t0);
         u32 bandCost = 2u * sides + sides * (u32)((s + 1 == nsec) + (j.level == 0 && s == 0));
         if (!g.room(bandCost)) return;
-        addBand(g, o, o2, bandAxis, u, v, r0, rc, sides, cfg.trunkColor,
+        addBand(g, o, o2, bandAxis, u, v, r0, rc, sides, bandUv, cfg.trunkColor,
                 j.level == 0 && s == 0, s + 1 == nsec);
         o = o2;
     }
@@ -295,10 +365,10 @@ void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
         const LevelCfg& clv = cfg.lev[j.level + 1];
         u32 want           = clv.children;
         if (want > 0) {
-            u32 n = want + (u32)(rng.unit() * 2.0f);
-            if (n > 7) n = 7;
+            u32 n = want;
+            float step = (1.0f - startFrac) / static_cast<float>(n);
             for (u32 c = 0; c < n; c++) {
-                float spawnT = cfg.startFrac + (1.0f - cfg.startFrac) * rng.unit();
+                float spawnT = startFrac + (static_cast<float>(c) + rng.unit()) * step;
                 float f      = spawnT * static_cast<float>(nsec);
                 u32 s0       = static_cast<u32>(f);
                 if (s0 >= nsec) s0 = nsec - 1;
@@ -308,13 +378,20 @@ void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
                 float az  = kTwoPi * (static_cast<float>(c) + 0.5f) /
                                static_cast<float>(n) +
                            (rng.unit() - 0.5f) * 1.2f;
-                float ang  = clv.angleSpread * (0.7f + 0.6f * rng.unit());
+                float ang  = clv.angleSpread * (1.0f + cfg.angleJitter * (2.0f * rng.unit() - 1.0f));
                 V3 w = vAdd(vScale(u, cosf(az)), vScale(v, sinf(az)));
                 V3 cd = vAdd(vScale(dir, cosf(ang)), vScale(w, sinf(ang)));
-                cd = vNorm(vAdd(cd, V3{0.0f, 0.35f * (1.0f - cd.y), 0.0f}));
-                float rad  = clv.radius * (0.8f + 0.4f * rng.unit());
+                if (cfg.upBias > 0.0f)
+                    cd = vNorm(vAdd(cd, V3{0.0f, cfg.upBias * (1.0f - cd.y), 0.0f}));
+                float localR = j.radius * (1.0f - lv.taper * spawnT);
+                float rad;
+                if (clv.relRadius > -1.0f)
+                    rad = clv.relRadius * localR * (0.8f + 0.4f * rng.unit());
+                else
+                    rad = clv.radius * (0.8f + 0.4f * rng.unit());
+                if (rad < 0.0015f) rad = 0.0015f;
                 float clen = clv.length * (0.8f + 0.4f * rng.unit());
-                V3 cop = vAdd(p, vScale(w, rBase * (1.0f - lv.taper) * 0.5f));
+                V3 cop = vAdd(p, vScale(w, localR * 0.5f));
                 Job cj;
                 cj.level  = j.level + 1;
                 cj.seed   = mixSeed(j.seed, c * 31u + j.level);
@@ -325,11 +402,24 @@ void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
                 q.push_back(cj);
             }
         }
+        if (lv.continuation) {
+            float tipR = j.radius * (1.0f - lv.taper);
+            if (tipR < 0.0015f) tipR = 0.0015f;
+            Job cj;
+            cj.level  = j.level + 1;
+            cj.seed   = mixSeed(j.seed, 0xC0FFEEu + j.level * 101u);
+            cj.origin = origins[nsec];
+            cj.dir    = dir;
+            cj.radius = tipR;
+            cj.length = clv.length * (0.9f + 0.2f * rng.unit());
+            q.push_back(cj);
+        }
     } else {
         V3 tip = origins[nsec];
         if (cfg.leaf == LeafStrategy::BLOBS) emitBlobs(g, cfg, rng, tip, false);
         else if (cfg.leaf == LeafStrategy::FAN) emitBlobs(g, cfg, rng, tip, true);
         else if (cfg.leaf == LeafStrategy::CONES) emitCones(g, cfg, rng, tip);
+        else if (cfg.leaf == LeafStrategy::CARDS) emitCards(g, cfg, rng, origins, nsec);
     }
 }
 
@@ -365,38 +455,65 @@ Config configConifer(void) {
 
 Config configDeciduous(void) {
     Config c;
-    c.levels     = 3;
-    c.lev[0].sections = 4;
-    c.lev[0].radialSegs = 4;
-    c.lev[0].taper  = 0.4f;
-    c.lev[1].children    = 4;
-    c.lev[1].sections    = 4;
-    c.lev[1].radialSegs  = 3;
-    c.lev[1].angleSpread = 1.0f;
-    c.lev[1].length      = 0.28f;
-    c.lev[1].radius      = 0.026f;
-    c.lev[1].taper       = 0.65f;
-    c.lev[2].children    = 2;
-    c.lev[2].sections    = 1;
+    c.levels     = 4;
+    c.lev[0].children    = 0;
+    c.lev[0].sections   = 11;
+    c.lev[0].radialSegs = 10;
+    c.lev[0].angleSpread = 0.838f;
+    c.lev[0].length      = 0.50f;
+    c.lev[0].taper       = 0.7f;
+    c.lev[0].startFrac   = 0.23f;
+    c.lev[0].twist       = 0.09f;
+    c.lev[0].gnarliness  = 0.008f;
+    c.lev[0].continuation = true;
+    c.lev[1].children    = 7;
+    c.lev[1].sections    = 6;
+    c.lev[1].radialSegs  = 4;
+    c.lev[1].angleSpread = 1.22f;
+    c.lev[1].length      = 0.30f;
+    c.lev[1].relRadius   = 0.63f;
+    c.lev[1].taper       = 0.7f;
+    c.lev[1].startFrac   = 0.33f;
+    c.lev[1].twist       = -0.07f;
+    c.lev[1].gnarliness  = 0.045f;
+    c.lev[1].continuation = true;
+    c.lev[2].children    = 1;
+    c.lev[2].sections    = 4;
     c.lev[2].radialSegs  = 3;
-    c.lev[2].angleSpread = 0.9f;
-    c.lev[2].length      = 0.16f;
-    c.lev[2].radius      = 0.012f;
-    c.lev[2].taper       = 0.9f;
+    c.lev[2].angleSpread = 0.96f;
+    c.lev[2].length      = 0.12f;
+    c.lev[2].relRadius   = 0.76f;
+    c.lev[2].taper       = 0.7f;
+    c.lev[2].startFrac   = 0.25f;
+    c.lev[2].gnarliness  = 0.03f;
+    c.lev[2].continuation = true;
+    c.lev[3].children    = 2;
+    c.lev[3].sections    = 3;
+    c.lev[3].radialSegs  = 3;
+    c.lev[3].angleSpread = 1.047f;
+    c.lev[3].length      = 0.055f;
+    c.lev[3].relRadius   = 0.70f;
+    c.lev[3].taper       = 0.7f;
+    c.lev[3].gnarliness  = 0.01f;
     c.baseRadius = 0.05f;
-    c.baseLength = 0.5f;
-    c.startFrac  = 0.55f;
-    c.twist      = 0.35f;
-    c.gnarliness = 0.035f;
-    c.lift       = 0.4f;
-    c.leaf        = LeafStrategy::BLOBS;
-    c.leafSeg     = 3;
-    c.leafRing    = 2;
-    c.leafRMin    = 0.2f;
-    c.leafRMax    = 0.42f;
-    c.leafFlat    = 0.85f;
-    c.blobsPerTip = 3;
-    c.maxTris     = 600;
+    c.baseLength = 0.50f;
+    c.trunkColor[0] = 0.9f;
+    c.trunkColor[1] = 0.9f;
+    c.trunkColor[2] = 0.9f;
+    c.startFrac  = 0.23f;
+    c.upBias     = 0.0f;
+    c.angleJitter = 0.1f;
+    c.twist      = 0.09f;
+    c.gnarliness = 0.03f;
+    c.lift       = 0.6f;
+    c.leaf        = LeafStrategy::CARDS;
+    c.cardCountMin = 4;
+    c.cardCountMax = 5;
+    c.cardSize     = 0.068f;
+    c.cardVariance = 0.6f;
+    c.cardTilt     = 0.9599f;
+    c.cardStartFrac = 0.0f;
+    c.maxTris     = 3300;
     return c;
 }
 

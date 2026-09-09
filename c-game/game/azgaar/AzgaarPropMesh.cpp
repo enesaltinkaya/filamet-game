@@ -49,9 +49,12 @@ void propsDumpBuilder(const char* path, const MeshBuilder* mb) {
     for (u32 i = 0; i < mb->vertCount; i++) {
         const AzgaarPropVertex* p = &mb->verts[i];
         fprintf(f, "v %f %f %f\n", p->position[0], p->position[1], p->position[2]);
+        fprintf(f, "vt %f %f\n", p->uv[0], p->uv[1]);
     }
     for (u32 i = 0; i < mb->idxCount; i += 3) {
-        fprintf(f, "f %u %u %u\n", mb->idx[i] + 1, mb->idx[i + 1] + 1, mb->idx[i + 2] + 1);
+        fprintf(f, "f %u/%u %u/%u %u/%u\n", mb->idx[i] + 1, mb->idx[i] + 1,
+                mb->idx[i + 1] + 1, mb->idx[i + 1] + 1, mb->idx[i + 2] + 1,
+                mb->idx[i + 2] + 1);
     }
     fclose(f);
     utils::info("azgaarPropMesh: dumped %s (%u verts, %u idx)", path, mb->vertCount,

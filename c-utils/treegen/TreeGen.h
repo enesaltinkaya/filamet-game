@@ -21,7 +21,15 @@ struct Mesh {
     u32 triCount(void) const { return static_cast<u32>(idx.size() / 3); }
 };
 
-enum class LeafStrategy { NONE = 0, BLOBS, CONES, FAN };
+struct UvRect {
+    float u0, v0, u1, v1;
+};
+
+constexpr UvRect kFullUvRect  = {0.0f, 0.0f, 1.0f, 1.0f};
+constexpr UvRect kBarkUvRect  = {0.20f, 0.10f, 0.80f, 0.22f};
+constexpr UvRect kLeafUvRect  = {0.02f, 0.34f, 0.98f, 0.99f};
+
+enum class LeafStrategy { NONE = 0, BLOBS, CONES, FAN, CARDS };
 
 struct LevelCfg {
     u32 children = 0;
@@ -30,16 +38,23 @@ struct LevelCfg {
     float angleSpread = 0.7f;
     float length = 0.4f;
     float radius = 0.05f;
+    float relRadius = -1.0f;
     float taper = 0.6f;
+    float startFrac = -1.0f;
+    float twist = -1.0f;
+    float gnarliness = -1.0f;
+    bool continuation = false;
 };
 
 struct Config {
     u32 levels = 2;
-    LevelCfg lev[3];
+    LevelCfg lev[4];
     float startFrac = 0.55f;
     float twist = 0.5f;
     float gnarliness = 0.12f;
     float lift = 0.4f;
+    float upBias = 0.35f;
+    float angleJitter = 0.3f;
     float baseRadius = 0.06f;
     float baseLength = 0.5f;
     float trunkColor[3] = {0.36f, 0.25f, 0.16f};
@@ -50,6 +65,12 @@ struct Config {
     float leafRMax = 0.3f;
     float leafFlat = 0.8f;
     u32 blobsPerTip = 2;
+    u32 cardCountMin = 5;
+    u32 cardCountMax = 6;
+    float cardSize = 0.068f;
+    float cardVariance = 0.6f;
+    float cardTilt = 0.9599f;
+    float cardStartFrac = 0.0f;
     float tipConeRadius = 0.2f;
     float tipConeHeight = 0.16f;
     u32 coneCountMin = 3;

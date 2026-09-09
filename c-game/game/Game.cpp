@@ -86,10 +86,12 @@ namespace game {
             }
             v.swayFactor = azgaarPropsSpeciesSway(r.species);
             v.flags      = azgaarPropsSpeciesRenderFlags(r.species);
+            const char* leafTex =
+                r.species == AZGAAR_PROP_DECIDUOUS ? "images/leaf-textures/ash.png" : nullptr;
             v.texturePath =
                 (r.species == AZGAAR_PROP_GRASS_TUFT && r.variant < azgaarPropsGrassVariantCount())
                     ? azgaarPropsGrassVariant(r.variant)->path
-                    : nullptr;
+                    : leafTex;
             variants.push_back(v);
         }
         engine::propsRenderSetVariants(variants.data(), (u32)variants.size());
