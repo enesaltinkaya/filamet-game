@@ -245,3 +245,48 @@ Task 2 (densify canopy, config + emitCards) — done.
   deciduous 4508/4520/4595/4556 (unchanged, C++ untouched), no texture-load errors, screenshot
   shows cards as small dense fluffy clusters with irregular outlines - the square-plane artifact
   is GONE even with the old kLeafUvRect (moat works). Final A/B + UV-rect retune are tasks 3+4.
+
+## Branch-structure task (2026-09-09): "branch structure dont look like ez-tree ash medium"
+
+Reference: `/var/home/enes/Downloads/tree.png` (image) + `/var/home/enes/Downloads/tree_LOD0.glb`
+(ground-truth geometry: Branches_LOD0 6639 verts / 9120 tris, Leaves_LOD0 21760 verts).
+ez-tree source at `/tmp/ez-tree` (presets `ash_medium.json`, core `src/lib/tree.js`).
+
+### Diagnosis
+- The `configDeciduous()` port had TRANScribed the ash_medium preset's raw numbers instead of
+  CONVERTING them between unit spaces:
+  - ez works in preset world units (trunk radius 2.0, total height ~66-82, twist rad/section,
+    gnarliness scaled by `max(1, 1/sqrt(r_meters))`); treegen normalizes to unit height and
+    applies gnarliness as `g / max(0.15, sqrt(r_unit))` per section.
+  - Result: baseRadius 0.046 was ~33-54% too fat (correct trunk-r/totalH from GLB = 0.0244);
+    upper-branch gnarliness 2-3x too strong (thin-twigs get amplified by the 1/sqrt(r) divisor);
+    twist was already correct (per-section 0.09 x 12 sections = 1.08 total on the trunk — the
+    repo's 1.08/-0.56 ARE the converted values, leave them).
+  - cardSize 0.055 vs the reference's MEASURED 2.67/82 ≈ 0.033 (measured from the GLB leaf-mesh
+    triangles: median longest edge ≈ size*sqrt2) → chunky sparse pom-poms instead of a tangle.
+- Branch angles/lengths/children/sections were already faithful (0.838/1.309/1.047 rad,
+  0.5/0.312/0.109/0.053, 7/4/3 children) — only thickness, gnarl and card size were off.
+
+### Fix (all in `configDeciduous()`, c-utils/treegen/TreeGen.cpp — no generator/texture/renderer edits)
+- baseRadius 0.046 -> 0.0225 (measured trunk-r/totalH 0.0325 -> 0.0244, matches GLB exactly).
+- gnarliness per level -> 0.005/0.035/0.028/0.010 (converted to unit space).
+- cardSize 0.055 -> 0.040, cardCountMin/Max 16 -> 30 (denser fine tangle).
+- maxTris 20000 -> 30000 (higher card count was silently re-clipping the crown via Gen::room();
+  fingerprint = build log variant tri count sitting EXACTLY at maxTris).
+
+### Verification
+- Branch-only skeleton A/B (Blender headless, GLB vs dumped OBJ, both unit-height): trunk
+  length/angle, main-limb angles, twig order and crown oval now overlay (see
+  /tmp/tree_branch_cmp.png). Trunk-r/totalH 0.0244 == reference 0.0244.
+- Pinned frame-1200 screenshot /tmp/tree_final.png vs reference: slender straight trunk to ~45%,
+  oval crown, feathery limbs — matches. Side-by-side /tmp/sbs_final.png.
+- azgaarPropMesh build: validation PASS, deciduous 28344/variant (< 30000 cap, no clipping);
+  other species unchanged (conifer 307-352, acacia ~290, dead_tree ~220, shrub ~190, far/rock
+  unchanged). No renderer changes, no pak changes.
+
+### Reusable tooling (in /tmp, not committed)
+- `/tmp/treetool` (g++ -I stub Utils.h): dumps configDeciduous variants to
+  /tmp/our_full_N.obj + /tmp/our_branches_N.obj (branch-only via col[0]<0.99 threshold).
+- `/tmp/cmp.py`, `/tmp/branchcmp.py`: headless Blender A/B of the reference GLB vs our OBJ,
+  both normalized to unit height. NOTE: `import_scene.gltf` already converts glTF to Z-up —
+  do NOT add another 90deg X-rotation (it stretches the tree sideways).

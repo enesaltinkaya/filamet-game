@@ -258,7 +258,8 @@ namespace treegen {
                        const Config& cfg,
                        Rng& rng,
                        const std::vector<V3>& origins,
-                       u32 nsec) {
+                       u32 nsec,
+                       float azOff) {
             u32 count = cfg.cardCountMin;
             if (cfg.cardCountMax > count)
                 count += (u32)(rng.unit() * (static_cast<float>(cfg.cardCountMax + 1u) -
@@ -266,17 +267,13 @@ namespace treegen {
             float span = 1.0f - cfg.cardStartFrac;
             if (span <= 0.0f) span = 1.0f;
             static const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-            for (u32 k = 0; k <= count; k++) {
+            for (u32 k = 0; k < count; k++) {
                 if (!g.room(4u)) return;
                 float tilt = cfg.cardTilt + (rng.unit() - 0.5f) * 0.9f;
                 float ct   = cosf(tilt);
                 float st   = sinf(tilt);
-                float t;
-                if (k == count)
-                    t = 1.0f;
-                else
-                    t = cfg.cardStartFrac +
-                        (static_cast<float>(k) + rng.unit()) * span / static_cast<float>(count);
+                float t    = cfg.cardStartFrac +
+                             (static_cast<float>(k) + rng.unit()) * span / static_cast<float>(count);
                 float f = t * static_cast<float>(nsec);
                 u32 s0  = static_cast<u32>(f);
                 if (s0 >= nsec) s0 = nsec - 1;
@@ -287,7 +284,7 @@ namespace treegen {
                 V3 u     = vOrthonormal(ax);
                 V3 v     = vCross(u, ax);
                 float az =
-                    kTwoPi * (static_cast<float>(k) + 0.5f) / static_cast<float>(count + 1u) +
+                    azOff + kTwoPi * (static_cast<float>(k) + 0.5f) / static_cast<float>(count + 1u) +
                     (rng.unit() - 0.5f) * 1.2f;
                 V3 w       = vNorm(vAdd(vScale(u, cosf(az)), vScale(v, sinf(az))));
                 V3 z       = vCross(w, ax);
@@ -332,14 +329,18 @@ namespace treegen {
             V3 dir;
             float radius;
             float length;
+            u32 nsecOv = 0;
+            u32 sidesOv = 0;
         };
 
         void grow(const Config& cfg, Gen& g, std::vector<Job>& q, const Job& j) {
             Rng rng(j.seed);
             const LevelCfg& lv = cfg.lev[j.level];
-            u32 nsec           = lv.sections < 1 ? 1 : lv.sections;
+            u32 nsec           = j.nsecOv > 0 ? j.nsecOv : lv.sections;
+            if (nsec < 1) nsec = 1;
             if (nsec > 12) nsec = 12;
-            u32 sides = lv.radialSegs < 3 ? 3 : lv.radialSegs;
+            u32 sides          = j.sidesOv > 0 ? j.sidesOv : lv.radialSegs;
+            if (sides < 3) sides = 3;
             if (sides > 12) sides = 12;
             float startFrac      = lv.startFrac > -1.0f ? lv.startFrac : cfg.startFrac;
             float lvTwist        = lv.twist > -1.0f ? lv.twist : cfg.twist;
@@ -348,6 +349,7 @@ namespace treegen {
             V3 dir               = vNorm(j.dir);
             V3 u                 = vOrthonormal(dir);
             V3 v                 = vCross(u, dir);
+            const float azOff    = kTwoPi * rng.unit();
             float len            = j.length * (1.0f + 0.15f * (2.0f * rng.unit() - 1.0f));
             V3 o                 = j.origin;
             std::vector<V3> origins(nsec + 1);
@@ -411,7 +413,8 @@ namespace treegen {
                         u32 s1   = s0 + 1 < nsec ? s0 + 1 : s0;
                         float fr = f - static_cast<float>(s0);
                         V3 p     = vLerp(origins[s0], origins[s1], fr);
-                        float az = kTwoPi * (static_cast<float>(c) + 0.5f) / static_cast<float>(n) +
+                        float az = azOff +
+                                       kTwoPi * (static_cast<float>(c) + 0.5f) / static_cast<float>(n) +
                                    (rng.unit() - 0.5f) * 1.2f;
                         float ang =
                             clv.angleSpread * (1.0f + cfg.angleJitter * (2.0f * rng.unit() - 1.0f));
@@ -448,6 +451,8 @@ namespace treegen {
                     cj.dir    = dir;
                     cj.radius = tipR;
                     cj.length = clv.length * (0.9f + 0.2f * rng.unit());
+                    cj.nsecOv = nsec;
+                    cj.sidesOv = sides;
                     q.push_back(cj);
                 }
             } else {
@@ -459,7 +464,7 @@ namespace treegen {
                 else if (cfg.leaf == LeafStrategy::CONES)
                     emitCones(g, cfg, rng, tip);
                 else if (cfg.leaf == LeafStrategy::CARDS)
-                    emitCards(g, cfg, rng, origins, nsec);
+                    emitCards(g, cfg, rng, origins, nsec, azOff);
             }
         }
 
@@ -496,64 +501,64 @@ namespace treegen {
     Config configDeciduous(void) {
         Config c;
         c.levels              = 4;
-        c.lev[0].children     = 0;
-        c.lev[0].sections     = 11;
-        c.lev[0].radialSegs   = 10;
+        c.lev[0].sections     = 12;
+        c.lev[0].radialSegs   = 12;
         c.lev[0].angleSpread  = 0.838f;
-        c.lev[0].length       = 0.50f;
         c.lev[0].taper        = 0.7f;
         c.lev[0].startFrac    = 0.23f;
-        c.lev[0].twist        = 0.09f;
-        c.lev[0].gnarliness   = 0.008f;
+        c.lev[0].twist        = 1.08f;
+        c.lev[0].gnarliness   = 0.005f;
         c.lev[0].continuation = true;
         c.lev[1].children     = 7;
-        c.lev[1].sections     = 6;
-        c.lev[1].radialSegs   = 4;
-        c.lev[1].angleSpread  = 1.22f;
-        c.lev[1].length       = 0.30f;
+        c.lev[1].sections     = 8;
+        c.lev[1].radialSegs   = 6;
+        c.lev[1].angleSpread  = 0.838f;
+        c.lev[1].length       = 0.312f;
         c.lev[1].relRadius    = 0.63f;
         c.lev[1].taper        = 0.7f;
         c.lev[1].startFrac    = 0.33f;
-        c.lev[1].twist        = -0.07f;
-        c.lev[1].gnarliness   = 0.045f;
+        c.lev[1].twist        = -0.56f;
+        c.lev[1].gnarliness   = 0.035f;
         c.lev[1].continuation = true;
-        c.lev[2].children     = 1;
-        c.lev[2].sections     = 4;
-        c.lev[2].radialSegs   = 3;
-        c.lev[2].angleSpread  = 0.96f;
-        c.lev[2].length       = 0.12f;
+        c.lev[2].children     = 4;
+        c.lev[2].sections     = 6;
+        c.lev[2].radialSegs   = 4;
+        c.lev[2].angleSpread  = 1.309f;
+        c.lev[2].length       = 0.109f;
         c.lev[2].relRadius    = 0.76f;
         c.lev[2].taper        = 0.7f;
-        c.lev[2].startFrac    = 0.25f;
-        c.lev[2].gnarliness   = 0.03f;
+        c.lev[2].startFrac    = 0.0f;
+        c.lev[2].twist        = 0.0f;
+        c.lev[2].gnarliness   = 0.028f;
         c.lev[2].continuation = true;
-        c.lev[3].children     = 2;
-        c.lev[3].sections     = 3;
+        c.lev[3].children     = 3;
+        c.lev[3].sections     = 4;
         c.lev[3].radialSegs   = 3;
         c.lev[3].angleSpread  = 1.047f;
-        c.lev[3].length       = 0.055f;
+        c.lev[3].length       = 0.053f;
         c.lev[3].relRadius    = 0.70f;
         c.lev[3].taper        = 0.7f;
-        c.lev[3].gnarliness   = 0.01f;
-        c.baseRadius          = 0.05f;
+        c.lev[3].twist        = 0.0f;
+        c.lev[3].gnarliness   = 0.010f;
+        c.baseRadius          = 0.0225f;
         c.baseLength          = 0.50f;
         c.trunkColor[0]       = 0.9f;
         c.trunkColor[1]       = 0.9f;
         c.trunkColor[2]       = 0.9f;
         c.startFrac           = 0.23f;
         c.upBias              = 0.0f;
-        c.angleJitter         = 0.1f;
+        c.angleJitter         = 0.0f;
         c.twist               = 0.09f;
         c.gnarliness          = 0.03f;
-        c.lift                = 0.6f;
+        c.lift                = 0.1f;
         c.leaf                = LeafStrategy::CARDS;
-        c.cardCountMin        = 11;
-        c.cardCountMax        = 15;
-        c.cardSize            = 0.055f;
-        c.cardVariance        = 0.6f;
+        c.cardCountMin        = 30;
+        c.cardCountMax        = 30;
+        c.cardSize            = 0.040f;
+        c.cardVariance        = 0.72f;
         c.cardTilt            = 0.9599f;
         c.cardStartFrac       = 0.0f;
-        c.maxTris             = 6000;
+        c.maxTris             = 30000;
         return c;
     }
 

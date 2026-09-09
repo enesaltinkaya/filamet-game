@@ -4,6 +4,12 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-09 — [entries](lessons/2026-09-09.md)
+
+- Porting ez-tree presets to `treegen`: convert units, don't transcribe (twist is per-section; gnarliness divisor differs between ez's `max(1, 1/sqrt(r_meters))` and treegen's `g / max(0.15, sqrt(r_unit))`; baseRadius = preset radius / preset total height). Fingerprint of an unconverted port: stocky trunk, helical twist, "candelabra with pom-poms" crown. Incident: "deciduous trees don't look like ez-tree default ash medium" — fixed by converting the preset numbers + measuring card size from the reference GLB
+- `treegen` `maxTris` must cover branches + tips×cards×8 or `Gen::room()` silently drops the last branches' leaf cards — fingerprint: build log shows the variant at exactly `maxTris` (`deciduous/N=20000` after a card-count bump that was 19384 before)
+- Fast tree A/B: `ENGINE_AZGAAR_PROPS_MESH_DUMP=1` + reference GLB (`tree_LOD0.glb`) in headless Blender; `import_scene.gltf` already converts to Z-up (don't add another 90° X-rotation), normalize both to unit height, measure card size from leaf-mesh triangles (median longest edge ≈ size×√2)
+
 ## 2026-09-08 — [entries](lessons/2026-09-08.md)
 
 - `ShaderCreateInfo.Source` is inline source, the stream-factory path is `FilePath` — a filename in `Source` compiles as code (":1: 'declaration' : Expected")
