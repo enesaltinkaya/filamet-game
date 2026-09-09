@@ -264,58 +264,68 @@ namespace treegen {
             if (cfg.cardCountMax > count)
                 count += (u32)(rng.unit() * (static_cast<float>(cfg.cardCountMax + 1u) -
                                              static_cast<float>(cfg.cardCountMin)));
+            if (count < 1) count = 1;
             float span = 1.0f - cfg.cardStartFrac;
             if (span <= 0.0f) span = 1.0f;
+            std::vector<u32> slots(count);
+            for (u32 i = 0; i < count; i++) slots[i] = i;
+            for (u32 i = count; i > 1; i--) {
+                u32 r = (u32)(rng.unit() * static_cast<float>(i));
+                u32 tmp = slots[i - 1u];
+                slots[i - 1u] = slots[r];
+                slots[r]     = tmp;
+            }
             static const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            const float uw             = kLeafUvRect.u1 - kLeafUvRect.u0;
+            const float vw             = kLeafUvRect.v1 - kLeafUvRect.v0;
             for (u32 k = 0; k < count; k++) {
                 if (!g.room(4u)) return;
-                float tilt = cfg.cardTilt + (rng.unit() - 0.5f) * 0.9f;
+                float tilt = cfg.cardTilt + (rng.unit() - 0.5f) * cfg.cardTiltJitter;
                 float ct   = cosf(tilt);
                 float st   = sinf(tilt);
                 float t    = cfg.cardStartFrac +
                              (static_cast<float>(k) + rng.unit()) * span / static_cast<float>(count);
                 float f = t * static_cast<float>(nsec);
                 u32 s0  = static_cast<u32>(f);
-                if (s0 >= nsec) s0 = nsec - 1;
+                if (s0 >= nsec) s0 = nsec - 1u;
                 u32 s1   = s0 + 1 < nsec ? s0 + 1 : s0;
                 float fr = f - static_cast<float>(s0);
                 V3 c     = vLerp(origins[s0], origins[s1], fr);
                 V3 ax    = vNorm(vSub(origins[s1], origins[s0]));
                 V3 u     = vOrthonormal(ax);
                 V3 v     = vCross(u, ax);
-                float az =
-                    azOff + kTwoPi * (static_cast<float>(k) + 0.5f) / static_cast<float>(count + 1u) +
-                    (rng.unit() - 0.5f) * 1.2f;
-                V3 w       = vNorm(vAdd(vScale(u, cosf(az)), vScale(v, sinf(az))));
-                V3 z       = vCross(w, ax);
-                V3 d       = vNorm(vAdd(vScale(ax, ct), vScale(z, st)));
-                V3 nA      = vAdd(vScale(z, ct), vScale(w, -st));
-                V3 nB      = w;
+                float az = azOff +
+                           kTwoPi * (static_cast<float>(slots[k]) +
+                                     (rng.unit() - 0.5f) * 0.5f) / static_cast<float>(count);
+                V3 w     = vNorm(vAdd(vScale(u, cosf(az)), vScale(v, sinf(az))));
+                V3 z     = vCross(w, ax);
+                V3 d     = vAdd(vScale(ax, ct), vScale(z, st));
+                V3 n1    = vAdd(vScale(z, ct), vScale(ax, -st));
+                V3 w2    = vAdd(vScale(ax, st), vScale(z, -ct));
+                V3 n2    = w;
                 float size = cfg.cardSize * (1.0f + cfg.cardVariance * (2.0f * rng.unit() - 1.0f));
                 if (size < 0.001f) size = 0.001f;
-                float hs            = 0.5f * size;
-                float uw            = kLeafUvRect.u1 - kLeafUvRect.u0;
-                float vw            = kLeafUvRect.v1 - kLeafUvRect.v0;
-                float fw            = 0.9f + 0.1f * rng.unit();
-                float fh            = 0.9f + 0.1f * rng.unit();
-                float u0            = kLeafUvRect.u0 + (1.0f - fw) * 0.5f * uw;
-                float v0            = kLeafUvRect.v0 + (1.0f - fh) * 0.5f * vw;
-                float u1            = u0 + fw * uw;
-                float v1            = v0 + fh * vw;
-                const V3 widths[2]  = {w, z};
-                const V3 normals[2] = {nA, nB};
+                float hs    = 0.5f * size;
+                float fw    = 0.9f + 0.1f * rng.unit();
+                float fh    = 0.9f + 0.1f * rng.unit();
+                float u0    = kLeafUvRect.u0 + (1.0f - fw) * 0.5f * uw;
+                float v0    = kLeafUvRect.v0 + (1.0f - fh) * 0.5f * vw;
+                float u1    = u0 + fw * uw;
+                float v1    = v0 + fh * vw;
+                V3 center   = vAdd(c, vScale(d, hs));
+                const V3 widths[2] = {w, w2};
+                const V3 normals[2] = {n1, n2};
                 for (u32 q = 0; q < 2; q++) {
                     V3 p[4];
-                    p[0]               = vSub(vSub(c, vScale(widths[q], hs)), vScale(d, hs));
-                    p[1]               = vSub(vAdd(c, vScale(widths[q], hs)), vScale(d, hs));
-                    p[2]               = vAdd(vSub(c, vScale(widths[q], hs)), vScale(d, hs));
-                    p[3]               = vAdd(vAdd(c, vScale(widths[q], hs)), vScale(d, hs));
+                    p[0] = vSub(vSub(center, vScale(widths[q], hs)), vScale(d, hs));
+                    p[1] = vSub(vAdd(center, vScale(widths[q], hs)), vScale(d, hs));
+                    p[2] = vAdd(vSub(center, vScale(widths[q], hs)), vScale(d, hs));
+                    p[3] = vAdd(vAdd(center, vScale(widths[q], hs)), vScale(d, hs));
                     const float uvu[4] = {u0, u1, u0, u1};
                     const float uvt[4] = {v0, v0, v1, v1};
                     u32 idx[4];
                     for (u32 i = 0; i < 4; i++)
-                        idx[i] =
-                            g.vert(p[i], vAdd(normals[q], vSub(p[i], c)), uvu[i], uvt[i], white);
+                        idx[i] = g.vert(p[i], vAdd(normals[q], vSub(p[i], center)), uvu[i], uvt[i], white);
                     g.tri(idx[2], idx[0], idx[1]);
                     g.tri(idx[2], idx[1], idx[3]);
                 }
@@ -473,28 +483,60 @@ namespace treegen {
     Config configConifer(void) {
         Config c;
         c.levels             = 2;
-        c.lev[0].sections    = 4;
+        c.lev[0].sections    = 5;
         c.lev[0].radialSegs  = 4;
-        c.lev[0].taper       = 0.45f;
-        c.lev[1].children    = 5;
-        c.lev[1].sections    = 3;
+        c.lev[0].taper       = 0.55f;
+        c.lev[0].startFrac   = 0.18f;
+        c.lev[1].children    = 6;
+        c.lev[1].sections    = 2;
         c.lev[1].radialSegs  = 3;
-        c.lev[1].angleSpread = 0.9f;
-        c.lev[1].length      = 0.2f;
-        c.lev[1].radius      = 0.028f;
+        c.lev[1].angleSpread = 0.55f;
+        c.lev[1].length      = 0.16f;
+        c.lev[1].radius      = 0.022f;
         c.lev[1].taper       = 0.7f;
-        c.baseRadius         = 0.055f;
-        c.baseLength         = 0.6f;
-        c.startFrac          = 0.5f;
-        c.twist              = 0.35f;
-        c.gnarliness         = 0.035f;
-        c.lift               = 0.5f;
+        c.lev[1].startFrac   = 0.3f;
+        c.baseRadius         = 0.04f;
+        c.baseLength         = 0.8f;
+        c.startFrac          = 0.18f;
+        c.twist              = 0.5f;
+        c.gnarliness         = 0.03f;
+        c.lift               = 0.4f;
         c.leaf               = LeafStrategy::CONES;
-        c.tipConeRadius      = 0.22f;
-        c.tipConeHeight      = 0.1f;
-        c.coneCountMin       = 1;
+        c.tipConeRadius      = 0.15f;
+        c.tipConeHeight      = 0.15f;
+        c.coneCountMin       = 3;
+        c.coneCountMax       = 3;
+        c.maxTris            = 700;
+        return c;
+    }
+
+    Config configConiferFar(void) {
+        Config c;
+        c.levels             = 2;
+        c.lev[0].sections    = 2;
+        c.lev[0].radialSegs  = 3;
+        c.lev[0].taper       = 0.55f;
+        c.lev[0].startFrac   = 0.18f;
+        c.lev[1].children    = 5;
+        c.lev[1].sections    = 2;
+        c.lev[1].radialSegs  = 3;
+        c.lev[1].angleSpread = 0.55f;
+        c.lev[1].length      = 0.16f;
+        c.lev[1].radius      = 0.022f;
+        c.lev[1].taper       = 0.7f;
+        c.lev[1].startFrac   = 0.3f;
+        c.baseRadius         = 0.04f;
+        c.baseLength         = 0.8f;
+        c.startFrac          = 0.18f;
+        c.twist              = 0.5f;
+        c.gnarliness         = 0.03f;
+        c.lift               = 0.4f;
+        c.leaf               = LeafStrategy::CONES;
+        c.tipConeRadius      = 0.15f;
+        c.tipConeHeight      = 0.15f;
+        c.coneCountMin       = 2;
         c.coneCountMax       = 2;
-        c.maxTris            = 400;
+        c.maxTris            = 360;
         return c;
     }
 
@@ -520,7 +562,7 @@ namespace treegen {
         c.lev[1].twist        = -0.56f;
         c.lev[1].gnarliness   = 0.035f;
         c.lev[1].continuation = true;
-        c.lev[2].children     = 4;
+        c.lev[2].children     = 3;
         c.lev[2].sections     = 6;
         c.lev[2].radialSegs   = 4;
         c.lev[2].angleSpread  = 1.309f;
@@ -530,12 +572,12 @@ namespace treegen {
         c.lev[2].startFrac    = 0.0f;
         c.lev[2].twist        = 0.0f;
         c.lev[2].gnarliness   = 0.028f;
-        c.lev[2].continuation = true;
+        c.lev[2].continuation = false;
         c.lev[3].children     = 3;
         c.lev[3].sections     = 4;
         c.lev[3].radialSegs   = 3;
         c.lev[3].angleSpread  = 1.047f;
-        c.lev[3].length       = 0.053f;
+        c.lev[3].length       = 0.16f;
         c.lev[3].relRadius    = 0.70f;
         c.lev[3].taper        = 0.7f;
         c.lev[3].twist        = 0.0f;
@@ -552,13 +594,77 @@ namespace treegen {
         c.gnarliness          = 0.03f;
         c.lift                = 0.1f;
         c.leaf                = LeafStrategy::CARDS;
-        c.cardCountMin        = 30;
-        c.cardCountMax        = 30;
-        c.cardSize            = 0.040f;
-        c.cardVariance        = 0.72f;
-        c.cardTilt            = 0.9599f;
-        c.cardStartFrac       = 0.0f;
-        c.maxTris             = 30000;
+        c.cardCountMin        = 9;
+        c.cardCountMax        = 9;
+        c.cardSize            = 0.048f;
+        c.cardVariance        = 0.7f;
+        c.cardTilt            = 0.75f;
+        c.cardStartFrac       = 0.16f;
+        c.maxTris             = 12000;
+        return c;
+    }
+
+    Config configDeciduousFar(void) {
+        Config c;
+        c.levels              = 4;
+        c.lev[0].sections     = 4;
+        c.lev[0].radialSegs   = 4;
+        c.lev[0].angleSpread  = 0.838f;
+        c.lev[0].taper        = 0.7f;
+        c.lev[0].startFrac    = 0.23f;
+        c.lev[0].twist        = 1.08f;
+        c.lev[0].gnarliness   = 0.005f;
+        c.lev[0].continuation = true;
+        c.lev[1].children     = 5;
+        c.lev[1].sections     = 3;
+        c.lev[1].radialSegs   = 4;
+        c.lev[1].angleSpread  = 0.838f;
+        c.lev[1].length       = 0.312f;
+        c.lev[1].relRadius    = 0.63f;
+        c.lev[1].taper        = 0.7f;
+        c.lev[1].startFrac    = 0.33f;
+        c.lev[1].twist        = -0.56f;
+        c.lev[1].gnarliness   = 0.035f;
+        c.lev[1].continuation = true;
+        c.lev[2].children     = 4;
+        c.lev[2].sections     = 2;
+        c.lev[2].radialSegs   = 3;
+        c.lev[2].angleSpread  = 1.309f;
+        c.lev[2].length       = 0.109f;
+        c.lev[2].relRadius    = 0.76f;
+        c.lev[2].taper        = 0.7f;
+        c.lev[2].startFrac    = 0.0f;
+        c.lev[2].twist        = 0.0f;
+        c.lev[2].gnarliness   = 0.028f;
+        c.lev[2].continuation = false;
+        c.lev[3].children     = 3;
+        c.lev[3].sections     = 2;
+        c.lev[3].radialSegs   = 3;
+        c.lev[3].angleSpread  = 1.047f;
+        c.lev[3].length       = 0.14f;
+        c.lev[3].relRadius    = 0.70f;
+        c.lev[3].taper        = 0.7f;
+        c.lev[3].twist        = 0.0f;
+        c.lev[3].gnarliness   = 0.010f;
+        c.baseRadius          = 0.0225f;
+        c.baseLength          = 0.50f;
+        c.trunkColor[0]       = 0.9f;
+        c.trunkColor[1]       = 0.9f;
+        c.trunkColor[2]       = 0.9f;
+        c.startFrac           = 0.23f;
+        c.upBias              = 0.0f;
+        c.angleJitter         = 0.0f;
+        c.twist               = 0.09f;
+        c.gnarliness          = 0.03f;
+        c.lift                = 0.1f;
+        c.leaf                = LeafStrategy::CARDS;
+        c.cardCountMin        = 4;
+        c.cardCountMax        = 4;
+        c.cardSize            = 0.06f;
+        c.cardVariance        = 0.7f;
+        c.cardTilt            = 0.75f;
+        c.cardStartFrac       = 0.2f;
+        c.maxTris             = 4500;
         return c;
     }
 

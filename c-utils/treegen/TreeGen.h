@@ -70,6 +70,7 @@ struct Config {
     float cardSize = 0.068f;
     float cardVariance = 0.6f;
     float cardTilt = 0.9599f;
+    float cardTiltJitter = 0.0f;
     float cardStartFrac = 0.0f;
     float tipConeRadius = 0.2f;
     float tipConeHeight = 0.16f;
@@ -81,6 +82,8 @@ struct Config {
 
 Config configConifer(void);
 Config configDeciduous(void);
+Config configConiferFar(void);
+Config configDeciduousFar(void);
 Config configAcacia(void);
 Config configDeadTree(void);
 Config configShrub(void);

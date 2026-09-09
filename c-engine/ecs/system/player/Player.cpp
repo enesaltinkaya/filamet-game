@@ -3,7 +3,6 @@
 #include "renderer/Renderer.h"
 #include "renderer/Window.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
-#include "ecs/system/heightmap/HeightmapTerrain.h"
 #include "gltf/Gltf.h"
 #include "gui/rmlui/GuiManagerRmlUi.h"
 
@@ -100,7 +99,6 @@ static struct {
     double prevPos[3];
     double footSpeed;  // horizontal speed (m/s) as of the last fixed tick
     JoltCharacter* character = nullptr;
-    char waitingForGround    = 0; // pinned at spawn until the body under it exists
     f32 camYaw   = 0.0f;
     f32 camPitch = 8.0f * (float)M_PI / 180.0f;
     f32 camDist  = DIST_DEFAULT;
@@ -302,27 +300,23 @@ static void playerFollowFlyingCamera(void) {
 }
 
 static void playerSpawn(void) {
-    HeightmapTerrain* ht = heightmapTerrainGetActive();
-    f32 groundY           = ht ? heightmapTerrainSample(ht, p.spawn[0], p.spawn[2]) : p.spawn[1];
-    p.pos[0]               = p.spawn[0];
-    p.pos[1]               = groundY;
-    p.pos[2]               = p.spawn[2];
-    p.camDist              = DIST_DEFAULT;
-    p.moveYaw               = 0.0f;  // orbit convention: W runs away from the camera
-    p.faceTarget            = 0.0f;
-    p.modelYaw              = 0.0f;
-    p.tpSmoothDist          = -1.0f;
-    p.skyPitchOffset        = 0.0f;
-    p.animMoving           = 0;
-    p.animJumping          = 0;
-    p.animTposing          = 0;
-    p.spawned               = 1;
-    p.waitingForGround      = 1;  // released by the first update once the body under the spawn exists
+    p.pos[0] = p.spawn[0];
+    p.pos[1] = p.spawn[1];
+    p.pos[2] = p.spawn[2];
+    p.camDist    = DIST_DEFAULT;
+    p.moveYaw    = 0.0f;  // orbit convention: W runs away from the camera
+    p.faceTarget = 0.0f;
+    p.modelYaw   = 0.0f;
+    p.tpSmoothDist   = -1.0f;
+    p.skyPitchOffset = 0.0f;
+    p.animMoving     = 0;
+    p.animJumping    = 0;
+    p.animTposing    = 0;
+    p.spawned        = 1;
 
     // Load the last saved player + camera state (old engine's scene-load
     // transformDbLoad + playerDbLoad) — overwrites spawn position and the
-    // orbit camera angles. The waitingForGround gate drops the character
-    // onto the heightmap under the loaded position.
+    // orbit camera angles.
     playerDbInit();
     PlayerDb saved = {};
     int savedSize = 0;
@@ -380,8 +374,8 @@ static void playerSpawn(void) {
     p.prevPos[0] = p.pos[0]; p.prevPos[1] = p.pos[1]; p.prevPos[2] = p.pos[2];
     p.footSpeed   = 0.0;
     gltf::gltfPlaceAt(p.pos[0], p.pos[1], p.pos[2]);
-    utils::info("player: spawned at (%.1f, %.1f, %.1f), ground %.1f m",
-                p.pos[0], p.pos[1], p.pos[2], groundY);
+    utils::info("player: spawned at (%.1f, %.1f, %.1f)",
+                p.pos[0], p.pos[1], p.pos[2]);
 }
 
 void PlayerSystem::added() {
@@ -411,13 +405,11 @@ void PlayerSystem::preUpdate() {
     // Fly-end edge: disabling the fly handed control back to the player (old
     // engine behaviour — player mode is simply no longer suppressed). The
     // follow has been parking the player under the camera all along and the
-    // orbit angles are already synced; re-engage the ground gate so
-    // unstreamed terrain under the landing spot can't swallow the character.
+    // orbit angles are already synced.
     const char flying = flyingCameraFlying();
     if (p.prevFlying && !flying && !p.active && p.canTakeover) {
-        p.waitingForGround = 1;
-        p.tpSmoothDist     = -1.0f;
-        p.skyPitchOffset   = 0.0f;
+        p.tpSmoothDist   = -1.0f;
+        p.skyPitchOffset = 0.0f;
         playerSetActive(1);
     }
     p.prevFlying = flying;
@@ -705,24 +697,6 @@ void PlayerSystem::update() {
         gltf::gltfPlaceAtFacing(p.pos[0], p.pos[1], p.pos[2], p.modelYaw);
         playerTickFootSpeed();  // the follow teleports p.pos — speed the jump
         return;
-    }
-
-    // Hold the character at its spawn position until the streaming heightfield
-    // body under it exists (the old engine's waitingForGround gate — without
-    // it the character would fall through the terrain before the collision
-    // data is ready). No active heightmap means a non-heightmap world: the
-    // gate clears immediately.
-    if (p.waitingForGround) {
-        HeightmapTerrain* ht = heightmapTerrainGetActive();
-        if (!ht || heightmapTerrainHasBodyAt(ht, p.pos[0], p.pos[2])) {
-            p.waitingForGround = 0;
-            utils::info("player: ground body ready, releasing character");
-        } else {
-            // No ground yet: stay pinned at spawn, no physics step.
-            if (p.active) playerUpdateCamera(0);
-            playerTickFootSpeed();  // pinned: the difference reads 0
-            return;
-        }
     }
 
     // Desired velocity (old engine: instant, full air control).

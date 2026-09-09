@@ -10,17 +10,13 @@
 #include "Graphics/GraphicsTools/interface/ScopedDebugGroup.hpp"
 #include "Platforms/interface/NativeWindow.h"
 #include "Utils.h"
-#include "ecs/system/heightmap/HeightmapTerrainRender.h"
 #include "gltf/GltfInternal.h"
 #include "gui/GuiManager.h"
 #include "gui/rmlui/GuiManagerRmlUi.h"
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/Window.h"
-#include "renderer/PropsRender.h"
-#include "renderer/diligent/HeightmapTerrainDiligent.h"
 #include "renderer/diligent/IblDiligent.h"
-#include "renderer/diligent/PropsRenderDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/SsaoDiligent.h"
 #include "renderer/diligent/BloomDiligent.h"
@@ -456,17 +452,14 @@ namespace engine::renderer::diligent {
 
             frameView = viewMatrix();
             // TAA: create/resize the offscreen chain, pick this frame's jitter
-            // and jitter the projection. Everything below (gltf/terrain/props)
-            // consumes proj through diligentFrameProj().
+            // and jitter the projection. Everything below (gltf) consumes
+            // proj through diligentFrameProj().
             proj = baseProj;
             taaFrameBegin(context, frameView, proj);
 
-            // World-pass CPU updates first (lazy pass init + budgeted tile
-            // uploads; nothing renders), then the CSM shadow pass — it binds
-            // its OWN render targets (the world targets are set after it),
-            // so it must run before the world RT setup below.
-            heightmapTerrainRenderUpdate();
-            propsRenderUpdate();
+            // The CSM shadow pass binds its OWN render targets (the world
+            // targets are set after it), so it must run before the world RT
+            // setup below.
             shadowDiligentUpdateFrame();
             {
                 Diligent::ScopedDebugGroup shadowPass(context, "shadow");
@@ -580,24 +573,9 @@ namespace engine::renderer::diligent {
                             (int)swapChain->GetDesc().DepthBufferFormat,
                             (int)swapChain->GetDesc().BufferCount);
             }
-            // terrain + props draws: the per-frame tile uploads moved above
-            // the shadow pass; the draws happen after the glTF PBR draw.
             {
                 Diligent::ScopedDebugGroup playerPass(context, "player");
                 worldDraw(context);
-            }
-            // terrain draws over the same render targets after the glTF PBR draw;
-            // it calls setWorldDrew(true) itself when it actually drew
-            {
-                Diligent::ScopedDebugGroup terrainPass(context, "terrain");
-                heightmapTerrainDiligentDraw();
-            }
-            // props draw last among the opaque world passes so the depth test
-            // resolves against terrain + model (contact bases sit exactly on the
-            // physics surface; the PSO depth func is LESS_EQUAL for them)
-            {
-                Diligent::ScopedDebugGroup propsPass(context, "props");
-                propsRenderDiligentDraw();
             }
             // Resolve the offscreen world into the backbuffer: TAA accumulation
             // (when enabled) or a plain blit of the scene color. Only when the
@@ -720,11 +698,6 @@ namespace engine::renderer::diligent {
         }
 
         void destroy() override {
-            // terrain + props GPU state first (the props' borrowed glTF GGX LUT
-            // texture view must be released while the glTF pass — and the device
-            // — still live)
-            heightmapTerrainRenderDestroy();
-            propsRenderDestroy();
             shadowDiligentDestroy();
             iblDiligentDestroy();
             guiOnBackendDestroy();

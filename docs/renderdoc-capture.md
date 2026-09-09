@@ -206,25 +206,25 @@ It defaults to the newest `.rdc` in `/tmp/RenderDoc`; dumps land in
 `/tmp/rdc-dump/`.
 
 **Pass labels:** the engine wraps its passes in `Diligent::ScopedDebugGroup`
-(`DiligentRenderer.cpp draw()`): `shadow`, `player`, `terrain`, `props`,
-`taa_resolve` (the DiligentFX TAA groups nest inside it), `gui` (only when the
-ImGui pass is active), `rmlui`. So `list` shows them and `dump <name>` works
-by pass name. Two exceptions: the `shadow` pass writes a DEPTH atlas (its
-cascade targets are depth attachments — `GetOutputTargets` reports no color
-outputs, so check it in `qrenderdoc` or via raw event ids); and the `gui`
-group is absent from headless/menu captures where the ImGui pass is inactive.
+(`DiligentRenderer.cpp draw()`): `shadow`, `player`, `taa_resolve` (the
+DiligentFX TAA groups nest inside it), `gui` (only when the ImGui pass is
+active), `rmlui`. So `list` shows them and `dump <name>` works by pass name.
+Two exceptions: the `shadow` pass writes a DEPTH atlas (its cascade targets
+are depth attachments — `GetOutputTargets` reports no color outputs, so check
+it in `qrenderdoc` or via raw event ids); and the `gui` group is absent from
+headless/menu captures where the ImGui pass is inactive.
 
-What a frame looks like (frame 500, 2880x1627, 143 draws, 0 dispatches — the
-TAA "compute" runs as fullscreen draws):
+What a frame looks like (frame 500, 2880x1627 — the TAA "compute" runs as
+fullscreen draws; eids are illustrative, they move with the pass set — the
+Azgaar `terrain`/`props` passes were removed 2026-09-10 with the Azgaar map
+world):
 
 | eids    | group         | what                                                       |
 | ------- | ------------- | ---------------------------------------------------------- |
 | 16–158  | `shadow`      | CSM cascade shadow maps (depth atlas)                      |
 | 163–170 | `player`      | glTF character (PBR)                                       |
-| 172–228 | `terrain`     | heightmap tiles                                            |
-| 230–251 | `props`       | instanced vegetation                                       |
-| 253–308 | `taa_resolve` | TAA chain → SRGB backbuffer (DiligentFX sub-groups nested) |
-| 311–421 | `rmlui`       | HUD on top of the SRGB target                              |
+| 172–228 | `taa_resolve` | TAA chain → SRGB backbuffer (DiligentFX sub-groups nested) |
+| 230–308 | `rmlui`       | HUD on top of the SRGB target                              |
 
 ## API gotchas (this v1.46-dev module)
 

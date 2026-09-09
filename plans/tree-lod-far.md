@@ -205,3 +205,40 @@ dumps + screenshot:
   16 m margin + near-biased tiebreak keeps the pop off the approach path.
 - **Per-frame per-instance GPU cull** (the old engine's mechanism that
   made true double-instances cheap) — a separate, larger project.
+
+## Implementation (2026-09-09)
+
+Shipped as planned, with two numeric corrections against the draft values
+above (measured with a standalone `treegen::generate` harness before
+wiring, because the plan's near-tri estimates predated the 09-09 card-count
+bump):
+
+- `configConiferFar().maxTris 150 → 240`: natural conifer-far count is
+  198 (all five tip cones); 150 silently dropped the last cone (`room()`
+  pitfall — see the lessons index).
+- `configDeciduousFar().maxTris 1200 → 7200`: natural count is 6 688
+  (160 branch tips × 6 cards × 4 tris = 3 840 + ~2 850 branch tris).
+- `configDeciduousFar().cardSize 0.08 → 0.058`: the plan's 0.055→0.08 step
+  was authored against a near cardSize of 0.055; the near config actually
+  has 0.040, so the plan's own 1.45× under-compensation factor maps to
+  0.040×1.45 = 0.058 (0.08 would be near area-preserving, i.e. balloon
+  leaves at 100 m).
+- Measured: `conifer_far/0=195` (near 307–352), `deciduous_far/0=6688`
+  (near 28 344) → 24 % of near. Mesh build 46 ms, validation PASS, unit
+  height y ∈ [0,1], conifer lateral clamped exactly at the 0.55 cap.
+- Measured over the 25-tile resident window (propsground vantage):
+  122 near / 93 433 far trees → tree vertex load 2 651 M → 628 M tris
+  (−76 %). GPU frame at the same vantage: 10.63 ms (switch 99999) →
+  7.55 ms (switch 100); both frame-limited at 60 fps, so the win is
+  headroom, and it grows with tree density / distance.
+- Acceptance: one-shot re-scatter self-check passes bit-identical with
+  the LOD pick active (pure function of build-time camera); Y-on-surface
+  PASS; far deciduous binds the leaf texture (no load-fail, cards
+  alpha-discard in the shot).
+- The shipped Chilerel map has no conifer biome, so conifer-far was
+  verified by OBJ dump + headless-Blender silhouette A/B (scripts in
+  /tmp at implementation time) rather than in-game.
+- Shadow pass: unchanged by construction — far instances are instances of
+  a (species, variant) range, and the depth pass iterates the same ranges
+  as the lit pass (no renderer edits were needed, per plan).
+

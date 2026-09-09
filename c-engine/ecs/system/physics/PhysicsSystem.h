@@ -8,9 +8,8 @@ namespace engine {
 // update, joltDestroy on removed.
 //
 // The world is not thread-safe: all Jolt calls happen on the main thread.
-// Consumers that create/destroy bodies outside this system (the heightmap
-// terrain's streaming heightfields) check physicsSystemJoltActive() so they
-// never touch a destroyed world.
+// Consumers that create/destroy bodies outside this system check
+// physicsSystemJoltActive() so they never touch a destroyed world.
 //
 // The step rate (0.02 s) is the old engine's: it steps dynamic rigid bodies
 // only — the character controller (CharacterVirtual) steps itself with the

@@ -1,5 +1,13 @@
 # Azgaar .map terrain — port plan
 
+> **Status (2026-09-10): REMOVED.** The Azgaar map world was removed from the
+> engine (this port's endgame, per `plans/blender-terrain.md` phase 4, pulled
+> forward of the splat pass): `c-game/game/azgaar/` + `loadingAzgaar/`,
+> `c-engine/ecs/system/heightmap/`, the props + heightmap-terrain render
+> passes, their shaders/assets, and all Game.cpp world wiring are gone. The
+> game boots to a worldless state (player + sky) until the Blender splat
+> world lands. Kept for port reference.
+
 Replace the removed Blender-splat terrain with the old engine's (game-001-cpp)
 Azgaar Fantasy Map Generator heightmap world: `.map`-driven biomes/props,
 streaming runtime-generated heightmap tiles, CPU/physics/render surface parity.

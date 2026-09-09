@@ -4,9 +4,7 @@
 #include "renderer/RenderBackend.h"
 #include "renderer/Renderer.h"
 #include "renderer/diligent/DiligentRenderer.h"
-#include "renderer/diligent/FrustumCull.h"
-#include "renderer/diligent/HeightmapTerrainDiligent.h"
-#include "renderer/diligent/PropsRenderDiligent.h"
+#include "ecs/system/player/Player.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/DeviceContext.h"
@@ -43,10 +41,6 @@
  *    PackMatrixRowMajor = false, so WriteShaderMatrix stores the transposed
  *    matrices directly. The ConvertToFilterable techniques bind their own
  *    internal attribs buffer and are unaffected by this choice.
- *  - The per-cascade depth-pass cbuffer (cbShadowPass, shared by both
- *    shadow PSOs) carries the light view-projection (transposed) + the
- *    split anchor (terrain) + wind/player state (the props shadow VS
- *    mirrors the lit props VS sway so shadows track the swaying canopy).
  *
  * Settings: rendererGraphicsSettings().shadowMode (0=off, 1=PCF, 2=VSM,
  * 3=EVSM2, 4=EVSM4) and shadowQuality (0=low..2=high) map to
@@ -77,17 +71,6 @@ namespace engine::renderer::diligent {
             {2048, 3, 120.0f, 5},
         };
 
-        // The depth-pass VS input block (materials/*_shadow_vs.hlsl). One cbuffer
-        // serves both shadow PSOs (terrain + props); each VS reads what it needs.
-        struct ShadowPassAttribs {
-            Diligent::float4x4 mLightViewProj;  // transposed (runtime glslang)
-            Diligent::float4 f4AnchorHi;        // f32(anchor) high split
-            Diligent::float4 f4AnchorLo;        // sub-mm residual
-            Diligent::float4 f4Wind;            // props: (dir.xy, speed, gust strength)
-            Diligent::float4 f4Phase;           // props: (integrated sway phase rad, 0,0,0)
-            Diligent::float4 f4Player;          // props: (feet.xyz, horizontal speed)
-        };
-
         bool passReady  = false;
         bool initFailed = false;
         u32 generation  = 0;
@@ -97,7 +80,6 @@ namespace engine::renderer::diligent {
         ShadowMapManager mgr;
         RefCntAutoPtr<Diligent::ISampler> cmpSampler;
         RefCntAutoPtr<Diligent::ISampler> filterableSampler;
-        RefCntAutoPtr<Diligent::IBuffer> shadowPassCB;
         Diligent::LightAttribs lightAttribs{};
         Diligent::float4x4 pbrW2L = Diligent::float4x4::Identity();
         int pbrSlice              = 0;
@@ -122,14 +104,8 @@ namespace engine::renderer::diligent {
                 desc.MipFilter = Diligent::FILTER_TYPE_LINEAR;
                 device->CreateSampler(desc, &filterableSampler);
             }
-            if (!shadowPassCB) {
-                CreateUniformBuffer(device,
-                                    sizeof(ShadowPassAttribs),
-                                    "shadow pass attribs",
-                                    &shadowPassCB);
-            }
-            if (!cmpSampler || !filterableSampler || !shadowPassCB) {
-                utils::warn("shadow: sampler/cbuffer creation failed");
+            if (!cmpSampler || !filterableSampler) {
+                utils::warn("shadow: sampler creation failed");
                 initFailed = true;
             }
         }
@@ -260,9 +236,9 @@ namespace engine::renderer::diligent {
             // per-frame CPU pick: the cascade whose camera-space z range covers the
             // feet (render space, +1 m for the torso). Same untransposed matrix the
             // caster draws with (GetCascadeTransform), so receiver and caster agree.
-            f32 wind[4], phase[4], player[4];
-            propsRenderDiligentGetWindState(wind, phase, player);
-            const Diligent::float3 pPos{player[0], player[1] + 1.0f, player[2]};
+            double ppos[3] = {0.0, 0.0, 0.0};
+            if (engine::playerGetFootPos(ppos)) ppos[1] += 1.0;  // torso
+            const Diligent::float3 pPos{(f32)ppos[0], (f32)ppos[1], (f32)ppos[2]};
             const float camZ = view._31 * pPos.x + view._32 * pPos.y + view._33 * pPos.z;
             int cascade      = 0;
             for (int c = 0; c < sa.iNumCascades; c++) {
@@ -359,24 +335,12 @@ namespace engine::renderer::diligent {
         void renderCascadesImpl(void) {
             if (!passReady) return;
             Diligent::IDeviceContext* ctx = engine::renderer::diligent::context;
-            static const bool noTerrain = getenv("ENGINE_SHADOW_NO_TERRAIN") != nullptr;
-            static const bool noProps   = getenv("ENGINE_SHADOW_NO_PROPS") != nullptr;
-            static const bool noPlayer  = getenv("ENGINE_SHADOW_NO_PLAYER") != nullptr;
-            static const bool noCull    = getenv("ENGINE_SHADOW_NO_CULL") != nullptr;
-
-            f32 camPos[3], camFwd[3];
-            renderer::rendererCameraGet(camPos, camFwd);
-            const bool glNdc = device && device->GetDeviceInfo().NDC.MinZ < -0.5f;
+            static const bool noPlayer = getenv("ENGINE_SHADOW_NO_PLAYER") != nullptr;
 
             const int numCascades = lightAttribs.ShadowAttribs.iNumCascades;
             const Diligent::TextureDesc& smDesc = mgr.GetCascadeDSV(0)->GetTexture()->GetDesc();
             for (int i = 0; i < numCascades; i++) {
                 Diligent::ITextureView* dsv = mgr.GetCascadeDSV((u32)i);
-                const Diligent::float4x4 lightViewProj =
-                    mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace.Transpose();
-                FrustumCullPlanes cullPlanes;
-                frustumCullFromVP(
-                        mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace, glNdc, cullPlanes);
                 ctx->SetRenderTargets(0,
                                       nullptr,
                                       dsv,
@@ -387,42 +351,11 @@ namespace engine::renderer::diligent {
                                        0,
                                        Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-                {
-                    Diligent::MapHelper<ShadowPassAttribs> map(ctx,
-                                                               shadowPassCB,
-                                                               Diligent::MAP_WRITE,
-                                                               Diligent::MAP_FLAG_DISCARD);
-                    // GetCascadeTransform().WorldToLightProjSpace is the full
-                    // world→light-projection matrix (non-transposed, Diligent math
-                    // order) — transpose for the runtime glslang shaders.
-                    map->mLightViewProj = lightViewProj;
-                    f64 anchorF64[3];
-                    diligentWorldAnchor(anchorF64);
-                    for (int c = 0; c < 3; c++) {
-                        map->f4AnchorHi[c] = (f32)anchorF64[c];
-                        map->f4AnchorLo[c] = (f32)(anchorF64[c] - (f64)map->f4AnchorHi[c]);
-                    }
-                    map->f4AnchorHi[3] = 0.0f;
-                    map->f4AnchorLo[3] = 0.0f;
-                    // The props shadow VS mirrors the lit props VS sway; the same
-                    // wind/player state the lit fillFrameAttribs puts in
-                    // f4ExtraData[0..2], read through the props pass' getter.
-                    f32 wind[4], phase[4], player[4];
-                    propsRenderDiligentGetWindState(wind, phase, player);
-                    map->f4Wind   = Diligent::float4{wind[0], wind[1], wind[2], wind[3]};
-                    map->f4Phase  = Diligent::float4{phase[0], phase[1], phase[2], phase[3]};
-                    map->f4Player = Diligent::float4{player[0], player[1], player[2], player[3]};
-                }
-
                 Diligent::Viewport vp(0.0f, 0.0f, (f32)smDesc.Width, (f32)smDesc.Height, 0.0f, 1.0f);
                 ctx->SetViewports(1, &vp, 0, 0);
                 Diligent::Rect scissor(0, 0, (i32)smDesc.Width, (i32)smDesc.Height);
                 ctx->SetScissorRects(1, &scissor, 0, 0);
 
-                if (!noTerrain)
-                    heightmapTerrainDiligentShadowDraw(noCull ? nullptr : &cullPlanes, camPos);
-                if (!noProps)
-                    propsRenderDiligentShadowDraw(noCull ? nullptr : &cullPlanes, camPos);
                 if (!noPlayer)
                     gltfDiligentShadowDraw(ctx,
                                            mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace,
@@ -575,7 +508,6 @@ namespace engine::renderer::diligent {
         new (&mgr) ShadowMapManager();
         cmpSampler.Release();
         filterableSampler.Release();
-        shadowPassCB.Release();
         passReady  = false;
         pbrReady   = false;
         initFailed = false;
@@ -614,10 +546,6 @@ namespace engine::renderer::diligent {
 
     const void* shadowDiligentLightAttribs(void) {
         return &lightAttribs;
-    }
-
-    Diligent::IBuffer* shadowDiligentShadowPassCB(void) {
-        return shadowPassCB;
     }
 
     Diligent::ITextureView* shadowDiligentShadowSRV(void) {

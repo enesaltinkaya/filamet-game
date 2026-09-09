@@ -18,9 +18,11 @@ namespace engine {
 //          the drag — the old engine's show/hide-on-button behaviour)
 //   RMB    drag: orbit camera AND rotate the character to face the camera
 // Physics: a Jolt CharacterVirtual capsule (r 0.25 m, 0.45 m half-cylinder —
-// the old engine's dimensions) walked on the streaming heightmap
-// heightfields: 45° max climb, 0.25 m stair steps, stick-to-floor on small
-// drops — the same behaviour the old engine's joltCharacterUpdate gave.
+// the old engine's dimensions): 45° max climb, 0.25 m stair steps,
+// stick-to-floor on small drops — the same behaviour the old engine's
+// joltCharacterUpdate gave. No world collision bodies exist yet (the Azgaar
+// heightfields are removed), so the capsule has no ground to stand on until
+// the splat terrain world lands.
 // The character position is the FEET position (the shape is offset up by
 // half its height inside the wrapper); the model is placed there and the
 // orbit camera targets the capsule centre (feet + 0.70 m).

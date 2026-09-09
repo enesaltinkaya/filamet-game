@@ -134,9 +134,7 @@ target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 # shared pch — skip the pch for them
 set_source_files_properties(
     renderer/diligent/DiligentRenderer.cpp
-    renderer/diligent/HeightmapTerrainDiligent.cpp
     renderer/diligent/IblDiligent.cpp
-    renderer/diligent/PropsRenderDiligent.cpp
     renderer/diligent/ShadowDiligent.cpp
     renderer/diligent/SsaoDiligent.cpp
     renderer/diligent/BloomDiligent.cpp
@@ -151,65 +149,30 @@ set_source_files_properties(
 target_include_directories(c-engine PUBLIC /home/enes/Apps/renderdoc/renderdoc/api/app)
 target_link_libraries(c-engine PUBLIC ${CMAKE_DL_LIBS})
 
-# ── heightmap terrain + props shaders (compiled at pass init) ────────────────
+# ── pak_1 shader sources (compiled at pass init) ────────────────────
 # The .hlsl sources are shipped to the pak so the passes can read them with
 # dataManagerRead (same "source in-tree, artifact in pak" pattern as the
 # other build steps).
-set(HEIGHTMAP_TERRAIN_HLSL_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_shadow_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_ps.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_shadow_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_shadow_ps.hlsl
+set(PAK1_HLSL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_ps.hlsl
 )
-set(HEIGHTMAP_TERRAIN_HLSL_OUT
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_shadow_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_ps.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_shadow_vs.hlsl
-    ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_shadow_ps.hlsl
+set(PAK1_HLSL_OUT
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_vs.hlsl
     ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_ps.hlsl
 )
 add_custom_command(
-    OUTPUT ${HEIGHTMAP_TERRAIN_HLSL_OUT}
+    OUTPUT ${PAK1_HLSL_OUT}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_vs.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_vs.hlsl
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_ps.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_ps.hlsl
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/heightmap_terrain_shadow_vs.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/heightmap_terrain_shadow_vs.hlsl
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_vs.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_vs.hlsl
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_ps.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_ps.hlsl
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_shadow_vs.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_shadow_vs.hlsl
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/props_shadow_ps.hlsl
-        ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/props_shadow_ps.hlsl
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_vs.hlsl
         ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_vs.hlsl
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_CURRENT_SOURCE_DIR}/renderer/diligent/shaders/rmlui_ui_ps.hlsl
         ${CMAKE_CURRENT_SOURCE_DIR}/../c-game/data/pak_1/materials/rmlui_ui_ps.hlsl
-    DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_SRC}
-    COMMENT "copy heightmap terrain + props .hlsl sources into pak_1"
+    DEPENDS ${PAK1_HLSL_SRC}
+    COMMENT "copy rmlui .hlsl sources into pak_1"
     VERBATIM
 )
-add_custom_target(heightmap_terrain_hlsl DEPENDS ${HEIGHTMAP_TERRAIN_HLSL_OUT})
-add_dependencies(c-engine heightmap_terrain_hlsl)
+add_custom_target(pak1_hlsl DEPENDS ${PAK1_HLSL_OUT})
+add_dependencies(c-engine pak1_hlsl)

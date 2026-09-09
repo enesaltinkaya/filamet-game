@@ -7,7 +7,6 @@
 #include "Common/interface/BasicMath.hpp"
 
 namespace Diligent {
-struct IBuffer;
 struct ISampler;
 struct ITextureView;
 }
@@ -19,15 +18,13 @@ namespace engine::renderer::diligent {
 // The module owns the shadow map texture atlas (one 2D array, one slice per
 // cascade), the cascade distribution (DistributeCascades against the
 // camera-anchored view + unjittered projection) and the master LightAttribs
-// block the terrain/props passes copy into their frame cbuffers (matrices
-// already TRANSPOSED — the runtime glslang convention, see
-// HeightmapTerrainDiligent.cpp fillFrameAttribs).
+// block the world shadow passes copy into their frame cbuffers (matrices
+// already TRANSPOSED — the runtime glslang convention, see GltfDiligent.cpp
+// fillFrameAttribs).
 //
-// The cascade depth draws themselves stay in the geometry passes: the shadow
-// module calls heightmapTerrainDiligentShadowDraw() /
-// propsRenderDiligentShadowDraw() once per cascade with the shared
-// per-cascade cbuffer (shadowDiligentShadowPassCB) already mapped to the
-// light view-projection.
+// The cascade depth draws: the shadow module calls the caster passes once
+// per cascade (the PBR glTF pass for the player character; the world's
+// shadow draws return with the splat terrain pass).
 //
 // Mode/quality come from rendererGraphicsSettings() (shadowMode 0=off..4,
 // shadowQuality 0=low..2=high). Any change bumps the generation counter
@@ -38,8 +35,8 @@ namespace engine::renderer::diligent {
 // before the device exists (no-op).
 void shadowDiligentUpdateFrame(void);
 
-// GPU work: render all cascades (calls into the geometry passes' shadow
-// draw hooks) + ConvertToFilterable for VSM/EVSM. Binds its own render
+// GPU work: render all cascades (the PBR caster draws the player) +
+// ConvertToFilterable for VSM/EVSM. Binds its own render
 // targets; the caller must re-bind the world targets afterwards.
 void shadowDiligentRenderCascades(void);
 
@@ -66,10 +63,6 @@ float shadowDiligentTierDistance(void);
 // Master LightAttribs (ShadowMapAttribs included; matrices transposed for
 // the runtime shaders). Copies into the passes' frame cbuffers.
 const void* shadowDiligentLightAttribs(void);
-// The shared per-cascade depth-pass cbuffer (ShadowPassAttribs — see
-// materials/*_shadow_vs.hlsl): the shadow module maps + fills it before
-// each cascade draw.
-Diligent::IBuffer* shadowDiligentShadowPassCB(void);
 // The SRV the lit passes bind (raw depth for PCF, filterable for VSM/EVSM —
 // mode-aware).
 Diligent::ITextureView* shadowDiligentShadowSRV(void);

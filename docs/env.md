@@ -39,7 +39,7 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 
 | Var                   | Value                                                  | Effect                                                                                                  |
 | --------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `ENGINE_CAMERA`       | `topdown` \| `close` \| `land` \| `landtop` \| `props` | Pick a fixed validation vantage after world load (instead of the default framing).                      |
+| `ENGINE_CAMERA`       | `topdown` \| `close` \| `character`                      | Pick a fixed validation vantage after world load (instead of the default framing).                      |
 | `ENGINE_CAMERA_DOLLY` | `x,y,z`                                                | Constant camera velocity in m/s (also marks the run as automated → player parked).                      |
 | `ENGINE_TELEPORT`     | `x,y,z`                                                | Override the spawn position (world metres, f32).                                                        |
 | `ENGINE_AUTO_RUN`     | truthy                                                 | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
@@ -47,36 +47,6 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | `ENGINE_NO_ANIM`      | any value                                              | Skip loading/playing the character animation clips.                                                     |
 | `ENGINE_NO_PLAYER`    | any value                                              | Keep the player parked (same gate as screenshot/dolly runs).                                            |
 | `ENGINE_FOG_DENSITY`  | float                                                  | Override the exponential fog density (default 0.00035).                                                 |
-
-## Terrain / Azgaar world
-
-| Var                              | Value             | Effect                                                                                                                                |
-| -------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENGINE_HEIGHTMAP_TEST`          | any value         | Run the heightmap streaming CPU self-test at load.                                                                                    |
-| `ENGINE_TERRAIN_DEBUG`           | `ramp` \| `biome` | Validation view: periodic hue per 256 m of height, or the raw biome-colour texture.                                                   |
-| `ENGINE_HITCH_DEBUG`             | any value         | Log a `HITCH:` line per frame while Jolt heightfield bodies are created.                                                              |
-| `ENGINE_AZGAAR_HM_SIGMA`         | float (texels)    | Override the height-grid Gaussian-blur σ (default 0.35 × sample spacing; clamped to [1, 6]).                                          |
-| `ENGINE_AZGAAR_CLIMATE_SIGMA`    | float (texels)    | Same override for the temperature / precipitation / coast grids.                                                                      |
-| `ENGINE_AZGAAR_TINT_SIGMA`       | float (texels)    | Same override for the biome-colour blend.                                                                                             |
-| `ENGINE_AZGAAR_SNOW_LO`          | float °C          | Snow-blend start temperature (default −1).                                                                                            |
-| `ENGINE_AZGAAR_SNOW_HI`          | float °C          | Snow-blend end temperature (default 3).                                                                                               |
-| `ENGINE_AZGAAR_BEACH_H`          | float m           | Beach-blend height (default 2.5).                                                                                                     |
-| `ENGINE_AZGAAR_CLIMATE_DISABLED` | any value         | Zero all the above thresholds and disable climate in the terrain look.                                                                |
-| `ENGINE_AZGAAR_DIAG`             | any value         | Dump the biome-id histogram + table at world build.                                                                                   |
-| `ENGINE_AZGAAR_DUMP_TEXTURES`    | dir               | Dump the packed per-world textures (exactly what the terrain pass uploads) as `biome_color.ppm` / `climate_temp.ppm` (R = temp + 64). |
-
-## Props (Azgaar scatter + render pass)
-
-| Var                             | Value     | Effect                                                                                                           |
-| ------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------- |
-| `ENGINE_AZGAAR_PROPS_DISABLED`  | any value | Disable the whole Azgaar props system.                                                                           |
-| `ENGINE_AZGAAR_PROPS_DEBUG`     | any value | One-shot scatter/build debug line.                                                                               |
-| `ENGINE_AZGAAR_PROPS_MESH_DUMP` | any value | Dump each built prop mesh as `/tmp/azgaar_props_<species>.obj` (grass cards: `/tmp/azgaar_props_grass_<n>.obj`). |
-| `ENGINE_AZGAAR_SETTLE_DISABLED` | any value | Disable the settlement/plateau system.                                                                           |
-| `ENGINE_NO_PROPS`               | `"1"`     | Disable the props render pass (scatter may still run).                                                           |
-| `ENGINE_PROPS_DEBUG`            | any value | One-shot props-pass debug line (tiles, instancing, culling).                                                     |
-| `ENGINE_PROPS_PERF`             | any value | Periodic props perf line (game/pass ms, instances, draws, memory).                                               |
-| `ENGINE_PROPS_PLAYER_PUSH`      | float     | Enable/disable props being pushed by the player; **enabled by default**, `≤ 0` turns it off.                     |
 
 ## GLTF / character
 

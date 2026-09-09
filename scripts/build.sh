@@ -10,6 +10,11 @@ if [ ! -d "$BUILD_DIR" ]; then
 fi
 cmake --build "$BUILD_DIR"
 
+# Blender terrain pipeline (oghuzlands .blend -> chunked glb -> gltfpack ->
+# jolt shapes -> splat/detail ktx2). Mtime-stamped: a no-op when the .blend,
+# its UDIM tiles and detail textures are unchanged.
+python3 "$SCRIPTS/blender-terrain.py"
+
 # The game binary lives in build/c-game/; paks must land next to it.
 export BIN_DIR="$BUILD_DIR/c-game"
 export RELEASE=0

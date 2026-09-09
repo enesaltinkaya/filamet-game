@@ -1,1 +1,6 @@
-{"lastTaskId":1,"phase":"curate","round":3,"signedOff":false,"verdict":"PASS"}
+{
+  "lastTaskId": 7,
+  "phase": "done",
+  "round": 1,
+  "signedOff": false
+}

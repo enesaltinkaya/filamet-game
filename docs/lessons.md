@@ -4,11 +4,22 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-10 — [entries](lessons/2026-09-10.md)
+
+- A pass that runs its VS work but rasterizes zero primitives is a CLIP-TRANSFORM problem, not a "draw missing" one: measure (RasterizedPrimitives + post-VS clip data), don't re-derive the math on paper — the PBR lit pass clips the character within ~20 m of the camera (rpr=0, VSInvocations normal) while the same mesh rasterizes at 60 m+ and in the shadow pass at every distance; found verifying the azgaar removal, cause unresolved — don't build close-range validation vantages on the lit pass until understood
+- Removing a world render pass also removes hidden consumers of its state: the shadow module's per-cascade cbuffer + ENGINE_SHADOW_NO_* flags existed only for the world shadow draws, but the PBR receiver cascade pick read the player position from the props pass' wind-state getter — re-source player state from engine::playerGetFootPos
+
 ## 2026-09-09 — [entries](lessons/2026-09-09.md)
+
+- treegen CONES conifer default renders a flat umbrella, not a spruce: needs `coneCount >= 3` (stacked mini-pyramid) + `tipConeHeight >= tipConeRadius` + low `startFrac` (~0.18) + upright `angleSpread` (~0.55); stock config (flat discs, splayed branches, top-half `startFrac 0.5`) reads as a "mushroom on a stick" — fingerprint: wide flat disc on a bare trunk in side-view OBJ dump; incident: "trees around the character look weird" (player in conifer-only Taiga, every near tree was the malformed conifer) — fixed by retuning `configConifer`/`configConiferFar`
 
 - Porting ez-tree presets to `treegen`: convert units, don't transcribe (twist is per-section; gnarliness divisor differs between ez's `max(1, 1/sqrt(r_meters))` and treegen's `g / max(0.15, sqrt(r_unit))`; baseRadius = preset radius / preset total height). Fingerprint of an unconverted port: stocky trunk, helical twist, "candelabra with pom-poms" crown. Incident: "deciduous trees don't look like ez-tree default ash medium" — fixed by converting the preset numbers + measuring card size from the reference GLB
 - `treegen` `maxTris` must cover branches + tips×cards×8 or `Gen::room()` silently drops the last branches' leaf cards — fingerprint: build log shows the variant at exactly `maxTris` (`deciduous/N=20000` after a card-count bump that was 19384 before)
 - Fast tree A/B: `ENGINE_AZGAAR_PROPS_MESH_DUMP=1` + reference GLB (`tree_LOD0.glb`) in headless Blender; `import_scene.gltf` already converts to Z-up (don't add another 90° X-rotation), normalize both to unit height, measure card size from leaf-mesh triangles (median longest edge ≈ size×√2)
+- `treegen` final-level `continuation` spines are sub-pixel-radius waste that still carry full parent-resolution bands + their own cards (near-LOD: 7,296 of 28,344 tris/variant, zero silhouette) — turn them off before any card cut; fingerprint: tri-count harness A/B full vs `lev[levels-2].continuation=false` (the `--spine` flag), a ~26 % block invisible in screenshots
+- Leaf-card levers: `cardCount`/tip = canopy SOLIDITY, `cardSize` = AREA — at ≤3 cards/tip the clump goes visibly open even at per-tip-area parity (count×size²); take the minimum card count that passes the A/B density at 100-200 m (far: 3 failed, 4 @ 0.071 held; near: 6 @ 0.055 rejected as too sparse, 9 @ 0.070 held)
+- TAA A/B noise floor: two identical-geometry runs differ by ~1.8 % px Δ>30 — always run a same-build control pair and only count pixel-diff regions above that floor as real (heatmaps localize the change rows)
+- RADV per-event GPU durations overlap (per-pass event sum ≫ wall-frame GPU time; ±25 % replay jitter even on bit-identical workloads): across captures compare pass SHARES and same-method A/B deltas, use RasterizedPrimitives/SamplesPassed for draw-level conclusions — never absolute ms
 
 ## 2026-09-08 — [entries](lessons/2026-09-08.md)
 
