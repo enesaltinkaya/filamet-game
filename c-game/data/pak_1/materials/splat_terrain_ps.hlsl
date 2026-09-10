@@ -49,12 +49,15 @@ struct PSSplatIn
     float4 Tangent     : TEXCOORD2;
     float2 UdimUv      : TEXCOORD3;
     float4 PrevClip    : TEXCOORD4;
+    float  ViewZ       : TEXCOORD5;  // camera view-space depth (unjittered)
 };
 
 // Flat mirror of HLSL::PBRFrameAttribs (BasicStructures / PBR_Structures /
-// RenderPBR_Structures.fxh, PBR_MAX_LIGHTS=1, one shadow map) + the splat
-// anchor — field order must stay byte-identical to the C++ staging struct
-// (SplatTerrainDiligent.cpp). float4 groups are consecutive C++ scalars.
+// RenderPBR_Structures.fxh, PBR_MAX_LIGHTS=1) + the splat anchor — the
+// ShadowMaps block is NOT mirrored: the CSM cascade data arrives through the
+// separate cbSplatShadow cbuffer below. Field order must stay byte-identical
+// to the C++ staging struct (SplatTerrainDiligent.cpp). float4 groups are
+// consecutive C++ scalars.
 cbuffer cbSplatFrame
 {
     float4   cCamPosition;    // camera world position (render/anchored space)
@@ -99,10 +102,25 @@ cbuffer cbSplatFrame
     float4   lDir;            // DirectionX/Y/Z ShadowMapIndex (-1 = no shadow)
     float4   lInt;            // IntensityR/G/B Range4
     float4   lSpot;           // SpotAngleScale SpotAngleOffset pad pad
-    float4x4 sWorldToLightProj;
-    float4   sUV;             // UVScale (xy) UVBias (zw)
-    float4   sSlice;          // ShadowMapSlice Padding0 (NDC depth bias) pad pad
     float4   g_Anchor;
+    // CSM shadow receive (merged into cbSplatFrame — on this runtime path a
+    // second cbuffer in the same PSO bound ambiguously, lessons.md 2026-09-05):
+    // byte-identical mirror of Diligent::ShadowMapAttribs (BasicStructures.fxh,
+    // the non-C++ branch — f4CascadeCamSpaceZEnd as float4[]; the same bytes
+    // shadowDiligentLightAttribs() carries in LightAttribs.ShadowAttribs) +
+    // f4ShadowFade. Matrices TRANSPOSED (the runtime glslang convention,
+    // row-vector muls). Fixed size, always present — shadow on/off is the
+    // ShadowIndex gate + the g_ShadowMap SRV, never a cbuffer shape change.
+    float4x4 mWorldToLightView;
+    float4   cascadeAttribs[32];   // per cascade i: [4i]=f4LightSpaceScale [4i+1]=f4LightSpaceScaledBias [4i+2]=f4StartEndZ [4i+3]=f4MarginProjSpace
+    float4   mWorldToShadowMapUVDepth[32];
+    float4   f4CascadeCamSpaceZEnd[2];
+    float4   f4ShadowMapDim;
+    float4   sNumCascades;         // iNumCascades fNumCascades bVisualizeCascades bVisualizeShadowing
+    float4   sBiasParams;          // fReceiverPlaneDepthBiasClamp fFixedDepthBias fCascadeTransitionRegion iMaxAnisotropy
+    float4   sVSMParams;           // fVSMBias fVSMLightBleedingReduction fEVSMPositiveExponent fEVSMNegativeExponent
+    float4   sTail;                // bIs32BitEVSM iFixedFilterSize fFilterWorldSize fDummy
+    float4   f4ShadowFade;         // x = tier shadow distance in m (0 = no fade)
 };
 
 Texture2DArray g_Weights0;   // splatInfo group 0 (grass1 — the top group)
@@ -411,13 +429,60 @@ PSOutput main(PSSplatIn In)
     float  ShadowIndex = lDir.w;
     float3 LightIntensity = lInt.xyz;
     float  Attenuation = 1.0;
+    int    dbgCascade = -2;
+    float2 dbgUV      = float2(0.0, 0.0);
+    float  dbgRaw     = -1.0;
     if (ShadowIndex >= 0.0)
     {
-        float4 ShadowPos = mul(float4(In.AnchoredPos, 1.0), sWorldToLightProj);
-        ShadowPos.xy /= ShadowPos.w;
-        ShadowPos.xy = (float2(0.5, 0.5) + float2(0.5, -0.5) * ShadowPos.xy) * sUV.xy + sUV.zw;
-        float LightDepth = ShadowPos.z - sSlice.y;
-        Attenuation = filterShadowPCF3(ShadowPos.xy, sSlice.x, LightDepth);
+        // Per-pixel cascade pick (Shadows.fxh FindCascade, non-best search):
+        // the camera view-space depth selects the cascade whose z range covers
+        // this pixel — the terrain spans the whole shadow distance, so the
+        // single-cascade CPU pick (the PBR player path) is wrong for far
+        // terrain. Unjittered view z (rotation-only view) keeps the pick
+        // TAA-stable. Unused slots hold +FLT_MAX, so counting all 2 float4s
+        // is exact for any cascade count up to 8.
+        float viewZ   = In.ViewZ;
+        int cascade   = 0;
+        for (int i = 0; i < 2; ++i)
+        {
+            float4 zEnd = f4CascadeCamSpaceZEnd[i];
+            cascade += int(zEnd.x < viewZ) + int(zEnd.y < viewZ) + int(zEnd.z < viewZ) + int(zEnd.w < viewZ);
+        }
+        cascade = min(cascade, int(sNumCascades.y) - 1);
+        if (cascade >= 0)
+        {
+            // Light view space (the caster's untransposed W2LView, stored
+            // transposed here), then the picked cascade's scale/bias to its
+            // normalized depth (the same affine the caster's
+            // GetCascadeTransform projection applies — no /w: the cascade
+            // projection is orthographic, w == 1).
+            float3 lightViewPos = mul(float4(In.AnchoredPos, 1.0), mWorldToLightView).xyz;
+            float3 cascadeNdc   = lightViewPos * cascadeAttribs[cascade * 4].xyz + cascadeAttribs[cascade * 4 + 1].xyz;
+            float2 cascadeUV    = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
+            float  LightDepth    = cascadeNdc.z - sBiasParams.y;  // fFixedDepthBias (cascade-z-normalized)
+            dbgCascade           = cascade;
+            dbgUV                = cascadeUV;
+            // The shadow sampler clamps, so a receiver outside the picked
+            // cascade's box would compare against unrelated atlas-edge depth
+            // and flicker fully shadowed. Out-of-box pixels stay lit instead
+            // of sampling — the tier fade covers the box/fade boundary.
+            if (cascadeUV.x >= 0.0 && cascadeUV.x <= 1.0 &&
+                cascadeUV.y >= 0.0 && cascadeUV.y <= 1.0)
+            {
+                Attenuation = filterShadowPCF3(cascadeUV, float(cascade), LightDepth);
+                dbgRaw      = g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(cascadeUV, float(cascade)), max(LightDepth, 1e-8));
+            }
+            // Receiver-side tier-distance fade (lessons.md 2026-09-07): the
+            // padded light cube still samples past the tier distance, so fade
+            // the shadow to lit over the last 25 % of it — the effective
+            // cutoff (f4ShadowFade.x = 0 disables: ENGINE_SHADOW_FADE=0 A/B).
+            float tier = f4ShadowFade.x;
+            if (tier > 0.0)
+            {
+                float fade = clamp((tier - viewZ) / (0.25 * tier), 0.0, 1.0);
+                Attenuation += (1.0 - Attenuation) * (1.0 - fade);
+            }
+        }
     }
     if (Attenuation > 0.0)
     {
@@ -438,6 +503,22 @@ PSOutput main(PSSplatIn In)
             Punctual = (DiffuseContrib + SpecContrib) * NdotL * (LightIntensity * Attenuation);
         }
         IBL += Punctual;
+    }
+
+    if (sTail.w > 0.5)
+    {
+        if (ShadowIndex < 0.0)
+            IBL = float3(0.1, 0.1, 0.5);
+        else if (sTail.w < 1.5)
+            IBL = (dbgCascade == 0) ? float3(1.0, 0.0, 0.0)
+                : (dbgCascade == 1) ? float3(0.0, 1.0, 0.0)
+                : float3(0.0, 0.3, 1.0);
+        else if (sTail.w < 2.5)
+            IBL = float3(Attenuation, Attenuation, 0.0);
+        else if (sTail.w < 3.5)
+            IBL = (dbgRaw < 0.0) ? float3(1.0, 0.0, 1.0) : float3(1.0 - dbgRaw, dbgRaw, 0.0);
+        else
+            IBL = float3(frac(dbgUV), 0.0);
     }
 
     PSOutput Out;

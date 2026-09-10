@@ -6,6 +6,8 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 ## 2026-09-10 — [entries](lessons/2026-09-10.md)
 
+- A 0-color-target + DSV depth-only PSO is accepted by CreateGraphicsPipelineState on this Vulkan build but its depth writes don't land (readback: 1-px sliver) — use a throwaway color RT + 1-RT for depth-only casts; verify a depth pass by its written bytes, not PSO-creation success
+
 - A pass that runs its VS work but rasterizes zero primitives is a CLIP-TRANSFORM problem, not a "draw missing" one: measure (RasterizedPrimitives + post-VS clip data), don't re-derive the math on paper — the PBR lit pass clips the character within ~20 m of the camera (rpr=0, VSInvocations normal) while the same mesh rasterizes at 60 m+ and in the shadow pass at every distance; found verifying the azgaar removal, cause unresolved — don't build close-range validation vantages on the lit pass until understood
 - Removing a world render pass also removes hidden consumers of its state: the shadow module's per-cascade cbuffer + ENGINE_SHADOW_NO_* flags existed only for the world shadow draws, but the PBR receiver cascade pick read the player position from the props pass' wind-state getter — re-source player state from engine::playerGetFootPos
 

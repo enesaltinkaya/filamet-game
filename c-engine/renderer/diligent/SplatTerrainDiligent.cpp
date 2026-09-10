@@ -10,6 +10,7 @@
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
+#include "ecs/system/player/Player.h"
 
 #include <Common/interface/RefCntAutoPtr.hpp>
 #include <DiligentFXShaderSourceStreamFactory.hpp>
@@ -815,27 +816,54 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
 }
 
 // ── Draw pass (task 3 — full PBR lighting + TAA 3-RT) ───────────────────
-// Per-frame: fill the frame cbuffer (HLSL::PBRFrameAttribs + anchor — the
-// same getters GltfDiligent.cpp fillFrameAttribs uses: the directional sun
-// light, the CSM cascade receive state, the IBL params; matrices TRANSPOSED
-// for the runtime-glslang convention) → frustum + 1-chunk-window cull → one
-// SRB commit → the visible chunks. The cbuffer is a USAGE_DYNAMIC ring (the
-// rmlui/gltf frame-attribs pattern), so it is re-Uploaded through
-// MapBuffer/UnmapBuffer and the SRB re-committed every frame — never
-// UpdateBuffer on a dynamic buffer (docs/lessons.md). The IBL cubes' and
-// the shadow atlas' SRVs are re-set on the dynamic SRB slots only when the
-// bound resource changes (IBL env cycling, shadow mode changes).
+// Per-frame: fill the frame cbuffer (cbSplatFrame = the PBRFrameAttribs
+// mirror minus ShadowMaps + anchor, filled with the same getters
+// GltfDiligent.cpp fillFrameAttribs uses, matrices TRANSPOSED for the
+// runtime-glslang convention, plus the distributed ShadowMapAttribs +
+// f4ShadowFade tier distance — the per-pixel cascade receive) → frustum +
+// 1-chunk-window cull → one SRB commit → the visible chunks. The cbuffer is
+// a USAGE_DYNAMIC ring (the rmlui/gltf frame-attribs pattern), so it is
+// re-uploaded through MapBuffer/UnmapBuffer and the SRB re-committed every
+// frame — never UpdateBuffer on a dynamic buffer (docs/lessons.md). The IBL
+// cubes' and the shadow atlas' SRVs are re-set on the dynamic SRB slots only
+// when the bound resource changes (IBL env cycling, shadow mode changes).
 
 void splatPassRelease(void);
 
 // The staging for the frame cbuffer upload: a byte mirror of the
-// cbSplatFrame cbuffer declared in splat_terrain_{vs,ps}.hlsl (HLSL::
-// PBRFrameAttribs flat + the splat anchor). Field order must stay identical.
-struct SplatFrameStaging {
-    Diligent::HLSL::PBRFrameAttribs frame;
-    Diligent::float4 anchor;  // xyz: f64 camera eye rounded to f32, w 0
+// cbSplatFrame cbuffer declared in splat_terrain_{vs,ps}.hlsl —
+// PBRFrameAttribs MINUS the ShadowMaps[0] block (replaced by the CSM
+// cascade data below) + the splat anchor + the ShadowMapAttribs mirror +
+// f4ShadowFade. Field order must stay identical; the asserts pin the prefix
+// to PBRFrameAttribs' leading bytes and the ShadowMapAttribs size to the
+// hand-flattened cbuffer mirror, so a layout drift in the DiligentFX structs
+// breaks the build, not the memcpy.
+struct SplatFramePrefix {
+    Diligent::HLSL::CameraAttribs camera;
+    Diligent::HLSL::CameraAttribs prevCamera;
+    Diligent::HLSL::PBRRendererShaderParameters renderer;
+    Diligent::HLSL::PBRLightAttribs lights;
 };
-static_assert(sizeof(SplatFrameStaging::frame) % 16 == 0, "splat frame attribs layout");
+static_assert(offsetof(Diligent::HLSL::PBRFrameAttribs, PrevCamera) == sizeof(Diligent::HLSL::CameraAttribs),
+              "PBRFrameAttribs layout drift");
+static_assert(offsetof(Diligent::HLSL::PBRFrameAttribs, Renderer) == 2 * sizeof(Diligent::HLSL::CameraAttribs),
+              "PBRFrameAttribs layout drift");
+static_assert(offsetof(Diligent::HLSL::PBRFrameAttribs, Lights) ==
+                    2 * sizeof(Diligent::HLSL::CameraAttribs) + sizeof(Diligent::HLSL::PBRRendererShaderParameters),
+              "PBRFrameAttribs layout drift");
+static_assert(sizeof(SplatFramePrefix) ==
+                    sizeof(Diligent::HLSL::PBRFrameAttribs) - sizeof(Diligent::HLSL::PBRShadowMapInfo),
+              "SplatFramePrefix must be PBRFrameAttribs minus ShadowMaps");
+static_assert(sizeof(Diligent::HLSL::ShadowMapAttribs) == 1200,
+              "ShadowMapAttribs layout drift (cbSplatFrame shadow mirror)");
+
+struct SplatFrameStaging {
+    SplatFramePrefix frame;
+    Diligent::float4 anchor;  // xyz: f64 camera eye rounded to f32, w 0
+    Diligent::HLSL::ShadowMapAttribs shadowAttribs;  // the distributed CSM cascades (transposed)
+    Diligent::float4 shadowFade;  // x = tier distance m (0 = no fade), rest 0
+};
+static_assert(sizeof(SplatFrameStaging) % 16 == 0, "splat frame attribs layout");
 static SplatFrameStaging splatFrameStaging;
 
 // The PBR pass' CSM-receive condition (pbrShadowsOn in GltfDiligent.cpp):
@@ -852,9 +880,9 @@ static bool splatShadowsOn(void) {
 // The PBRFrameAttribs matrices are filled in Diligent's row-major math
 // (like fillFrameAttribs) and then TRANSPOSED for the runtime-glslang
 // cbuffer convention (docs/lessons.md 2026-09-05) — the splat shaders
-// consume them row-vector style. PBRLightAttribs carries no matrices.
-static void splatFrameTranspose(Diligent::HLSL::PBRFrameAttribs& f) {
-    Diligent::HLSL::CameraAttribs* cams[2] = {&f.Camera, &f.PrevCamera};
+// consume them row-vector style.
+static void splatFrameTranspose(SplatFramePrefix& f) {
+    Diligent::HLSL::CameraAttribs* cams[2] = {&f.camera, &f.prevCamera};
     for (Diligent::HLSL::CameraAttribs* cam : cams) {
         cam->mView        = cam->mView.Transpose();
         cam->mProj        = cam->mProj.Transpose();
@@ -863,19 +891,18 @@ static void splatFrameTranspose(Diligent::HLSL::PBRFrameAttribs& f) {
         cam->mProjInv     = cam->mProjInv.Transpose();
         cam->mViewProjInv = cam->mViewProjInv.Transpose();
     }
-    f.ShadowMaps[0].WorldToLightProjSpace = f.ShadowMaps[0].WorldToLightProjSpace.Transpose();
 }
 
-// The PBR frame attribs the splat PS consumes (HLSL::PBRFrameAttribs):
+// The PBR frame attribs the splat PS consumes (the cbSplatFrame mirror):
 // filled with the same getters GltfDiligent.cpp fillFrameAttribs uses.
 static void splatFrameFill(void) {
-    Diligent::HLSL::PBRFrameAttribs& f = splatFrameStaging.frame;
+    SplatFramePrefix& f = splatFrameStaging.frame;
     const float4x4 view = diligentFrameView();
     const float4x4 proj = diligentFrameProj();
     f64 anchorF64[3];
     diligentWorldAnchor(anchorF64);
 
-    Diligent::HLSL::CameraAttribs& camera = f.Camera;
+    Diligent::HLSL::CameraAttribs& camera = f.camera;
     camera.mView        = view;
     camera.mProj        = proj;
     camera.mViewProj    = view * proj;
@@ -894,7 +921,7 @@ static void splatFrameFill(void) {
     camera.SetClipPlanes(engine::renderer::kCameraNear, engine::renderer::kCameraFar);
     camera.fHandness = view.Determinant() > 0 ? 1.0f : -1.0f;
     camera.f2Jitter  = float2{taaCurrentJitterX(), taaCurrentJitterY()};
-    f.PrevCamera = *static_cast<const Diligent::HLSL::CameraAttribs*>(taaPrevCameraAttribs());
+    f.prevCamera = *static_cast<const Diligent::HLSL::CameraAttribs*>(taaPrevCameraAttribs());
     {  // prev-camera anchor correction (same as fillFrameAttribs)
         f32 dEye[3];
         taaPrevAnchorDelta(dEye);
@@ -902,10 +929,10 @@ static void splatFrameFill(void) {
         t._41 = dEye[0];
         t._42 = dEye[1];
         t._43 = dEye[2];
-        f.PrevCamera.mViewProj = t * f.PrevCamera.mViewProj;
+        f.prevCamera.mViewProj = t * f.prevCamera.mViewProj;
     }
 
-    Diligent::HLSL::PBRRendererShaderParameters& renderer = f.Renderer;
+    Diligent::HLSL::PBRRendererShaderParameters& renderer = f.renderer;
     renderer.OcclusionStrength = 1.0f;
     renderer.EmissionScale     = 1.0f;
     renderer.AverageLogLum     = 0.25f;
@@ -924,7 +951,7 @@ static void splatFrameFill(void) {
     renderer.DebugView      = 0;
 
     // Directional sun (frame.Lights[0]), scaled like the PBR pass
-    Diligent::HLSL::PBRLightAttribs& light = f.Lights[0];
+    Diligent::HLSL::PBRLightAttribs& light = f.lights;
     const f32* sunDir     = diligentSunDirection();
     const f32* sunColor   = diligentSunColor();
     const f32  sunIntens = diligentSunIntensity();
@@ -944,23 +971,25 @@ static void splatFrameFill(void) {
     light.Range4         = 0.0f;
     light.SpotAngleScale = 0.0f;
     light.SpotAngleOffset = 0.0f;
-    if (light.ShadowMapIndex >= 0) {
-        Diligent::HLSL::PBRShadowMapInfo& sm = f.ShadowMaps[0];
-        sm.WorldToLightProjSpace = *shadowDiligentPbrWorldToLightProj();
-        sm.UVScale               = float2{1.0f, 1.0f};
-        sm.UVBias                = float2{0.0f, 0.0f};
-        sm.ShadowMapSlice        = shadowDiligentPbrSlice();
-        float bias               = shadowDiligentPbrDepthBias();
-        if (const char* s = getenv("ENGINE_PBR_BIAS_SCALE")) {
-            bias *= (float)atof(s);
-        }
-        sm.Padding0 = bias;
-        sm.Padding1 = 0.0f;
-        sm.Padding2 = 0.0f;
-    }
 
     splatFrameTranspose(f);
     splatFrameStaging.anchor = float4{f32(anchorF64[0]), f32(anchorF64[1]), f32(anchorF64[2]), 0.0f};
+
+    // cbSplatFrame tail (the CSM receive data the PS picks per pixel):
+    // the distributed cascade attribs verbatim (fresh this frame —
+    // shadowDiligentUpdateFrame ran before the world pass; matrices already
+    // transposed by DistributeCascades, PackMatrixRowMajor = false) + the
+    // tier distance the PS fades the shadow contribution with.
+    const Diligent::HLSL::LightAttribs* la =
+            static_cast<const Diligent::HLSL::LightAttribs*>(shadowDiligentLightAttribs());
+    splatFrameStaging.shadowAttribs = la->ShadowAttribs;
+    if (const char* dbg = getenv("ENGINE_SPLAT_SHADOW_DEBUG")) {
+        const f32 mode = (f32)atoi(dbg);
+        static_assert(sizeof(splatFrameStaging.shadowAttribs.fDummy) == sizeof(mode),
+                      "debug-mode slot must hold a raw f32");
+        std::memcpy(&splatFrameStaging.shadowAttribs.fDummy, &mode, sizeof(mode));
+    }
+    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), 0.0f, 0.0f, 0.0f};
 }
 
 static IShader*                    splatVS = nullptr;
@@ -1143,9 +1172,9 @@ void splatPassInit(const SplatTerrain* t) {
     // pass' Sam_ComparisonLinearClamp equivalent).
     SamplerDesc sdShadow;
     sdShadow.Name           = "splat shadow comparison";
-    sdShadow.MinFilter      = FILTER_TYPE_LINEAR;
-    sdShadow.MagFilter      = FILTER_TYPE_LINEAR;
-    sdShadow.MipFilter      = FILTER_TYPE_LINEAR;
+    sdShadow.MinFilter      = FILTER_TYPE_COMPARISON_LINEAR;
+    sdShadow.MagFilter      = FILTER_TYPE_COMPARISON_LINEAR;
+    sdShadow.MipFilter      = FILTER_TYPE_COMPARISON_LINEAR;
     sdShadow.AddressU       = TEXTURE_ADDRESS_CLAMP;
     sdShadow.AddressV       = TEXTURE_ADDRESS_CLAMP;
     sdShadow.AddressW       = TEXTURE_ADDRESS_CLAMP;
@@ -1665,11 +1694,19 @@ static void splatShadowCasterInit(void) {
     psoCI.ppResourceSignatures     = &splatShadowCasterPRS;
     psoCI.ResourceSignaturesCount  = 1;
     GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
-    gp.NumRenderTargets           = 0;
+    // 1 throwaway color RT + DSV (see below — the 0-RT variant does not
+    // receive depth on this build).
+    gp.NumRenderTargets           = 1;
+    gp.RTVFormats[0]               = TEX_FORMAT_RGBA16_FLOAT;
     gp.DSVFormat                   = TEX_FORMAT_D32_FLOAT;
     gp.PrimitiveTopology           = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     gp.RasterizerDesc.FrontCounterClockwise = True;
-    gp.RasterizerDesc.CullMode     = CULL_MODE_BACK;
+    gp.RasterizerDesc.CullMode     = CULL_MODE_NONE;
+    float casterSlopeBias, casterConstBias, casterBiasClamp;
+    shadowDiligentCasterBias(casterSlopeBias, casterConstBias, casterBiasClamp);
+    gp.RasterizerDesc.SlopeScaledDepthBias = casterSlopeBias;
+    gp.RasterizerDesc.DepthBias            = casterConstBias;
+    gp.RasterizerDesc.DepthBiasClamp       = casterBiasClamp;
     gp.DepthStencilDesc.DepthEnable = True;
     gp.DepthStencilDesc.DepthWriteEnable = True;
     static const LayoutElement inputLayout[] = {
@@ -1682,28 +1719,28 @@ static void splatShadowCasterInit(void) {
     gp.InputLayout.NumElements   = 4;
     psoCI.pVS = splatShadowVS;
     psoCI.pPS = splatShadowPS;
+    // The 0-color-target + DSV depth-only PSO IS accepted by
+    // CreateGraphicsPipelineState on this Vulkan build, but its depth writes
+    // do not land — the shadow readback at the same vantage shows only a
+    // 1-px sliver for the 0-RT PSO vs the full terrain coverage for the 1-RT
+    // one (verify a depth pass by its written bytes, not its PSO acceptance;
+    // the glTF caster uses throwaway cascade-sized color RTs for this).
     device->CreateGraphicsPipelineState(psoCI, &splatShadowCasterPipeline);
     if (!splatShadowCasterPipeline) {
-        gp.NumRenderTargets           = 1;
-        gp.RTVFormats[0]               = TEX_FORMAT_RGBA16_FLOAT;
-        device->CreateGraphicsPipelineState(psoCI, &splatShadowCasterPipeline);
-        if (!splatShadowCasterPipeline) {
-            utils::warn("splatTerrain: shadow caster PSO creation failed (0-RT and dummy-RT)");
-            splatShadowCasterRelease();
-            splatShadowCasterFailed = true;
-            return;
-        }
-        splatShadowCasterUsesDummyRT = true;
+        utils::warn("splatTerrain: shadow caster PSO creation failed");
+        splatShadowCasterRelease();
+        splatShadowCasterFailed = true;
+        return;
     }
+    splatShadowCasterUsesDummyRT = true;
     splatShadowCasterReady = true;
-    utils::info("splatTerrain: shadow caster pass ready%s",
-            splatShadowCasterUsesDummyRT ? " (dummy RT fallback)" : "");
+    utils::info("splatTerrain: shadow caster pass ready");
 }
 
 static void splatShadowCasterCornerNDC(const Diligent::float4x4& m, const f32 p[3], f32 out[3]) {
-    const f32 w = m.m[3][0] * p[0] + m.m[3][1] * p[1] + m.m[3][2] * p[2] + m.m[3][3];
-    for (int i = 0; i < 3; ++i) {
-        out[i] = (m.m[i][0] * p[0] + m.m[i][1] * p[1] + m.m[i][2] * p[2] + m.m[i][3]) / w;
+    const f32 w = m.m[0][3] * p[0] + m.m[1][3] * p[1] + m.m[2][3] * p[2] + m.m[3][3];
+    for (int j = 0; j < 3; ++j) {
+        out[j] = (m.m[0][j] * p[0] + m.m[1][j] * p[1] + m.m[2][j] * p[2] + m.m[3][j]) / w;
     }
 }
 
@@ -1748,6 +1785,68 @@ void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
     const SplatTerrain* t = splatTerrainDiligent();
 
     static const bool casterNoCull = getenv("ENGINE_SHADOW_CASTER_NOCULL") != nullptr;
+    static const bool casterProbe = getenv("ENGINE_SHADOW_CASTER_PROBE") != nullptr;
+    static bool casterProjDumped = false;
+    if (casterProbe && !casterProjDumped && !t->chunks.empty()) {
+        casterProjDumped = true;
+        f32 bestD2 = FLT_MAX;
+        const SplatChunk* best = &t->chunks.front();
+        f64 probeAnchor[3];
+        diligentWorldAnchor(probeAnchor);
+        for (const SplatChunk& ch : t->chunks) {
+            const f32 dx = std::clamp((f32)probeAnchor[0], ch.aabbMin[0], ch.aabbMax[0]) - (f32)probeAnchor[0];
+            const f32 dz = std::clamp((f32)probeAnchor[2], ch.aabbMin[2], ch.aabbMax[2]) - (f32)probeAnchor[2];
+            const f32 d2 = dx * dx + dz * dz;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = &ch;
+            }
+        }
+        const f32 q[3] = {std::clamp((f32)probeAnchor[0], best->aabbMin[0], best->aabbMax[0]) - (f32)probeAnchor[0],
+                          std::clamp((f32)probeAnchor[1], best->aabbMin[1], best->aabbMax[1]) - (f32)probeAnchor[1],
+                          std::clamp((f32)probeAnchor[2], best->aabbMin[2], best->aabbMax[2]) - (f32)probeAnchor[2]};
+        f32 ndcRaw[3], ndcTr[3];
+        splatShadowCasterCornerNDC(lightViewProjRowMajor, q, ndcRaw);
+        splatShadowCasterCornerNDC(lightViewProjRowMajor.Transpose(), q, ndcTr);
+        utils::info(
+            "caster probe: cascade %d anchor (%.2f %.2f %.2f) chunk min (%.1f %.1f %.1f) max (%.1f %.1f %.1f)",
+            cascadeIndex,
+            probeAnchor[0],
+            probeAnchor[1],
+            probeAnchor[2],
+            best->aabbMin[0],
+            best->aabbMin[1],
+            best->aabbMin[2],
+            best->aabbMax[0],
+            best->aabbMax[1],
+            best->aabbMax[2]);
+        utils::info(
+            "caster probe: nearest-point NDC raw (%.4f %.4f %.4f) transposed (%.4f %.4f %.4f)",
+            ndcRaw[0],
+            ndcRaw[1],
+            ndcRaw[2],
+            ndcTr[0],
+            ndcTr[1],
+            ndcTr[2]);
+        double pf[3] = {0.0, 0.0, 0.0};
+        if (engine::playerGetFootPos(pf)) {
+            const f32 pq[3] = {(f32)pf[0] - (f32)probeAnchor[0],
+                               (f32)pf[1] - (f32)probeAnchor[1],
+                               (f32)pf[2] - (f32)probeAnchor[2]};
+            f32 pndc[3];
+            splatShadowCasterCornerNDC(lightViewProjRowMajor, pq, pndc);
+            utils::info(
+                "caster probe: player (%.2f %.2f %.2f) raw NDC (%.4f %.4f %.4f) uv (%.4f %.4f)",
+                pf[0],
+                pf[1],
+                pf[2],
+                pndc[0],
+                pndc[1],
+                pndc[2],
+                pndc[0] * 0.5f + 0.5f,
+                0.5f - pndc[1] * 0.5f);
+        }
+    }
     const u32 cascadeSize = cascadeDSV->GetTexture()->GetDesc().Width;
 
     if (splatShadowCasterUsesDummyRT) {

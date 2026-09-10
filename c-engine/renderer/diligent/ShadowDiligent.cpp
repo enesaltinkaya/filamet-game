@@ -19,6 +19,7 @@
 #include "ShadowMapManager.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -199,7 +200,7 @@ namespace engine::renderer::diligent {
             const Diligent::float4x4& proj = diligentBaseProj();
 
             static const float casterPad = [] {
-                float v = 2.8f;
+                float v = 1.0f;
                 if (const char* padEnv = getenv("ENGINE_SHADOW_CASTER_PAD")) {
                     const float parsed = (float)atof(padEnv);
                     if (parsed >= 1.0f && parsed <= 4.0f) v = parsed;
@@ -210,19 +211,59 @@ namespace engine::renderer::diligent {
             padProj._11 /= casterPad;
             padProj._22 /= casterPad;
 
+            // Third-person focus anchoring: the orbit camera sits ~11 m from the
+            // player, outside a pure camera-distance cascade 0 (~4.7 m), so the
+            // player's caster and the ground receiving its shadow both land in the
+            // coarse far cascade. Widen cascade 0 to cover the focus band (player
+            // cam-Z + margin) and log-uniformly re-partition the remaining
+            // cascades from the band to the tier distance (the next cascade's
+            // near plane follows this cascade's far by construction).
+            double ppos[3] = {0.0, 0.0, 0.0};
+            const bool hasPlayer = engine::playerGetFootPos(ppos);
+            float focusBand       = 0.0f;
+            if (hasPlayer) {
+                const float focusCamZ = view._31 * (f32)ppos[0] + view._32 * (f32)ppos[1] +
+                                        view._33 * (f32)ppos[2];
+                static const float focusMargin = [] {
+                    float v = 3.0f;
+                    if (const char* env = getenv("ENGINE_SHADOW_FOCUS_MARGIN")) {
+                        const float parsed = (float)atof(env);
+                        if (parsed >= 1.0f && parsed <= 20.0f) v = parsed;
+                    }
+                    return v;
+                }();
+                focusBand = focusCamZ + focusMargin;
+                if (focusBand > tier.distanceM * 0.5f) focusBand = tier.distanceM * 0.5f;
+                if (focusBand < 0.0f) focusBand = 0.0f;
+            }
+            int bandActive = 0;
+
             ShadowMapManager::DistributeCascadeInfo dist;
             dist.pCameraView                      = &view;
             dist.pCameraProj                      = &padProj;
-            dist.pLightDir                        = &dir;
-            dist.SnapCascades                     = true;
-            dist.StabilizeExtents                 = true;
-            dist.EqualizeExtents                  = true;
-            dist.fPartitioningFactor              = 0.95f;
-            dist.PackMatrixRowMajor               = false;
-            dist.UseRightHandedLightViewTransform = true;
-            dist.AdjustCascadeRange               = [&](int, float& minZ, float& maxZ) {
+            dist.pLightDir                         = &dir;
+            dist.SnapCascades                      = true;
+            dist.StabilizeExtents                  = true;
+            dist.EqualizeExtents                   = true;
+            dist.fPartitioningFactor               = 0.95f;
+            dist.PackMatrixRowMajor                = false;
+            dist.UseRightHandedLightViewTransform  = true;
+            dist.AdjustCascadeRange                = [&](int i, float& minZ, float& maxZ) {
                 if (minZ < engine::renderer::kCameraNear) minZ = engine::renderer::kCameraNear;
                 if (maxZ > tier.distanceM) maxZ = tier.distanceM;
+                if (i <= 0) {
+                    if (i == 0 && focusBand > maxZ && focusBand > minZ + 2.0f) {
+                        maxZ = focusBand;
+                        bandActive = 1;
+                    }
+                    return;
+                }
+                if (!bandActive) return;
+                const int rem     = (int)tier.cascades - 1;
+                const float power = (float)i / (float)rem;
+                float logZ       = focusBand * powf(tier.distanceM / focusBand, power);
+                float uniformZ   = focusBand + (tier.distanceM - focusBand) * power;
+                maxZ = dist.fPartitioningFactor * (logZ - uniformZ) + uniformZ;
             };
             mgr.DistributeCascades(dist, lightAttribs.ShadowAttribs);
 
@@ -238,8 +279,7 @@ namespace engine::renderer::diligent {
             // per-frame CPU pick: the cascade whose camera-space z range covers the
             // feet (render space, +1 m for the torso). Same untransposed matrix the
             // caster draws with (GetCascadeTransform), so receiver and caster agree.
-            double ppos[3] = {0.0, 0.0, 0.0};
-            if (engine::playerGetFootPos(ppos)) ppos[1] += 1.0;  // torso
+            if (hasPlayer) ppos[1] += 1.0;  // torso
             const Diligent::float3 pPos{(f32)ppos[0], (f32)ppos[1], (f32)ppos[2]};
             const float camZ = view._31 * pPos.x + view._32 * pPos.y + view._33 * pPos.z;
             int cascade      = 0;
@@ -254,8 +294,9 @@ namespace engine::renderer::diligent {
 
             // One-shot CPU dump of the distributed cascade math (debug).
             static bool dumped = false;
-            if (!dumped) {
+            if (!dumped && hasPlayer) {
                 dumped                      = true;
+                utils::info("shadow dbg: focus band %.2f m active %d", (double)focusBand, bandActive);
                 const Diligent::float4x4& m = sa.mWorldToLightView;
                 utils::info(
                     "shadow dbg: W2L rows [%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f "
@@ -433,6 +474,61 @@ namespace engine::renderer::diligent {
                                                        nullptr,
                                                        mapped);
                             if (mapped.pData) {
+                                // Where does the player caster land in this cascade's
+                                // light NDC? (same matrix the caster draws with)
+                                double pp[3] = {0.0, 0.0, 0.0};
+                                if (engine::playerGetFootPos(pp)) {
+                                    double an[3] = {0.0, 0.0, 0.0};
+                                    diligentWorldAnchor(an);
+                                    utils::info(
+                                        "shadow readback cascade%d player pos (%.2f, %.2f, %.2f) "
+                                        "anchor (%.2f, %.2f, %.2f) rel (%.2f, %.2f, %.2f)",
+                                        ci,
+                                        (double)pp[0],
+                                        (double)pp[1],
+                                        (double)pp[2],
+                                        (double)an[0],
+                                        (double)an[1],
+                                        (double)an[2],
+                                        (double)pp[0] - (double)an[0],
+                                        (double)pp[1] - (double)an[1],
+                                        (double)pp[2] - (double)an[2]);
+                                    const float ft[3] = {(f32)(pp[0] - an[0]),
+                                                         (f32)(pp[1] - an[1]),
+                                                         (f32)(pp[2] - an[2])};
+                                    const float hd[3] = {ft[0], ft[1] + 1.8f, ft[2]};
+                                    const Diligent::float4x4& w2lp =
+                                        mgr.GetCascadeTransform((u32)ci).WorldToLightProjSpace;
+                                    auto ndc = [&](const float* p) {
+                                        return Diligent::float3{
+                                            p[0] * w2lp._11 + p[1] * w2lp._21 + p[2] * w2lp._31 +
+                                                w2lp._41,
+                                            p[0] * w2lp._12 + p[1] * w2lp._22 + p[2] * w2lp._32 +
+                                                w2lp._42,
+                                            p[0] * w2lp._13 + p[1] * w2lp._23 + p[2] * w2lp._33 +
+                                                w2lp._43};
+                                    };
+                                    const Diligent::float3 nF = ndc(ft);
+                                    const Diligent::float3 nH = ndc(hd);
+                                    utils::info(
+                                        "shadow readback cascade%d player NDC feet (%.3f, %.3f, "
+                                        "%.3f) head (%.3f, %.3f, %.3f) inside feet %d head %d",
+                                        ci,
+                                        nF.x,
+                                        nF.y,
+                                        nF.z,
+                                        nH.x,
+                                        nH.y,
+                                        nH.z,
+                                        std::abs(nF.x) <= 1.f && std::abs(nF.y) <= 1.f &&
+                                                std::abs(nF.z) <= 1.f
+                                            ? 1
+                                            : 0,
+                                        std::abs(nH.x) <= 1.f && std::abs(nH.y) <= 1.f &&
+                                                std::abs(nH.z) <= 1.f
+                                            ? 1
+                                            : 0);
+                                }
                                 if (const char* dumpPath = getenv("ENGINE_SHADOW_DUMP")) {
                                     char pathBuf[512];
                                     snprintf(pathBuf, sizeof(pathBuf), "%s.%d", dumpPath, ci);
@@ -584,10 +680,10 @@ namespace engine::renderer::diligent {
             return v;
         }();
         static const float clampV = [] {
-            float v = 0.002f;
+            float v = 33554432.0f;
             if (const char* clampEnv = getenv("ENGINE_SHADOW_BIAS_CLAMP")) {
                 const float parsed = (float)atof(clampEnv);
-                if (parsed >= 0.0f && parsed <= 0.05f) v = parsed;
+                if (parsed >= 0.0f && parsed <= 1e10f) v = parsed;
             }
             return v;
         }();

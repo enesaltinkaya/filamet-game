@@ -176,6 +176,20 @@ namespace game {
             f32 lookAt[3] = {center[0], center[1], center[2] + 60.0f};
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
+        } else if (cameraMode && utils::strequals(cameraMode, "ground")) {
+            f32 eye[3]    = {center[0] + 12.0f, center[1] + 6.0f, center[2] + 12.0f};
+            f32 up[3]     = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(eye, center, up);
+        } else if (cameraMode && utils::strequals(cameraMode, "cast")) {
+            f32 lookAt[3] = {center[0] - 30.0f, center[1] + 0.3f, center[2] - 30.0f};
+            f32 eye[3]    = {center[0] - 36.0f, center[1] + 4.3f, center[2] - 36.0f};
+            f32 up[3]     = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
+        } else if (cameraMode && utils::strequals(cameraMode, "shadow")) {
+            f32 eye[3]    = {center[0] - 1.66f, center[1] - 0.3f, center[2] + 2.0f};
+            f32 lookAt[3] = {center[0] + 0.25f, center[1] - 1.55f, center[2] + 0.21f};
+            f32 up[3]     = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
         } else if (cameraMode && utils::strequals(cameraMode, "character")) {
             // Portrait of the player character (eve at the old spawn point):
             // ~1 character-height diagonal back, eye slightly above chest,

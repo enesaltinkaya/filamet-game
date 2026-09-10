@@ -15,12 +15,12 @@
 // cCamView is rotation-only (the camera-anchored view: the eye is the origin
 // of rendered space), cCamProj the TAA-jittered projection.
 //
-// The cbuffer is a flat mirror of HLSL::PBRFrameAttribs (the PBR pass' frame
-// struct, SplatTerrainDiligent.cpp fills it with the same getters as
-// GltfDiligent.cpp fillFrameAttribs, matrices transposed for this path) plus
-// the splat g_Anchor — the VS only reads cCamView/cCamProj/g_Anchor, the PS
-// reads the light/shadow/IBL parts. The declaration must stay field-identical
-// in both shaders.
+// The cbuffer is a flat mirror of HLSL::PBRFrameAttribs MINUS the ShadowMaps
+// block (the PS receives the CSM cascade data from the separate cbSplatShadow
+// cbuffer now) — SplatTerrainDiligent.cpp fills it with the same getters as
+// GltfDiligent.cpp fillFrameAttribs, matrices transposed for this path — plus
+// the splat g_Anchor. The declaration must stay field-identical in both
+// shaders (the C++ SplatFramePrefix is pinned to these bytes by static_assert).
 //
 // Input layout (PSO): one VBO, 48-byte stride
 //   ATTRIB0 float3 @0   world position
@@ -81,10 +81,20 @@ cbuffer cbSplatFrame
     float4   lDir;
     float4   lInt;
     float4   lSpot;
-    float4x4 sWorldToLightProj;
-    float4   sUV;
-    float4   sSlice;
     float4   g_Anchor;
+    // CSM shadow receive (PS-only; declared here so the cbuffer stays
+    // field-identical in both shaders). Mirror of Diligent::ShadowMapAttribs +
+    // f4ShadowFade — see the PS declaration + SplatFrameStaging.
+    float4x4 mWorldToLightView;
+    float4   cascadeAttribs[32];
+    float4   mWorldToShadowMapUVDepth[32];
+    float4   f4CascadeCamSpaceZEnd[2];
+    float4   f4ShadowMapDim;
+    float4   sNumCascades;
+    float4   sBiasParams;
+    float4   sVSMParams;
+    float4   sTail;
+    float4   f4ShadowFade;
 };
 
 struct VSSplatIn
@@ -103,17 +113,20 @@ struct PSSplatIn
     float4 Tangent     : TEXCOORD2;
     float2 UdimUv      : TEXCOORD3;  // 10 * TexCoord (0..10 grid space)
     float4 PrevClip    : TEXCOORD4;  // anchor-corrected prev-frame clip
+    float  ViewZ       : TEXCOORD5;  // camera view-space depth (unjittered — cCamView is rotation-only)
 };
 
 PSSplatIn main(in VSSplatIn In)
 {
     PSSplatIn Out;
     float3 p = In.Position - g_Anchor.xyz;
-    Out.Position    = mul(mul(float4(p, 1.0), cCamView), cCamProj);
+    float4 vpos = mul(float4(p, 1.0), cCamView);
+    Out.Position    = mul(vpos, cCamProj);
     Out.AnchoredPos = p;
     Out.WorldNormal = In.Normal;
     Out.Tangent     = In.Tangent;
     Out.UdimUv      = In.TexCoord * 10.0;
     Out.PrevClip    = mul(float4(p, 1.0), pCamViewProj);
+    Out.ViewZ       = vpos.z;
     return Out;
 }

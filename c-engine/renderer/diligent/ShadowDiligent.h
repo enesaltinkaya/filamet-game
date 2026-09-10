@@ -23,8 +23,8 @@ namespace engine::renderer::diligent {
 // fillFrameAttribs).
 //
 // The cascade depth draws: the shadow module calls the caster passes once
-// per cascade (the PBR glTF pass for the player character; the world's
-// shadow draws return with the splat terrain pass).
+// per cascade (the PBR glTF pass for the player character; the splat terrain
+// depth re-render for the world — splatTerrainShadowDrawDiligent).
 //
 // Mode/quality come from rendererGraphicsSettings() (shadowMode 0=off..4,
 // shadowQuality 0=low..2=high). Any change bumps the generation counter

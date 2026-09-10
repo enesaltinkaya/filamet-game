@@ -168,7 +168,6 @@ void FlyingCameraSystem::added() {
     const char automated =
             (getenv("ENGINE_SCREENSHOT") != nullptr) || (getenv("ENGINE_CAMERA") != nullptr) ||
             (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
-            (getenv("ENGINE_RENDERDOC_CAPTURE") != nullptr) ||
             (getenv("ENGINE_NO_PLAYER") != nullptr);
     cameraDbInit();
     CameraDb saved = {};

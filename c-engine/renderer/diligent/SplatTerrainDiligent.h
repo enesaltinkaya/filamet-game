@@ -108,9 +108,11 @@ const SplatTerrain* splatTerrainDiligent(void);
 
 // The frame draw (task 3 — full PBR lighting + the TAA 3-RT outputs):
 // compiles materials/splat_terrain_{vs,ps}.hlsl on first use, uploads the
-// per-frame cbuffer (a flat HLSL::PBRFrameAttribs mirror + the f64 anchor —
-// filled with the same getters as the PBR pass' fillFrameAttribs, matrices
-// transposed for the runtime-HLSL convention), culls the chunks (frustum +
+// per-frame cbuffer (cbSplatFrame = the PBRFrameAttribs mirror minus
+// ShadowMaps + the f64 anchor, filled with the same getters as the PBR
+// pass' fillFrameAttribs, matrices transposed for the runtime-HLSL
+// convention, plus the distributed ShadowMapAttribs + f4ShadowFade tier
+// distance — the PS picks the shadow cascade per pixel), culls the chunks (frustum +
 // 1-chunk camera window, FrustumCull.h) and draws them under the world pass'
 // terrain debug group. The PS shades with the PBR lighting (Cook-Torrance
 // GGX sun + CSM shadow receive + irradiance/prefiltered IBL + tangent-space

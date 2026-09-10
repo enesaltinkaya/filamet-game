@@ -1,7 +1,9 @@
 [
-  {"id": 1, "desc": "Capture a RenderDoc frame of a running game and measure where GPU time goes (rdc.py / GPU counters): terrain pass vs rest, TAA offscreen scale, drawn chunk count", "status": "pending", "result": null},
-  {"id": 2, "desc": "Inspect terrain render path code (c-engine/c-game) for obvious inefficiencies: splat shader cost, overdraw, passes, texture sizes", "status": "pending", "result": null},
-  {"id": 3, "desc": "Ablation harness: ENGINE_SPLAT_ABLATION env-gated #defines to strip chain/bands/ibl/pcf blocks and measure each block's cost", "status": "pending", "result": null},
-  {"id": 4, "desc": "Land the targeted fix for the measured top cost; verify visual parity via ENGINE_SCREENSHOT", "status": "pending", "result": null},
-  {"id": 5, "desc": "Re-capture and confirm terrain pass GPU time dropped; record before/after numbers in notes.md", "status": "pending", "result": null}
+  {"id": 1, "desc": "Quality sweep q0/q1/q2 screenshots + ENGINE_SHADOW_READBACK=100 stats per level; note sun direction/elevation", "status": "done", "result": "q0/q1/q2 zEnds logged; sun ~52deg elev; player ~11.2m from orbit cam -> in cascade 1 at every tier (quality-independent faintness)"},
+  {"id": 2, "desc": "Caster A/B depth isolation: ENGINE_SHADOW_NO_PLAYER vs normal at same frame, ENGINE_SHADOW_DUMP, diff cascade-0 PGM", "status": "done", "result": "c0 PGM diff = full clean silhouette (6907 texels); c1 diff = 1-texel sliver — caster clips out of the cascade the receiver samples"},
+  {"id": 3, "desc": "Static audit: PBR caster PSO cull mode vs right-handed light view; fFixedDepthBias scaling; PCF; f4ShadowFade; casterPad", "status": "done", "result": "cull/winding, bias, fade, pad all ruled out primary; PCF secondary blur only"},
+  {"id": 4, "desc": "Diagnose root cause of faint player shadow from tasks 1-3 (caster-side vs receiver-side)", "status": "done", "result": "RECEIVER-side coverage mismatch: player ground samples cascade 1, but player caster depth lands in cascade 0 and is clipped to a sliver in cascade 1"},
+  {"id": 5, "desc": "Fix attempt 1: per-frame CPU cascade pick for PBR player receiver + autotest gating", "status": "failed", "result": "FAIL (verifier): shadow still faint smudge at all qualities (q2 best, ~12% luminance drop in A/B); player body self-shadow fixed but ground shadow needs atlas density in the player band"},
+  {"id": 6, "desc": "Re-run quality sweep with player in frame (ENGINE_AUTO_RUN=1); verify player shadow clearly visible at all quality levels", "status": "pending", "result": null},
+  {"id": 7, "desc": "Fix attempt 2: give the player's ~11m band high-res cascade coverage — widen/shift cascade 0 toward the third-person focus (player) instead of pure camera-distance distribution, in ShadowDiligent.cpp", "status": "pending", "result": null}
 ]

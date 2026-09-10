@@ -9,6 +9,7 @@
 #include <SDL.h>
 
 #include <cmath>
+#include <cstdio>
 
 namespace engine {
 
@@ -39,6 +40,13 @@ static const float DIST_DEFAULT = 10.0f;
 static const float CAM_RADIUS = 0.5f; // obstacle-clamp sphere radius (old cameraRadius)
 
 static const char* ANIM_IDLE  = "eve_idle1";
+
+static char teleportSpawn(void) {
+    const char* t = getenv("ENGINE_TELEPORT");
+    if (!t || !t[0]) return 0;
+    f32 x, y, z;
+    return sscanf(t, "%g,%g,%g", &x, &y, &z) == 3 ? 1 : 0;
+}
 static const char* ANIM_RUN   = "eve_run1";
 static const char* ANIM_WALK  = "female_walk";
 static const char* ANIM_JUMP  = "eve_jump";
@@ -84,7 +92,6 @@ static char autoRunEnabled(void) {
 static char automatedRun(void) {
     return (getenv("ENGINE_SCREENSHOT") != nullptr) ||
            (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
-           (getenv("ENGINE_RENDERDOC_CAPTURE") != nullptr) ||
            (getenv("ENGINE_NO_PLAYER") != nullptr);
 }
 
@@ -321,9 +328,11 @@ static void playerSpawn(void) {
     PlayerDb saved = {};
     int savedSize = 0;
     if (playerDbLoad("player", &saved, &savedSize)) {
-        p.pos[0]   = saved.pos[0];
-        p.pos[1]   = saved.pos[1];
-        p.pos[2]   = saved.pos[2];
+        if (!teleportSpawn()) {
+            p.pos[0]   = saved.pos[0];
+            p.pos[1]   = saved.pos[1];
+            p.pos[2]   = saved.pos[2];
+        }
         p.faceTarget = saved.modelYaw;
         p.modelYaw   = saved.modelYaw;
         p.moveYaw   = (savedSize >= (int)sizeof(PlayerDb)) ? saved.moveYaw

@@ -274,6 +274,10 @@ namespace engine::renderer::diligent {
             factoryRef->SetMessageCallback(diligentMessageCallback);
 
             EngineVkCreateInfo engineCI;
+            // The shadow-caster PSOs set RasterizerDesc.DepthBiasClamp, which
+            // VUID-vkGraphicsPipelineCreateInfo-pDepthBiasClamp-03460 requires
+            // the core depthBiasClamp device feature for.
+            engineCI.Features.DepthBiasClamp = DEVICE_FEATURE_STATE_ENABLED;
 #ifndef NDEBUG
             engineCI.EnableValidation = true;
 #endif
