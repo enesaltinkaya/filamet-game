@@ -219,11 +219,15 @@ namespace engine::renderer::diligent {
             // cascades from the band to the tier distance (the next cascade's
             // near plane follows this cascade's far by construction).
             double ppos[3] = {0.0, 0.0, 0.0};
+            double an[3]  = {0.0, 0.0, 0.0};
             const bool hasPlayer = engine::playerGetFootPos(ppos);
-            float focusBand       = 0.0f;
+            if (hasPlayer) diligentWorldAnchor(an);
+            float focusBand = 0.0f;
             if (hasPlayer) {
-                const float focusCamZ = view._31 * (f32)ppos[0] + view._32 * (f32)ppos[1] +
-                                        view._33 * (f32)ppos[2];
+                const float rx = (f32)(ppos[0] - an[0]);
+                const float ry = (f32)(ppos[1] - an[1]);
+                const float rz = (f32)(ppos[2] - an[2]);
+                const float focusCamZ = view._31 * rx + view._32 * ry + view._33 * rz;
                 static const float focusMargin = [] {
                     float v = 3.0f;
                     if (const char* env = getenv("ENGINE_SHADOW_FOCUS_MARGIN")) {
@@ -232,9 +236,11 @@ namespace engine::renderer::diligent {
                     }
                     return v;
                 }();
-                focusBand = focusCamZ + focusMargin;
-                if (focusBand > tier.distanceM * 0.5f) focusBand = tier.distanceM * 0.5f;
-                if (focusBand < 0.0f) focusBand = 0.0f;
+                if (focusCamZ <= tier.distanceM) {
+                    focusBand = focusCamZ + focusMargin;
+                    if (focusBand > tier.distanceM * 0.8f) focusBand = tier.distanceM * 0.8f;
+                    if (focusBand < 0.0f) focusBand = 0.0f;
+                }
             }
             int bandActive = 0;
 
@@ -280,7 +286,7 @@ namespace engine::renderer::diligent {
             // feet (render space, +1 m for the torso). Same untransposed matrix the
             // caster draws with (GetCascadeTransform), so receiver and caster agree.
             if (hasPlayer) ppos[1] += 1.0;  // torso
-            const Diligent::float3 pPos{(f32)ppos[0], (f32)ppos[1], (f32)ppos[2]};
+            const Diligent::float3 pPos{(f32)(ppos[0] - an[0]), (f32)(ppos[1] - an[1]), (f32)(ppos[2] - an[2])};
             const float camZ = view._31 * pPos.x + view._32 * pPos.y + view._33 * pPos.z;
             int cascade      = 0;
             for (int c = 0; c < sa.iNumCascades; c++) {
