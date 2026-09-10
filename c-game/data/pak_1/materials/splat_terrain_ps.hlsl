@@ -125,6 +125,12 @@ Texture2D g_DetailN4;       // group 1 red normal
 Texture2D g_DetailN5;       // group 1 green normal
 Texture2D g_DetailN6;       // group 1 blue normal
 Texture2D g_DetailN7;       // group 1 alpha normal
+Texture2D g_SnowAlbedo;
+Texture2D g_SnowNormal;
+Texture2D g_SandAlbedo;
+Texture2D g_SandNormal;
+Texture2D g_CliffAlbedo;
+Texture2D g_CliffNormal;
 TextureCube g_IrradianceMap;
 TextureCube g_PrefilteredEnvMap;
 Texture2D g_PreintegratedGGX;
@@ -152,6 +158,25 @@ const float SPLAT_ROUGHNESS = 0.9;  // dielectric outdoor terrain
 #define SPLAT_DETAIL_TILE 1024.0
 #ifndef SPLAT_DETAIL_METERS
 #define SPLAT_DETAIL_METERS 7000.0
+#endif
+
+#ifndef SPLAT_SAND_LO
+#define SPLAT_SAND_LO -1.5
+#endif
+#ifndef SPLAT_SAND_HI
+#define SPLAT_SAND_HI 4.0
+#endif
+#ifndef SPLAT_CLIFF_LO
+#define SPLAT_CLIFF_LO 0.1
+#endif
+#ifndef SPLAT_CLIFF_HI
+#define SPLAT_CLIFF_HI 0.4
+#endif
+#ifndef SPLAT_SNOW_LO
+#define SPLAT_SNOW_LO 800.0
+#endif
+#ifndef SPLAT_SNOW_HI
+#define SPLAT_SNOW_HI 1100.0
 #endif
 
 float dotSat(float3 x, float3 y) { return max(dot(x, y), 0.0); }
@@ -305,6 +330,27 @@ PSOutput main(PSSplatIn In)
     float3 baseN      = g_BaseNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
     albedo = baseAlbedo + (albedo - baseAlbedo) * influence;
     nT     = baseN + (nT - baseN) * influence;
+
+    float worldY = In.AnchoredPos.y + g_Anchor.y;
+    float slope  = 1.0 - max(In.WorldNormal.y, 0.0);
+    float wSand  = smoothstep(SPLAT_SAND_LO, SPLAT_SAND_HI, worldY) *
+                   (1.0 - smoothstep(0.25 * SPLAT_SAND_HI, SPLAT_SAND_HI, worldY));
+    float wCliff = smoothstep(SPLAT_CLIFF_LO, SPLAT_CLIFF_HI, slope);
+    float wSnow  = smoothstep(SPLAT_SNOW_LO, SPLAT_SNOW_HI, worldY);
+
+    float3 sandAlbedo = g_SandAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
+    albedo = albedo + (sandAlbedo - albedo) * wSand;
+    float3 cliffAlbedo = g_CliffAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
+    albedo = albedo + (cliffAlbedo - albedo) * wCliff;
+    float3 snowAlbedo = g_SnowAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
+    albedo = albedo + (snowAlbedo - albedo) * wSnow;
+
+    float3 sandN = g_SandNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
+    nT = nT + (sandN - nT) * wSand;
+    float3 cliffN = g_CliffNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
+    nT = nT + (cliffN - nT) * wCliff;
+    float3 snowN = g_SnowNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
+    nT = nT + (snowN - nT) * wSnow;
 
     // Tangent frame (the glTF TANGENT attribute: xyz + handedness), then the
     // perturbed world normal.

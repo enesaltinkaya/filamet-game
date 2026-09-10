@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1,
+    "desc": "Audit the existing C++ band support in c-engine/renderer/diligent/SplatTerrainDiligent.cpp (band load ~L750-810, SRB bind ~L1349-1361, resource signature ~L1282-1293, SplatDetail band[3] in the .h): confirm the three sets load from images/terrain/{snow_default,sand_default,cliff_side_default} and that the bind/signature names (g_SnowAlbedo/g_SnowNormal/g_SandAlbedo/g_SandNormal/g_CliffAlbedo/g_CliffNormal) exactly match what the PS will declare. Fix any mismatch; do not restructure.",
+    "status": "done",
+    "result": "C++ side complete and consistent: band[3] loads all six ktx2 (L752-803), signature (L1282-1293) and SRB bind (L1349-1359) use the exact six names, band[0]=snow/[1]=sand/[2]=cliff; PS currently declares none of them — no fixes needed."
+  },
+  {
+    "id": 2,
+    "desc": "Edit c-game/data/pak_1/materials/splat_terrain_ps.hlsl: (a) declare the six Texture2D band samplers (g_SnowAlbedo/g_SnowNormal/g_SandAlbedo/g_SandNormal/g_CliffAlbedo/g_CliffNormal); (b) add the five #ifndef-guarded threshold #defines (SPLAT_SAND_LO/HI, SPLAT_CLIFF_LO/HI, SPLAT_SNOW_LO/HI; fixed-metre defaults per brainstorm A); (c) after the splat chain + base-detail blend, compute worldY = In.AnchoredPos.y + g_Anchor.y and slope = 1 - max(In.WorldNormal.y, 0) on the unperturbed normal, then the sand (low altitude masked near sea level), cliff (smoothstep over slope), snow (high altitude) weights, blended in order sand, cliff, snow into albedo and the tangent-space normal via the existing tiledUV/du/dv SampleGrad on all six — all blends written as c + (t - c)*w (no mix()), band normals blended before the TBN transform. Extend createSplatHlsl (SplatTerrainDiligent.cpp ~L1000-1027) to prepend these five #defines when ENGINE_SPLAT_* env vars are set, with a utils::info line, mirroring the ENGINE_SPLAT_DETAIL_METERS block. No comments in the code.",
+    "status": "done",
+    "result": "Six band Texture2Ds + five #ifndef-guarded threshold defaults added to the PS; weights (sand low-altitude beach mask, cliff slope 0.1-0.4, snow 30-60 m) blend albedo + tangent nT before TBN via SampleGrad(tiledUV,du,dv), all c+(t-c)*w; createSplatHlsl now prepends ENGINE_SPLAT_{SAND,CLIFF,SNOW}_{LO,HI} #defines with utils::info logging; compiles at runtime with no splatTerrain warnings; cliff + snow paths visually confirmed in frame-300 screenshot (defaults 30/60 too low for this ~1202 m world — tuning is task 4's job)."
+  },
+  {
+    "id": 3,
+    "desc": "Rebuild and repack: run ./scripts/build.sh (cmake build + mtime-noop blender pipeline + repacks pak_0_engine.pak and pak_1.pak next to build/c-game/c-game) and confirm the shader compiles at load (no 'splatTerrain' warnings in the startup log).",
+    "status": "done",
+    "result": "./scripts/build.sh clean (repacked pak_1.pak); runtime run logs no splatTerrain warnings and reaches 'splatTerrain: chunk grid 4x4 derived' — both shaders compiled and pass init succeeded; env threshold overrides log and take effect."
+  },
+  {
+    "id": 4,
+    "desc": "Visual verification: low-altitude view via ENGINE_CAMERA_DOLLY=\"80,-13,80\" + ENGINE_SCREENSHOT_FRAME=2960 (eye ≈ (4140,40,4140), looking back over the island) — all three bands read in one coherent shot; bake working thresholds into PS defaults; re-run ./scripts/build.sh and confirm clean no-env run. Contingent (only if fixed-metre snow misbehaved): maxLandY-relative form via g_Anchor.w.",
+    "status": "done",
+    "result": "Sand band verified (low coast rim, top-down + low-altitude shots); cliff + snow confirmed; SPLAT_SNOW_LO/HI default changed 30/60 → 800/1100 in splat_terrain_ps.hlsl (old default rendered the whole ~1202 m world white); repacked, no-env reruns clean with no splatTerrain warnings; g_Anchor.w contingent not needed."
+  }
+]

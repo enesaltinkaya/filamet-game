@@ -86,6 +86,7 @@ struct SplatGroup {
 struct SplatTerrain {
     std::vector<SplatChunk> chunks;
     std::vector<SplatGroup> groups;
+    SplatDetail band[3];
     // splatUvRange the chunker recorded ({min:[0,-9], max:[10,1]}) — the
     // original UDIM-space uv extent, kept for the shader's inverse mapping.
     f32 uvMin[2] = {0, 0};

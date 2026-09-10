@@ -749,10 +749,58 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
         groups.push_back(std::move(group));
     }
 
+    const char* bandDirs[3] = {"snow_default", "sand_default", "cliff_side_default"};
+    std::array<SplatDetail, 3> bands = {};
+    for (int b = 0; b < 3; b++) {
+        SplatDetail& band = bands[b];
+        band.name = bandDirs[b];
+        const std::string albedoPath = std::string("images/terrain/") + bandDirs[b] + "/albedo.ktx2";
+        utils::Image albedo = utils::imageLoad(albedoPath.c_str());
+        if (!albedo.isKtx || !albedo.data) {
+            utils::warn("splatTerrain: band albedo load failed: %s", albedoPath.c_str());
+            if (albedo.data) {
+                utils::imageDestory(&albedo);
+            }
+            return fail();
+        }
+        band.albedo = diligentCreateImageTexture(albedo, albedoPath.c_str(), true);
+        utils::imageDestory(&albedo);
+        if (!band.albedo) {
+            utils::warn("splatTerrain: band albedo upload failed: %s", albedoPath.c_str());
+            return fail();
+        }
+        const std::string normalPath = std::string("images/terrain/") + bandDirs[b] + "/normal.ktx2";
+        utils::Image normal = utils::imageLoad(normalPath.c_str());
+        if (!normal.isKtx || !normal.data) {
+            utils::warn("splatTerrain: band normal load failed: %s", normalPath.c_str());
+            utils::imageDestory(&normal);
+            band.albedo->Release();
+            return fail();
+        }
+        band.normal = diligentCreateImageTexture(normal, normalPath.c_str(), false);
+        utils::imageDestory(&normal);
+        if (!band.normal) {
+            utils::warn("splatTerrain: band normal upload failed: %s", normalPath.c_str());
+            band.albedo->Release();
+            return fail();
+        }
+        band.albedo = guard.trackTexture(band.albedo);
+        band.normal = guard.trackTexture(band.normal);
+        band.albedoView = band.albedo->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        band.normalView = band.normal->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        const TextureDesc& ad = band.albedo->GetDesc();
+        const TextureDesc& nd = band.normal->GetDesc();
+        utils::info("splatTerrain: band '%s' albedo %ux%u %d mips / normal %ux%u %d mips",
+                bandDirs[b], ad.Width, ad.Height, ad.MipLevels, nd.Width, nd.Height, nd.MipLevels);
+    }
+
     // Commit.
     auto* t = new SplatTerrain();
     t->chunks = std::move(chunks);
     t->groups = std::move(groups);
+    for (int b = 0; b < 3; b++) {
+        t->band[b] = bands[b];
+    }
     std::memcpy(t->uvMin, uvMin, sizeof(uvMin));
     std::memcpy(t->uvMax, uvMax, sizeof(uvMax));
     guard.buffers.clear();
@@ -968,6 +1016,25 @@ IShader* createSplatHlsl(const char* pakPath, const char* name, SHADER_TYPE type
             snprintf(def, sizeof(def), "#define SPLAT_DETAIL_METERS %.6f\n", m);
             source.insert(0, def);
             utils::info("splatTerrain: detail tiling override %.3f m/repeat", m);
+        }
+    }
+    static const char* splatBandTuning[6][2] = {
+        {"ENGINE_SPLAT_SAND_LO",   "SPLAT_SAND_LO"},
+        {"ENGINE_SPLAT_SAND_HI",    "SPLAT_SAND_HI"},
+        {"ENGINE_SPLAT_CLIFF_LO",  "SPLAT_CLIFF_LO"},
+        {"ENGINE_SPLAT_CLIFF_HI",  "SPLAT_CLIFF_HI"},
+        {"ENGINE_SPLAT_SNOW_LO",   "SPLAT_SNOW_LO"},
+        {"ENGINE_SPLAT_SNOW_HI",   "SPLAT_SNOW_HI"},
+    };
+    for (const auto& bt : splatBandTuning) {
+        if (const char* v = getenv(bt[0])) {
+            double x = atof(v);
+            if (std::isfinite(x)) {
+                char def[96];
+                snprintf(def, sizeof(def), "#define %s %.6f\n", bt[1], x);
+                source.insert(0, def);
+                utils::info("splatTerrain: band threshold override %s = %.3f", bt[0], x);
+            }
         }
     }
     ShaderCreateInfo ci;
@@ -1231,6 +1298,18 @@ void splatPassInit(const SplatTerrain* t) {
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_DetailN7", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_SnowAlbedo", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_SnowNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_SandAlbedo", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_SandNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_CliffAlbedo", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_CliffNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_PreintegratedGGX", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_IrradianceMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
@@ -1284,6 +1363,20 @@ void splatPassInit(const SplatTerrain* t) {
     for (int c = 0; c < 8; c++) {
         setView(detailNames[c], t->groups[c / 4].details[c % 4].albedoView);
         setView(normalNames[c], t->groups[c / 4].details[c % 4].normalView);
+    }
+    {
+        const char* bandAlbedoNames[3] = {"g_SnowAlbedo", "g_SandAlbedo", "g_CliffAlbedo"};
+        const char* bandNormalNames[3] = {"g_SnowNormal", "g_SandNormal", "g_CliffNormal"};
+        for (int b = 0; b < 3; b++) {
+            if (!t->band[b].albedoView || !t->band[b].normalView) {
+                utils::warn("splatTerrain: band set '%s' views missing — draw disabled", t->band[b].name.c_str());
+                splatPassRelease();
+                splatPassFailed = true;
+                return;
+            }
+            setView(bandAlbedoNames[b], t->band[b].albedoView);
+            setView(bandNormalNames[b], t->band[b].normalView);
+        }
     }
     // The preintegrated GGX LUT lives in the PBR renderer (borrowed view —
     // owned by the renderer, never released here).
@@ -1538,6 +1631,14 @@ void splatTerrainDestroyDiligent(void) {
                     d.normal->Release();
                 }
             }
+        }
+    }
+    for (const SplatDetail& band : terrain->band) {
+        if (band.albedo) {
+            band.albedo->Release();
+        }
+        if (band.normal) {
+            band.normal->Release();
         }
     }
     delete terrain;
