@@ -231,12 +231,12 @@ float3 splatNormalMix(float3 base, float4 w,
     return c;
 }
 
-float3 triplanarSample(Texture2D tex, SamplerState sampler, float3 pos, float3 w)
+float3 triplanarSample(Texture2D tex, SamplerState smp, float3 pos, float3 w)
 {
     float3 c = float3(0.0, 0.0, 0.0);
-    c = c + tex.Sample(sampler, pos.zy).rgb * w.x;
-    c = c + tex.Sample(sampler, pos.xz).rgb * w.y;
-    c = c + tex.Sample(sampler, pos.xy).rgb * w.z;
+    c = c + tex.Sample(smp, pos.zy).rgb * w.x;
+    c = c + tex.Sample(smp, pos.xz).rgb * w.y;
+    c = c + tex.Sample(smp, pos.xy).rgb * w.z;
     return c;
 }
 

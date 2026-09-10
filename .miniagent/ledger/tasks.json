@@ -1,25 +1,37 @@
 [
   {
     "id": 1,
-    "desc": "Capture a baseline screenshot of the current stretched cliff (ENGINE_SCREENSHOT headless run of the existing build) and confirm the root cause in c-game/data/pak_1/materials/splat_terrain_ps.hlsl: cliff albedo/normal sampled at world-XZ tiledUV (lines ~348/355) while wCliff comes from the slope smoothstep. Note the old-engine reference: triplanarWeights(worldNormal, 4) with CLIFF_TRIPLANAR_SCALE = 32/4096 in /home/enes/Projects/c/game-001-cpp/c-engine/data/pak_0_engine/shaders/pass/heightmap_terrain/heightmap_terrain.frag.",
+    "desc": "Study the splat terrain frame draw (chunk culling, per-frame cbuffer, vertex buffers, VS) in SplatTerrainDiligent.cpp and the glTF shadow caster (gltfDiligentShadowDraw + shadowDiligentCasterBias); record the caster contract and a depth-only caster design for the splat pass in notes.md.",
     "status": "done",
-    "result": "Baseline at /tmp/cliff_baseline.jpg; root cause confirmed (lines 348/355); headless world capture requires ENGINE_AUTOTEST=enter."
+    "result": "Caster contract and design (approach A) recorded in notes.md: reuse splat VS + chunk vbo/ibo with depth-only PSO, cCamView=transpose(W2L)/cCamProj=I/anchor, cascade-frustum culling via frustumCullFromVP, no rasterizer bias."
   },
   {
     "id": 2,
-    "desc": "Port the old engine's slope-based triplanar cliff sampling into splat_terrain_ps.hlsl: replace the cliff SampleGrad at tiledUV (both g_CliffAlbedo and g_CliffNormal) with triplanar projection of world position (AnchoredPos + g_Anchor) using weights pow(abs(normalize(In.WorldNormal)), 4.0) (normalized). CRITICAL scale: use world meters, s = 1.0/SPLAT_CLIFF_METERS with #ifndef SPLAT_CLIFF_METERS / #define 128.0 / #endif near the other #ifndef band (~lines 158-180) — do NOT port the old engine's 32/4096 pixels-constant (it is a 1/128 m⁻¹ world scale; new cliff texture is 1024px). Use plain Sample (constant-Jacobian uvs are fine with the REPEAT/aniso g_DetailSampler). Keep the normal blend in existing tangent space (nT); leave wCliff blends and sand/snow/splat lines byte-identical. Leave the sand/snow/splat chain untouched. No comments in code. Note the shader is loaded from the pak: scripts/build.sh repacks changed paks, so no separate data step is needed.",
+    "desc": "Implement splatTerrainShadowDrawDiligent(ctx, cascadeWorldToLightProj, dsv) in SplatTerrainDiligent.{h,cpp}: lazy depth-only PSO on the existing splat VS (D32, 0 color RTs, NO rasterizer bias, bind SetRenderTargets(0, nullptr, dsv, TRANSITION) first to drop the glTF caster's dummy RTs), shadow-frame staging cbuffer with per-cascade cCamView=transpose(W2L), cCamProj=identity, g_Anchor=camera anchor, cascade-frustum culling of anchored AABBs via frustumCullFromVP (no 1-chunk camera window), guarded no-op unless the same gate+load+TAA conditions as splatTerrainDrawDiligent hold.",
     "status": "pending",
     "result": null
   },
   {
     "id": 3,
-    "desc": "Rebuild and run headless (./scripts/build.sh then the game with ENGINE_HIDDEN_WINDOW=1, VK_ICD_FILENAMES=radeon icd, and ENGINE_AUTOTEST=enter so the capture lands on the world, not the main menu); confirm runtime shader compilation succeeds (no glslang errors for the cliff triplanar sample) and the scene renders.",
+    "desc": "Wire the terrain caster into renderCascadesImpl in ShadowDiligent.cpp: call it once per cascade after gltfDiligentShadowDraw, guarded by splat-pass availability (no behavior change when ENGINE_SPLAT_TERRAIN=0 or not loaded).",
     "status": "pending",
     "result": null
   },
   {
     "id": 4,
-    "desc": "Screenshot A/B: capture with the fixed build (ENGINE_AUTOTEST=enter + ENGINE_SCREENSHOT, same camera as baseline) and compare against the baseline — cliff texture no longer stretched on the hill's steep side, pattern density reasonable (adjust triplanar scale if too coarse/fine), and no regression in flat splats, sand or snow bands.",
+    "desc": "Verify/fix the terrain shadow *receive* path in PCF mode: check splatShadowsOn gating, ShadowMapIndex/slice/WorldToLightProjSpace/depth bias in the splat cbuffer, and confirm the single player-anchored cascade covers the terrain correctly.",
+    "status": "pending",
+    "result": null
+  },
+  {
+    "id": 5,
+    "desc": "Build and verify: run the verification command, check the /tmp/terrain_shadow.jpg screenshot for terrain casting (player/props onto terrain, terrain self-shadow) and receiving shadows; use ENGINE_SHADOW_READBACK=<frame> to confirm cascade depth now contains terrain, and ENGINE_PBR_BIAS_SCALE at 1/2/4 to tune acne/peter-panning on the receiver side (caster draws without rasterizer bias, so all tuning goes through the receiver bias).",
+    "status": "pending",
+    "result": null
+  },
+  {
+    "id": 6,
+    "desc": "Regression-check the non-splat path: ENGINE_SPLAT_TERRAIN=0 run (shadow pass unchanged, player still casts) and ENGINE_SHADOW_NO_PLAYER=1 run (isolates the terrain caster's contribution in screenshots).",
     "status": "pending",
     "result": null
   }

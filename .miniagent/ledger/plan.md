@@ -1,29 +1,28 @@
-# Plan: fix stretched cliff texture on steep slopes
+# Plan: terrain receives and casts shadows
 
-**Root cause (verified in code):** in `c-game/data/pak_1/materials/splat_terrain_ps.hlsl` the cliff
-band is blended via `wCliff = smoothstep(SPLAT_CLIFF_LO, SPLAT_CLIFF_HI, slope)` (line ~343) but
-`g_CliffAlbedo`/`g_CliffNormal` are sampled at the same world-XZ `tiledUV` (lines 348, 355) that the
-flat splat chain uses — a pure XZ projection. On steep slopes that projection stretches/compresses,
-hence the ugly stretched look the user sees on the hill.
+## Strategy
 
-**Reference:** the old engine's `heightmap_terrain.frag` (game-001-cpp) solved exactly this with
-"slope-based triplanar cliff": `triplanarWeights(worldNormal, sharpness=4)` and per-face 2D
-projections at `CLIFF_TRIPLANAR_SCALE = AZGAAR_CLIFF_DETAIL_TILE(32) / 4096`, blended into base
-color/normal with the same slope smoothstep. That is the behavior to port.
+The cascaded shadow pass (DiligentFX ShadowMapManager in ShadowDiligent.cpp) today
+has exactly one caster: the glTF player (`gltfDiligentShadowDraw`, called once per
+cascade from `renderCascadesImpl`). The splat terrain already *receives* PCF
+shadows (`splatShadowsOn` → `ShadowMapIndex = 0`, fed from
+`shadowDiligentPbrWorldToLightProj/Slice/DepthBias` in SplatTerrainDiligent.cpp),
+so the main gap is the caster side. Plan: (1) study the splat frame draw
+(chunk culling, per-frame cbuffer, VS) and the glTF caster to mirror its
+contract; (2) add a depth-only terrain caster
+`splatTerrainShadowDrawDiligent(ctx, cascadeWorldToLightProj, dsv)` with a
+depth-only PSO using `shadowDiligentCasterBias` and per-cascade frustum
+culling of chunks; (3) wire it into `shadowDiligentRenderCascades` after the
+glTF draw; (4) verify the receive path actually works on the terrain in PCF
+mode (single cascade anchored to the player — check slice/bias/fade and extend
+if the receive quality is wrong for terrain); (5) verify with screenshots and
+the `ENGINE_SHADOW_READBACK=frameN` one-shot depth readback (logs per-cascade
+geometry bbox / "NO geometry depth"), tuning bias for acne/peter-panning.
 
-**Approach:**
-1. In `splat_terrain_ps.hlsl`, replace the cliff `SampleGrad(g_DetailSampler, tiledUV, du, dv)`
-   (albedo + normal) with a triplanar sample of `g_CliffAlbedo`/`g_CliffNormal`: three world-axis
-   2D projections of the world position (`In.AnchoredPos + g_Anchor`), weighted by the squared
-   absolute world normal components with a sharpness exponent (~4, as in the old shader), using the
-   old engine's cliff scale so pattern density matches the reference. Keep the existing `wCliff`
-   smoothstep blend into albedo and nT; leave the sand/snow and splat chain untouched. Use explicit
-   sampler-grad sampling where the sampler state requires it (g_DetailSampler is REPEAT/aniso).
-2. No C++/resource changes expected — textures and sampler bindings already exist
-   (`g_CliffAlbedo`/`g_CliffNormal` declared and bound in SplatTerrainDiligent.cpp ~1309).
-3. No comments in the code (AGENTS.md). The .hlsl lives in c-game/data/pak_1 — `scripts/build.sh`
-   repacks changed paks via its data.sh step, so one build run picks up the shader edit.
-4. Visual A/B via `ENGINE_SCREENSHOT` headless runs; check the cliff texture is unstretched and no
-   other terrain bands regressed.
+Approach notes: no comments in code; reuse the existing splat VS/vertex
+buffers — only a new depth-only PSO (no PS or a trivial discard PS, matching
+the glTF caster style); cull chunks against the cascade box the same way
+world draw culls against the camera; guard the call so the shadow pass is
+unaffected when the splat pass is not loaded (ENGINE_SPLAT_TERRAIN=0).
 
-Verification: export ENGINE_HIDDEN_WINDOW=1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json && ./scripts/build.sh && timeout 90 env ENGINE_SCREENSHOT=/tmp/cliff_fix.jpg ./build/c-game/c-game; test -s /tmp/cliff_fix.jpg
+Verification: scripts/build.sh && ENGINE_HIDDEN_WINDOW=1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json ENGINE_AUTOTEST=enter ENGINE_SCREENSHOT=/tmp/terrain_shadow.jpg build/c-game/c-game
