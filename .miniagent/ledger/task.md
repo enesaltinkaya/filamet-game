@@ -1,2 +1,4 @@
-when rendering terrain;
-we should use default clif texture for steep slopes, snow texture for hight places and sand texture for low places.
+player character is standing in front of a small hill.
+its using default cliff texture, because of steep slope logic.
+but it is strecthing, looking ugly.
+can you fix that?

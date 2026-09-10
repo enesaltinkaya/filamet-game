@@ -1,32 +1,29 @@
-# Plan: band textures on terrain (cliff / snow / sand)
+# Plan: fix stretched cliff texture on steep slopes
 
-Task: while rendering terrain, use the cliff texture on steep slopes, snow on high places, sand on low places.
+**Root cause (verified in code):** in `c-game/data/pak_1/materials/splat_terrain_ps.hlsl` the cliff
+band is blended via `wCliff = smoothstep(SPLAT_CLIFF_LO, SPLAT_CLIFF_HI, slope)` (line ~343) but
+`g_CliffAlbedo`/`g_CliffNormal` are sampled at the same world-XZ `tiledUV` (lines 348, 355) that the
+flat splat chain uses — a pure XZ projection. On steep slopes that projection stretches/compresses,
+hence the ugly stretched look the user sees on the hill.
 
-Current state (from the aborted 2026-09-10 session): the C++ side is already done —
-`c-engine/renderer/diligent/SplatTerrainDiligent.cpp` (~L750–810) loads the three band
-detail sets (`images/terrain/snow_default|sand_default|cliff_side_default/{albedo,normal}.ktx2`,
-in pak_0_engine) into `t->band[3]` and (~L1349–1361) binds them as
-`g_SnowAlbedo/g_SnowNormal/g_SandAlbedo/g_SandNormal/g_CliffAlbedo/g_CliffNormal` in the
-splat SRB; the resource signature (~L1282–1293) already lists all six. What is missing is
-entirely in the pixel shader: `c-game/data/pak_1/materials/splat_terrain_ps.hlsl` does not
-declare or sample those six textures.
+**Reference:** the old engine's `heightmap_terrain.frag` (game-001-cpp) solved exactly this with
+"slope-based triplanar cliff": `triplanarWeights(worldNormal, sharpness=4)` and per-face 2D
+projections at `CLIFF_TRIPLANAR_SCALE = AZGAAR_CLIFF_DETAIL_TILE(32) / 4096`, blended into base
+color/normal with the same slope smoothstep. That is the behavior to port.
 
-Approach: in the PS, declare the six `Texture2D`s, then after the existing splat chain +
-base-detail blend, compute three band weights and blend them into albedo and tangent
-normal, in the old-engine order sand → cliff → snow (old-engine parity:
-`game-001-cpp .../heightmap_terrain.frag` — sand: low land near sea level 0 m with
-`landMask = smoothstep(0.0, 0.2, worldY)`; cliff: `slope = 1 - max(worldNormal.y, 0)`,
-`smoothstep(0.1, 0.4, slope)`; snow: altitude band — smoothstep over normalized world
-height, e.g. ~0.55–0.85 of max land height). World height is `In.AnchoredPos.y +
-g_Anchor.y`; use the UNperturbed `In.WorldNormal` for slope. Sample band textures with the
-same world-tiled `tiledUV` and the SAME explicit `SampleGrad` (ddx/ddy already computed) —
-implicit LOD is known-broken at this uv magnitude (see PS header comments). This HLSL
-build cannot resolve `mix(float3, float3, float)` — write blends as `c + (t - c) * w`.
-Thresholds as `#ifndef`-guarded `#define`s so they can be tuned without a repak. Note the
-PS lives in the repo at c-game/data/pak_1/materials and must be repacked into
-build/c-game/data/pak_1.pak via scripts/build.sh. No new comments in the code (AGENTS.md).
-If the main-menu frame has no terrain in view, pick `ENGINE_SCREENSHOT_FRAME` where the
-world is visible (the terrain draws in the `terrain` pass — a RenderDoc dump of that pass
-is the fallback visual check).
+**Approach:**
+1. In `splat_terrain_ps.hlsl`, replace the cliff `SampleGrad(g_DetailSampler, tiledUV, du, dv)`
+   (albedo + normal) with a triplanar sample of `g_CliffAlbedo`/`g_CliffNormal`: three world-axis
+   2D projections of the world position (`In.AnchoredPos + g_Anchor`), weighted by the squared
+   absolute world normal components with a sharpness exponent (~4, as in the old shader), using the
+   old engine's cliff scale so pattern density matches the reference. Keep the existing `wCliff`
+   smoothstep blend into albedo and nT; leave the sand/snow and splat chain untouched. Use explicit
+   sampler-grad sampling where the sampler state requires it (g_DetailSampler is REPEAT/aniso).
+2. No C++/resource changes expected — textures and sampler bindings already exist
+   (`g_CliffAlbedo`/`g_CliffNormal` declared and bound in SplatTerrainDiligent.cpp ~1309).
+3. No comments in the code (AGENTS.md). The .hlsl lives in c-game/data/pak_1 — `scripts/build.sh`
+   repacks changed paks via its data.sh step, so one build run picks up the shader edit.
+4. Visual A/B via `ENGINE_SCREENSHOT` headless runs; check the cliff texture is unstretched and no
+   other terrain bands regressed.
 
-Verification: ./scripts/build.sh && ENGINE_HIDDEN_WINDOW=1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json TERM=xterm ENGINE_SCREENSHOT=/tmp/splat_bands.jpg ENGINE_SCREENSHOT_FRAME=300 ENGINE_LOG_TIMEOUT=120 ./build/c-game/c-game
+Verification: export ENGINE_HIDDEN_WINDOW=1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json && ./scripts/build.sh && timeout 90 env ENGINE_SCREENSHOT=/tmp/cliff_fix.jpg ./build/c-game/c-game; test -s /tmp/cliff_fix.jpg

@@ -1,0 +1,7 @@
+[
+  {"id": 1, "desc": "Capture a RenderDoc frame of a running game and measure where GPU time goes (rdc.py / GPU counters): terrain pass vs rest, TAA offscreen scale, drawn chunk count", "status": "pending", "result": null},
+  {"id": 2, "desc": "Inspect terrain render path code (c-engine/c-game) for obvious inefficiencies: splat shader cost, overdraw, passes, texture sizes", "status": "pending", "result": null},
+  {"id": 3, "desc": "Ablation harness: ENGINE_SPLAT_ABLATION env-gated #defines to strip chain/bands/ibl/pcf blocks and measure each block's cost", "status": "pending", "result": null},
+  {"id": 4, "desc": "Land the targeted fix for the measured top cost; verify visual parity via ENGINE_SCREENSHOT", "status": "pending", "result": null},
+  {"id": 5, "desc": "Re-capture and confirm terrain pass GPU time dropped; record before/after numbers in notes.md", "status": "pending", "result": null}
+]

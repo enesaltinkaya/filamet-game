@@ -172,6 +172,9 @@ const float SPLAT_ROUGHNESS = 0.9;  // dielectric outdoor terrain
 #ifndef SPLAT_CLIFF_HI
 #define SPLAT_CLIFF_HI 0.4
 #endif
+#ifndef SPLAT_CLIFF_METERS
+#define SPLAT_CLIFF_METERS 128.0
+#endif
 #ifndef SPLAT_SNOW_LO
 #define SPLAT_SNOW_LO 800.0
 #endif
@@ -225,6 +228,15 @@ float3 splatNormalMix(float3 base, float4 w,
     c = c + (green.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * w.g;
     c = c + (blue.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * w.b;
     c = c + (alpha.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * (1.0 - w.a);
+    return c;
+}
+
+float3 triplanarSample(Texture2D tex, SamplerState sampler, float3 pos, float3 w)
+{
+    float3 c = float3(0.0, 0.0, 0.0);
+    c = c + tex.Sample(sampler, pos.zy).rgb * w.x;
+    c = c + tex.Sample(sampler, pos.xz).rgb * w.y;
+    c = c + tex.Sample(sampler, pos.xy).rgb * w.z;
     return c;
 }
 
@@ -309,16 +321,7 @@ PSOutput main(PSSplatIn In)
     float2 dv = ddy(tiledUV);
 
     float4 wBase = g_Weights1.Sample(g_Sampler, float3(local, layer));
-    float3 albedo = splatAlbedoMix(float3(0.0, 0.0, 0.0), wBase,
-            g_Detail4, g_Detail5, g_Detail6, g_Detail7, g_DetailSampler, tiledUV, du, dv);
     float4 wTop = g_Weights0.Sample(g_Sampler, float3(local, layer));
-    albedo = splatAlbedoMix(albedo, wTop, g_Detail0, g_Detail1, g_Detail2, g_Detail3,
-            g_DetailSampler, tiledUV, du, dv);
-
-    float3 nT = splatNormalMix(float3(0.0, 0.0, 1.0), wBase,
-            g_DetailN4, g_DetailN5, g_DetailN6, g_DetailN7, g_DetailSampler, tiledUV, du, dv);
-    nT = splatNormalMix(nT, wTop, g_DetailN0, g_DetailN1, g_DetailN2, g_DetailN3,
-            g_DetailSampler, tiledUV, du, dv);
 
     // Base material under the splat chain (terrain.frag parity): the paint is
     // blended over the base detail set at the same tiled uv + explicit grads,
@@ -328,8 +331,22 @@ PSOutput main(PSSplatIn In)
     float  influence = clamp(wSum * 2.0, 0.0, 1.0);
     float3 baseAlbedo = g_BaseAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
     float3 baseN      = g_BaseNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
-    albedo = baseAlbedo + (albedo - baseAlbedo) * influence;
-    nT     = baseN + (nT - baseN) * influence;
+
+    float3 albedo = baseAlbedo;
+    float3 nT     = baseN;
+    if (influence > 0.0)
+    {
+        float3 splatAlbedo = splatAlbedoMix(float3(0.0, 0.0, 0.0), wBase,
+                g_Detail4, g_Detail5, g_Detail6, g_Detail7, g_DetailSampler, tiledUV, du, dv);
+        splatAlbedo = splatAlbedoMix(splatAlbedo, wTop, g_Detail0, g_Detail1, g_Detail2, g_Detail3,
+                g_DetailSampler, tiledUV, du, dv);
+        float3 splatN = splatNormalMix(float3(0.0, 0.0, 1.0), wBase,
+                g_DetailN4, g_DetailN5, g_DetailN6, g_DetailN7, g_DetailSampler, tiledUV, du, dv);
+        splatN = splatNormalMix(splatN, wTop, g_DetailN0, g_DetailN1, g_DetailN2, g_DetailN3,
+                g_DetailSampler, tiledUV, du, dv);
+        albedo = baseAlbedo + (splatAlbedo - baseAlbedo) * influence;
+        nT     = baseN + (splatN - baseN) * influence;
+    }
 
     float worldY = In.AnchoredPos.y + g_Anchor.y;
     float slope  = 1.0 - max(In.WorldNormal.y, 0.0);
@@ -340,14 +357,17 @@ PSOutput main(PSSplatIn In)
 
     float3 sandAlbedo = g_SandAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
     albedo = albedo + (sandAlbedo - albedo) * wSand;
-    float3 cliffAlbedo = g_CliffAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
+    float3 wTri   = pow(abs(normalize(In.WorldNormal)), 4.0);
+    wTri         = wTri / (wTri.x + wTri.y + wTri.z + 1e-6);
+    float3 cliffUV = (In.AnchoredPos + g_Anchor) * (1.0 / SPLAT_CLIFF_METERS);
+    float3 cliffAlbedo = triplanarSample(g_CliffAlbedo, g_DetailSampler, cliffUV, wTri);
     albedo = albedo + (cliffAlbedo - albedo) * wCliff;
     float3 snowAlbedo = g_SnowAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
     albedo = albedo + (snowAlbedo - albedo) * wSnow;
 
     float3 sandN = g_SandNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
     nT = nT + (sandN - nT) * wSand;
-    float3 cliffN = g_CliffNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
+    float3 cliffN = triplanarSample(g_CliffNormal, g_DetailSampler, cliffUV, wTri) * 2.0 - 1.0;
     nT = nT + (cliffN - nT) * wCliff;
     float3 snowN = g_SnowNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
     nT = nT + (snowN - nT) * wSnow;
