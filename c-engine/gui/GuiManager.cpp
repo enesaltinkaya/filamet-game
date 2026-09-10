@@ -151,8 +151,7 @@ void guiInit(void) {
     // Thin, wght 100-900). Dear ImGui cannot pick a weight from a VF, so the
     // menu/body weights ship as static instances montserratLight.ttf (300)
     // and montserratBlack.ttf (900), instanced from that same VF with
-    // fontTools (scripts and provenance in plans/azgaar-terrain.md phase-7
-    // cleanup). If a static instance is ever missing, loadPakFont falls back
+    // fontTools. If a static instance is ever missing, loadPakFont falls back
     // to ImGui's default font (deliberate: cosmetic, must not crash).
     // Rasterized 3x then drawn scaled back down: FontScaleMain
     // (= window.height/720, window defaults to 75% of the display) magnifies

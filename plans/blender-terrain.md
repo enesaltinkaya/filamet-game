@@ -82,7 +82,13 @@ joltInit has run) and restores all 16 static MESH shapes via
 `joltCreateBodyFromShapeBlob` (identity body transforms — the chunk vertices
 are in absolute coordinates; `JOLT_TERRAIN_USER_DATA` sentinel). The player
 capsule stands/walks on the terrain from this.
-Still pending: terrain in the CSM shadow pass (casters), self-shadowing.
+Terrain CSM shadows done 2026-09-10: the terrain is a CSM shadow caster
+(`splatTerrainShadowDrawDiligent`, depth-only 0-RT D32 pass writing the atlas,
+anchor-space 8-corner cull) AND receives the atlas in its own pass (the splat
+world PS samples `g_ShadowMap` — the same SRV the caster writes — 3x3 PCF
+with the receiver-side `sSlice.y` depth bias; caster stays rasterizer-bias-free).
+Self-shadowing is therefore live; verification evidence in
+`.miniagent/ledger/notes.md` round 4.
 
 ## Phase 4 — World switch (azgaar removal done 2026-09-10, terrain world wired 2026-09-11)
 

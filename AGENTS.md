@@ -5,6 +5,7 @@ Do not use git.
 Always use export ENGINE_HIDDEN_WINDOW=1 env variable.
 Always use export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json env variable.
 Use export ENGINE_AUTOTEST=enter env variable if not working on main menu.
+Game loads in 2 seconds, you dont have to define large timeouts.
 
 ### File locations
 

@@ -4,6 +4,8 @@
 
 #include "Defines.h"
 
+#include "Common/interface/BasicMath.hpp"
+
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -118,5 +120,27 @@ const SplatTerrain* splatTerrainDiligent(void);
 // render), false when it should not (gate off / not loaded / pass init
 // failed / the TAA offscreen chain is unavailable).
 bool splatTerrainDrawDiligent(Diligent::IDeviceContext* ctx);
+
+// The CSM shadow caster (the terrain's half of the cascade atlas, plans/
+// blender-terrain.md "terrain in the CSM shadow pass"): the shared gate —
+// true when the caster must draw with this frame's world splat pass (the
+// world pass' preconditions, SplatTerrainDiligent.cpp: ENGINE_SPLAT_TERRAIN
+// not "0" + terrain loaded + the TAA offscreen chain up, plus the PCF-mode
+// shadow receive splatShadowsOn — the VSM/EVSM atlas stores variance, not
+// depth, so a caster into it would be pure noise).
+bool splatTerrainShadowDrawsDiligent(void);
+// The depth-only re-render of the loaded chunks into one cascade's DSV
+// (mirrors gltfDiligentShadowDraw): lazily compiles
+// materials/splat_terrain_shadow_{vs,ps}.hlsl and builds the 0-RT D32_FLOAT
+// PSO (a cascade-sized dummy RT fallback if the 0-RT desc is rejected),
+// uploads cbSplatShadowCaster (cLightViewProj = lightViewProjRowMajor
+// TRANSPOSED once — the raw manager matrix is column-major PBR packing, the
+// splat runtime-HLSL is row-vector math per splatFrameTranspose; g_Anchor =
+// this frame's diligentWorldAnchor() as fresh f32), and draws every loaded
+// chunk. No rasterizer depth bias (the receiver subtracts its own).
+void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
+                                   const Diligent::float4x4& lightViewProjRowMajor,
+                                   Diligent::ITextureView* cascadeDSV,
+                                   int cascadeIndex);
 
 }

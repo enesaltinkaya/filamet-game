@@ -4,6 +4,7 @@
 #include "renderer/RenderBackend.h"
 #include "renderer/Renderer.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/SplatTerrainDiligent.h"
 #include "ecs/system/player/Player.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
@@ -14,6 +15,7 @@
 #include "Graphics/GraphicsEngine/interface/TextureView.h"
 #include "Graphics/GraphicsTools/interface/GraphicsUtilities.h"
 #include "Graphics/GraphicsTools/interface/MapHelper.hpp"
+#include "Graphics/GraphicsTools/interface/ScopedDebugGroup.hpp"
 #include "ShadowMapManager.hpp"
 
 #include <algorithm>
@@ -360,6 +362,13 @@ namespace engine::renderer::diligent {
                     gltfDiligentShadowDraw(ctx,
                                            mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace,
                                            dsv);
+                if (splatTerrainShadowDrawsDiligent()) {
+                    Diligent::ScopedDebugGroup terrainGroup(ctx, "terrain");
+                    splatTerrainShadowDrawDiligent(ctx,
+                                                  mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace,
+                                                  dsv,
+                                                  i);
+                }
             }
 
             if (curMode != 1 /* PCF */) {

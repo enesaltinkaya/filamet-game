@@ -1569,6 +1569,266 @@ bool splatTerrainDrawDiligent(Diligent::IDeviceContext* ctx) {
     return true;
 }
 
+struct SplatShadowCasterStaging {
+    Diligent::float4x4 cLightViewProj;
+    Diligent::float4 g_Anchor;
+};
+static_assert(sizeof(SplatShadowCasterStaging) == 80, "splat shadow caster cbuffer layout");
+
+static IShader*                    splatShadowVS = nullptr;
+static IShader*                    splatShadowPS = nullptr;
+static IPipelineState*             splatShadowCasterPipeline = nullptr;
+static IPipelineResourceSignature* splatShadowCasterPRS = nullptr;
+static IShaderResourceBinding*     splatShadowCasterSrb = nullptr;
+static IBuffer*                    splatShadowCasterCB = nullptr;
+static ITexture*                   splatShadowCasterDummyRT = nullptr;
+static ITextureView*               splatShadowCasterDummyRTV = nullptr;
+static u32                          splatShadowCasterDummySize = 0;
+static bool                        splatShadowCasterUsesDummyRT = false;
+static bool                        splatShadowCasterReady = false;
+static bool                        splatShadowCasterFailed = false;
+static u64                         splatShadowCasterFrameNo = 0;
+
+bool splatTerrainShadowDrawsDiligent(void) {
+    const char* gate = getenv("ENGINE_SPLAT_TERRAIN");
+    if (gate && gate[0] == '0') {
+        return false;
+    }
+    const SplatTerrain* t = splatTerrainDiligent();
+    return t && !t->chunks.empty() && taaColorRTV() != nullptr && splatShadowsOn();
+}
+
+static void splatShadowCasterRelease(void) {
+    if (splatShadowCasterSrb) { splatShadowCasterSrb->Release(); splatShadowCasterSrb = nullptr; }
+    if (splatShadowCasterPRS) { splatShadowCasterPRS->Release(); splatShadowCasterPRS = nullptr; }
+    if (splatShadowCasterPipeline) { splatShadowCasterPipeline->Release(); splatShadowCasterPipeline = nullptr; }
+    if (splatShadowVS) { splatShadowVS->Release(); splatShadowVS = nullptr; }
+    if (splatShadowPS) { splatShadowPS->Release(); splatShadowPS = nullptr; }
+    if (splatShadowCasterCB) { splatShadowCasterCB->Release(); splatShadowCasterCB = nullptr; }
+    if (splatShadowCasterDummyRT) { splatShadowCasterDummyRT->Release(); splatShadowCasterDummyRT = nullptr; }
+    splatShadowCasterDummyRTV = nullptr;
+    splatShadowCasterDummySize = 0;
+    splatShadowCasterUsesDummyRT = false;
+    splatShadowCasterReady = false;
+    splatShadowCasterFailed = false;
+    splatShadowCasterFrameNo = 0;
+}
+
+static void splatShadowCasterInit(void) {
+    if (splatShadowCasterReady || splatShadowCasterFailed || !device || !context) {
+        return;
+    }
+    splatShadowVS = createSplatHlsl("materials/splat_terrain_shadow_vs.hlsl", "splatTerrainShadowVS", SHADER_TYPE_VERTEX);
+    splatShadowPS = createSplatHlsl("materials/splat_terrain_shadow_ps.hlsl", "splatTerrainShadowPS", SHADER_TYPE_PIXEL);
+    if (!splatShadowVS || !splatShadowPS) {
+        splatShadowCasterRelease();
+        splatShadowCasterFailed = true;
+        return;
+    }
+
+    CreateUniformBuffer(device, sizeof(SplatShadowCasterStaging), "splat shadow caster cb", &splatShadowCasterCB);
+    if (!splatShadowCasterCB) {
+        splatShadowCasterRelease();
+        splatShadowCasterFailed = true;
+        return;
+    }
+
+    PipelineResourceDesc resources[] = {
+            {SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cbSplatShadowCaster", 1,
+                    SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+    };
+    PipelineResourceSignatureDesc prsDesc;
+    prsDesc.Resources      = resources;
+    prsDesc.NumResources   = 1;
+    prsDesc.BindingIndex   = 0;
+    device->CreatePipelineResourceSignature(prsDesc, &splatShadowCasterPRS);
+    if (!splatShadowCasterPRS) {
+        splatShadowCasterRelease();
+        splatShadowCasterFailed = true;
+        return;
+    }
+    if (IShaderResourceVariable* v = splatShadowCasterPRS->GetStaticVariableByName(SHADER_TYPE_VERTEX, "cbSplatShadowCaster")) {
+        v->Set(splatShadowCasterCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    }
+    RefCntAutoPtr<IShaderResourceBinding> b;
+    splatShadowCasterPRS->CreateShaderResourceBinding(&b, true);
+    if (!b) {
+        splatShadowCasterRelease();
+        splatShadowCasterFailed = true;
+        return;
+    }
+    b->AddRef();
+    splatShadowCasterSrb = b;
+
+    GraphicsPipelineStateCreateInfo psoCI;
+    psoCI.PSODesc.Name             = "splatTerrainShadowCaster";
+    psoCI.ppResourceSignatures     = &splatShadowCasterPRS;
+    psoCI.ResourceSignaturesCount  = 1;
+    GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
+    gp.NumRenderTargets           = 0;
+    gp.DSVFormat                   = TEX_FORMAT_D32_FLOAT;
+    gp.PrimitiveTopology           = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    gp.RasterizerDesc.FrontCounterClockwise = True;
+    gp.RasterizerDesc.CullMode     = CULL_MODE_BACK;
+    gp.DepthStencilDesc.DepthEnable = True;
+    gp.DepthStencilDesc.DepthWriteEnable = True;
+    static const LayoutElement inputLayout[] = {
+            {"ATTRIB", 0, 0, 3, VT_FLOAT32, False, 0u, 48u},
+            {"ATTRIB", 1, 0, 3, VT_FLOAT32, False, 12u, 48u},
+            {"ATTRIB", 2, 0, 4, VT_FLOAT32, False, 24u, 48u},
+            {"ATTRIB", 3, 0, 2, VT_FLOAT32, False, 40u, 48u},
+    };
+    gp.InputLayout.LayoutElements = inputLayout;
+    gp.InputLayout.NumElements   = 4;
+    psoCI.pVS = splatShadowVS;
+    psoCI.pPS = splatShadowPS;
+    device->CreateGraphicsPipelineState(psoCI, &splatShadowCasterPipeline);
+    if (!splatShadowCasterPipeline) {
+        gp.NumRenderTargets           = 1;
+        gp.RTVFormats[0]               = TEX_FORMAT_RGBA16_FLOAT;
+        device->CreateGraphicsPipelineState(psoCI, &splatShadowCasterPipeline);
+        if (!splatShadowCasterPipeline) {
+            utils::warn("splatTerrain: shadow caster PSO creation failed (0-RT and dummy-RT)");
+            splatShadowCasterRelease();
+            splatShadowCasterFailed = true;
+            return;
+        }
+        splatShadowCasterUsesDummyRT = true;
+    }
+    splatShadowCasterReady = true;
+    utils::info("splatTerrain: shadow caster pass ready%s",
+            splatShadowCasterUsesDummyRT ? " (dummy RT fallback)" : "");
+}
+
+static void splatShadowCasterCornerNDC(const Diligent::float4x4& m, const f32 p[3], f32 out[3]) {
+    const f32 w = m.m[3][0] * p[0] + m.m[3][1] * p[1] + m.m[3][2] * p[2] + m.m[3][3];
+    for (int i = 0; i < 3; ++i) {
+        out[i] = (m.m[i][0] * p[0] + m.m[i][1] * p[1] + m.m[i][2] * p[2] + m.m[i][3]) / w;
+    }
+}
+
+static bool splatShadowCasterChunkVisible(const Diligent::float4x4& lightViewProjRowMajor,
+        const f32 aabbMin[3], const f32 aabbMax[3], const f32 anchor[3],
+        f32 ndcMinZ, f32 margin) {
+    f32 minx = FLT_MAX, maxx = -FLT_MAX;
+    f32 miny = FLT_MAX, maxy = -FLT_MAX;
+    f32 minz = FLT_MAX, maxz = -FLT_MAX;
+    for (int i = 0; i < 8; ++i) {
+        const f32 p[3] = {(i & 1) ? aabbMax[0] : aabbMin[0],
+                          (i & 2) ? aabbMax[1] : aabbMin[1],
+                          (i & 4) ? aabbMax[2] : aabbMin[2]};
+        const f32 q[3] = {p[0] - anchor[0], p[1] - anchor[1], p[2] - anchor[2]};
+        f32 c[3];
+        splatShadowCasterCornerNDC(lightViewProjRowMajor, q, c);
+        minx = std::min(minx, c[0]);
+        maxx = std::max(maxx, c[0]);
+        miny = std::min(miny, c[1]);
+        maxy = std::max(maxy, c[1]);
+        minz = std::min(minz, c[2]);
+        maxz = std::max(maxz, c[2]);
+    }
+    return minx < 1.0f + margin && maxx > -1.0f - margin &&
+           miny < 1.0f + margin && maxy > -1.0f - margin &&
+           minz < 1.0f + margin && maxz > ndcMinZ - margin;
+}
+
+void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
+                                    const Diligent::float4x4& lightViewProjRowMajor,
+                                    Diligent::ITextureView* cascadeDSV,
+                                    int cascadeIndex) {
+    if (!splatTerrainShadowDrawsDiligent()) {
+        return;
+    }
+    if (!splatShadowCasterReady && !splatShadowCasterFailed) {
+        splatShadowCasterInit();
+    }
+    if (!splatShadowCasterReady) {
+        return;
+    }
+    const SplatTerrain* t = splatTerrainDiligent();
+
+    static const bool casterNoCull = getenv("ENGINE_SHADOW_CASTER_NOCULL") != nullptr;
+    const u32 cascadeSize = cascadeDSV->GetTexture()->GetDesc().Width;
+
+    if (splatShadowCasterUsesDummyRT) {
+        if (splatShadowCasterDummySize != cascadeSize) {
+            if (splatShadowCasterDummyRT) {
+                splatShadowCasterDummyRT->Release();
+                splatShadowCasterDummyRT = nullptr;
+            }
+            splatShadowCasterDummyRTV = nullptr;
+            TextureDesc desc;
+            desc.Type      = RESOURCE_DIM_TEX_2D;
+            desc.Width     = cascadeSize;
+            desc.Height    = cascadeSize;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.BindFlags = BIND_RENDER_TARGET;
+            desc.Format    = TEX_FORMAT_RGBA16_FLOAT;
+            desc.Name      = "splat shadow caster dummy RT";
+            device->CreateTexture(desc, nullptr, &splatShadowCasterDummyRT);
+            if (splatShadowCasterDummyRT) {
+                splatShadowCasterDummyRTV = splatShadowCasterDummyRT->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+            }
+            splatShadowCasterDummySize = cascadeSize;
+        }
+        if (!splatShadowCasterDummyRTV) {
+            return;
+        }
+        ITextureView* rtv = splatShadowCasterDummyRTV;
+        ctx->SetRenderTargets(1, &rtv, cascadeDSV, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    } else {
+        ctx->SetRenderTargets(0, nullptr, cascadeDSV, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    SplatShadowCasterStaging staging;
+    staging.cLightViewProj = lightViewProjRowMajor.Transpose();
+    f64 anchorF64[3];
+    diligentWorldAnchor(anchorF64);
+    staging.g_Anchor = float4{f32(anchorF64[0]), f32(anchorF64[1]), f32(anchorF64[2]), 0.0f};
+    {
+        void* dst = nullptr;
+        ctx->MapBuffer(splatShadowCasterCB, MAP_WRITE, MAP_FLAG_DISCARD, dst);
+        std::memcpy(dst, &staging, sizeof(staging));
+        ctx->UnmapBuffer(splatShadowCasterCB, MAP_WRITE);
+    }
+
+    f32 ndcMinZ = 0.0f;
+    f32 margin  = 0.0f;
+    if (!casterNoCull) {
+        ndcMinZ = device->GetDeviceInfo().NDC.MinZ;
+        margin  = 4.0f / static_cast<f32>(cascadeSize);
+    }
+    const f32 anchor[3] = {staging.g_Anchor.x, staging.g_Anchor.y, staging.g_Anchor.z};
+
+    ctx->SetPipelineState(splatShadowCasterPipeline);
+    ctx->CommitShaderResources(splatShadowCasterSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    size_t drawn = 0;
+    for (const SplatChunk& ch : t->chunks) {
+        if (!casterNoCull && !splatShadowCasterChunkVisible(lightViewProjRowMajor,
+                ch.aabbMin, ch.aabbMax, anchor, ndcMinZ, margin)) {
+            continue;
+        }
+        IBuffer* vb = ch.vbo;
+        ctx->SetVertexBuffers(0, 1, &vb, nullptr,
+                RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+        ctx->SetIndexBuffer(ch.ibo, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        ctx->DrawIndexed(DrawIndexedAttribs{
+                (Uint32)ch.indexCount, VT_UINT16, DRAW_FLAG_NONE, 1, 0, 0, 0});
+        drawn++;
+    }
+    splatShadowCasterFrameNo++;
+    if (getenv("ENGINE_SHADOW_CASTER_PROBE") || splatShadowCasterFrameNo == 1 || splatShadowCasterFrameNo % 300 == 0) {
+        if (casterNoCull) {
+            utils::info("splatTerrain: shadow caster frame %llu — %zu/%zu chunks drawn (unculled, per-cascade)",
+                    (unsigned long long)splatShadowCasterFrameNo, drawn, t->chunks.size());
+        } else {
+            utils::info("splatTerrain: shadow caster frame %llu cascade %d — %zu/%zu chunks drawn (culled)",
+                    (unsigned long long)splatShadowCasterFrameNo, cascadeIndex, drawn, t->chunks.size());
+        }
+    }
+}
+
 void splatPassRelease(void) {
     if (splatSrvIrradiance) { splatSrvIrradiance = nullptr; }
     if (splatSrvPrefiltered) { splatSrvPrefiltered = nullptr; }
@@ -1596,6 +1856,7 @@ void splatPassRelease(void) {
     splatPassFailed = false;
     splatFrameNo = 0;
     splatGridValid = false;
+    splatShadowCasterRelease();
 }
 
 void splatTerrainDestroyDiligent(void) {
