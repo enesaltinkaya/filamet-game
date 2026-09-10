@@ -268,7 +268,8 @@ static void write_u32_le(FILE* f, u32 v) {
 }
 
 static void write_glb(FILE* f, u32 grid_x, u32 grid_y,
-                      const std::vector<Chunk>& chunks, const char* splatInfoRaw) {
+                      const std::vector<Chunk>& chunks, const char* splatInfoRaw,
+                      const char* uvRangeExtra) {
     u32 total_chunks = (u32)chunks.size();
 
     int has_normals = 0, has_uvs = 0, has_tangents = 0;
@@ -402,8 +403,8 @@ static void write_glb(FILE* f, u32 grid_x, u32 grid_y,
             u32 gy = ci / grid_x;
             if (vi) appendf(json, ",");
             if (vi == 0 && splatInfoRaw)
-                appendf(json, "{\"name\":\"terrain_chunk_%u_%u\",\"mesh\":%u,\"extras\":{\"rigidBodyShape\":\"MESH\",\"splatInfo\":%s}}",
-                        gx, gy, vi, splatInfoRaw);
+                appendf(json, "{\"name\":\"terrain_chunk_%u_%u\",\"mesh\":%u,\"extras\":{\"rigidBodyShape\":\"MESH\",\"splatInfo\":%s%s}}",
+                        gx, gy, vi, splatInfoRaw, uvRangeExtra);
             else
                 appendf(json, "{\"name\":\"terrain_chunk_%u_%u\",\"mesh\":%u,\"extras\":{\"rigidBodyShape\":\"MESH\"}}", gx, gy, vi);
             vi++;
@@ -587,6 +588,37 @@ int main(int argc, char** argv) {
 
     printf("terrain-chunker: terrain %u verts, %u indices\n", vert_count, idx_count);
 
+    // gltfpack's 16-bit UV packing assumes UVs in [0,1] and zeros anything
+    // outside (the UDIM UVs span 0..10 x -10..1). Remap the splat UDIM UVs
+    // into [0,1] and carry the original range back on the first chunk node so
+    // the splat pass can reconstruct UDIM space (tile wrap + local UV).
+    std::string uvRangeExtra;
+    if (splatInfoRaw && td.has_uvs) {
+        float umn = FLT_MAX, umx = -FLT_MAX, vmn = FLT_MAX, vmx = -FLT_MAX;
+        for (u32 i = 0; i < vert_count; i++) {
+            float u = td.uvs[i * 2];
+            float v = td.uvs[i * 2 + 1];
+            if (u < umn) umn = u;
+            if (u > umx) umx = u;
+            if (v < vmn) vmn = v;
+            if (v > vmx) vmx = v;
+        }
+        if (umx > umn && vmx > vmn) {
+            const float su = 1.0f / (umx - umn);
+            const float sv = 1.0f / (vmx - vmn);
+            for (u32 i = 0; i < vert_count; i++) {
+                td.uvs[i * 2]     = (td.uvs[i * 2] - umn) * su;
+                td.uvs[i * 2 + 1] = (td.uvs[i * 2 + 1] - vmn) * sv;
+            }
+            appendf(uvRangeExtra, ",\"splatUvRange\":{\"min\":[%.9g,%.9g],\"max\":[%.9g,%.9g]}",
+                    umn, vmn, umx, vmx);
+            printf("terrain-chunker: splat UVs remapped to [0,1], udim range [%.3f,%.3f]x[%.3f,%.3f]\n",
+                   umn, umx, vmn, vmx);
+        } else {
+            fprintf(stderr, "terrain-chunker: WARNING: degenerate splat UV range, keeping raw UVs\n");
+        }
+    }
+
     float bbMin[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
     float bbMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
 
@@ -629,7 +661,8 @@ int main(int argc, char** argv) {
     }
 
     write_glb(f, grid_x, grid_y, chunks,
-              splatInfoRaw ? splatInfoRaw->c_str() : nullptr);
+              splatInfoRaw ? splatInfoRaw->c_str() : nullptr,
+              uvRangeExtra.empty() ? "" : uvRangeExtra.c_str());
     fclose(f);
 
     size_t total_size = 0;

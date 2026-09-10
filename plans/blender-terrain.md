@@ -72,22 +72,30 @@ of `models/terrain/oghuzlands.zstd`, render with a splat UDIM material.
 - Lighting: same PBR frame attribs as the glTF pass (the heightmap pass'
   shader is the porting template: `heightmap_terrain_{vs,ps,shadow_vs}.hlsl`).
 
-## Phase 3 — Physics (Jolt sidecar)
+## Phase 3 — Physics (Jolt sidecar) ✅ loader done 2026-09-11
 
-Load `models/terrain/oghuzlands.jolt.zstd` (JBVH v2 format, see
-`tools/jolt-shape-builder/README.md`): 16 STATIC MESH shapes, one per chunk
-node. Port the old engine's sidecar loader (`SceneParser.cpp`
-"Pre-baked Jolt shapes" section) into the engine's physics system. Player
-ground-snaps to these meshes instead of (or until) the heightmap.
+`PhysicsSystem` loads `models/terrain/oghuzlands.jolt.zstd` (JBVH v2 format,
+see `tools/jolt-shape-builder/README.md`): the game registers the sidecar
+from `GameSystem::loadWorld()` via `physicsTerrainSidecarSet()` (the physics
+system is (re)added deferred, so its added() consumes the pending path once
+joltInit has run) and restores all 16 static MESH shapes via
+`joltCreateBodyFromShapeBlob` (identity body transforms — the chunk vertices
+are in absolute coordinates; `JOLT_TERRAIN_USER_DATA` sentinel). The player
+capsule stands/walks on the terrain from this.
+Still pending: terrain in the CSM shadow pass (casters), self-shadowing.
 
-## Phase 4 — World switch (azgaar removal done 2026-09-10, ahead of phase 2)
+## Phase 4 — World switch (azgaar removal done 2026-09-10, terrain world wired 2026-09-11)
 
 - Azgaar map world removed: `c-game/game/azgaar/` + `loadingAzgaar/`,
   `c-engine/ecs/system/heightmap/`, the heightmap-terrain + props render
   passes, their .hlsl + pak assets, Game.cpp wiring, GUI cell/teleport, and
-  the player's heightmap ground-snap gate. The world is now worldless
-  (player + sky) until the splat pass lands.
-- Replace the world with the Blender terrain world: spawn/camera framing from
-  the terrain bounds, props scattered on the splat surface (vegetation groups:
-  the `grass*` splat groups — see the `.terrain-vegetation-groups.json` cache),
-  water/river pass if wanted.
+  the player's heightmap ground-snap gate.
+- The terrain world now loads on ENTER WORLD: `gltfSceneLoad` (second static
+  PBR model slot in the gltf module, drawn in a `terrain` debug group under
+  the `player` group in the `world` pass) + the Phase 3 sidecar. Spawn is a
+  CPU plane fit over the terrain vertices near the spawn xz
+  (`gltfSceneSurfaceHeight`, 2 m above the surface so the capsule settles),
+  default camera frames the spawn; `ENGINE_TELEPORT` still overrides.
+- Remaining for the full world: props scattered on the splat surface
+  (vegetation groups: the `grass*` splat groups — see the
+  `.terrain-vegetation-groups.json` cache), water/river pass if wanted.

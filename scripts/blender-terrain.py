@@ -468,7 +468,7 @@ def convertBlendFile(blendFile: Path, scriptsTmp: Path, force: bool):
     print(f"chunked size: {fileSizeHuman(chunkedGlb)}")
 
     print("gltfpack...")
-    run(str(GLTFPACK), "-vpf", "-vn", "16", "-vt", "16", "-kn", "-kv", "-ke",
+    run(str(GLTFPACK), "-vpf", "-vn", "16", "-vt", "16", "-vtf", "-kn", "-kv", "-ke",
         "-tj", "32",
         "-i", str(chunkedGlb), "-o", str(packedGlb))
 

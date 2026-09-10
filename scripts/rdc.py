@@ -131,8 +131,9 @@ def outputs_str(rd, ctrl, tmap, eid):
 
 def pass_groups(rd, acts):
     """PushMarker actions with children — pass grouping. The engine labels its
-    passes (shadow/player/terrain/props/taa_resolve/gui/rmlui) with
-    Diligent::ScopedDebugGroup, as does the DiligentFX TAA chain."""
+    passes (shadow/world[terrain,player]/taa_resolve/gui/rmlui) with
+    Diligent::ScopedDebugGroup, as does the DiligentFX TAA chain.
+    Nested groups (terrain/player inside world) match by name too."""
     F = rd.ActionFlags
     return [a for a in acts if F.PushMarker in a.flags and a.children]
 

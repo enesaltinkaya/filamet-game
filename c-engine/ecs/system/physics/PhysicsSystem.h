@@ -27,4 +27,13 @@ extern PhysicsSystem physicsSystem;
 /// True while the Jolt world is alive (between the physics system's
 /// added() and removed()).
 char physicsSystemJoltActive(void);
+
+/// Register the terrain's pre-baked Jolt sidecar (scripts/blender-terrain.py:
+/// the .jolt JBVH v2 file next to the terrain model in the pak). The game
+/// sets this from loadWorld() — the physics system is (re)added deferred a
+/// moment later, so the sidecar is remembered and its static bodies restored
+/// in added() once the world is up. If the world is already active the load
+/// happens immediately. Re-setting replaces the previous bodies (world
+/// re-entry).
+void physicsTerrainSidecarSet(const char* pakPath);
 }

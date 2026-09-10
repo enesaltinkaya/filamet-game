@@ -7,6 +7,9 @@ namespace engine::gltf {
 
 bool gltfInitDiligent(void);
 bool gltfLoadDiligent(const char* pakPath);
+bool gltfSceneLoadDiligent(const char* pakPath);
+bool gltfSceneBoundingBoxDiligent(float min[3], float max[3]);
+bool gltfSceneSurfaceHeightDiligent(float x, float z, float radius, float* outY);
 bool gltfPlaceAtDiligent(double x, double y, double z);
 bool gltfPlaceAtFacingDiligent(double x, double y, double z, f32 yaw);
 void gltfUpdateDiligent(double elapsedSeconds);

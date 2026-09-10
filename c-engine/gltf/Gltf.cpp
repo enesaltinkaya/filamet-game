@@ -17,6 +17,18 @@ bool gltfLoad(const char* pakPath) {
     return gltfLoadDiligent(pakPath);
 }
 
+bool gltfSceneLoad(const char* pakPath) {
+    return gltfSceneLoadDiligent(pakPath);
+}
+
+bool gltfSceneBoundingBox(f32 min[3], f32 max[3]) {
+    return gltfSceneBoundingBoxDiligent(min, max);
+}
+
+bool gltfSceneSurfaceHeight(f32 x, f32 z, f32 radius, f32* outY) {
+    return gltfSceneSurfaceHeightDiligent(x, z, radius, outY);
+}
+
 bool gltfPlaceAt(double x, double y, double z) {
     return gltfPlaceAtDiligent(x, y, z);
 }

@@ -10,6 +10,24 @@ void gltfUpdate(double elapsedSeconds);
 void gltfFrameCamera(void);
 void gltfDestroy(void);
 
+// ── Static scene model (the terrain) ─────────────────────────────────────
+// Second PBR model slot: the chunked terrain export from scripts/blender-
+// terrain.py, loaded in ABSOLUTE world coordinates (the chunk nodes carry no
+// transforms) and drawn under the character model by the same world pass.
+// Static — no animation, only the anchor-relative re-centering root moves.
+// The pak model may be plain glb or zstd-compressed glb, like gltfLoad.
+bool gltfSceneLoad(const char* pakPath);
+
+// World-space bounding box of the scene model; false if none is loaded.
+bool gltfSceneBoundingBox(f32 min[3], f32 max[3]);
+
+// CPU surface probe of the scene model: least-squares plane fit over the
+// model's POSITION vertices within `radius` metres of (x, z) (the pak model
+// is re-read and parsed — the loaded GLTF::Model holds no CPU vertex copy).
+// Out: the fitted surface height at (x, z). false when no model is loaded
+// or too few vertices fall in the window (spawn fallbacks use the bounds).
+bool gltfSceneSurfaceHeight(f32 x, f32 z, f32 radius, f32* outY);
+
 // Move the loaded instance so its LOCAL ORIGIN (the feet for character
 // assets) lands at ABSOLUTE world (x, y, z). The local origin is the pivot,
 // NOT the AABB min corner (eve's min corner sits 0.64 m to the origin's

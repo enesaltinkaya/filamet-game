@@ -574,7 +574,7 @@ namespace engine::renderer::diligent {
                             (int)swapChain->GetDesc().BufferCount);
             }
             {
-                Diligent::ScopedDebugGroup playerPass(context, "player");
+                Diligent::ScopedDebugGroup worldPass(context, "world");
                 worldDraw(context);
             }
             // Resolve the offscreen world into the backbuffer: TAA accumulation

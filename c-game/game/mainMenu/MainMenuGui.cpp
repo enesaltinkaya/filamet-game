@@ -152,9 +152,10 @@ namespace game {
                     engine::gui::guiAdd(&creditsGui);
                 else if (utils::strequals(at, "exit"))
                     exitGame();
-            } else if (!getenv("ENGINE_MENU")) {
-                enterWorld();
             }
+            //  else if (!getenv("ENGINE_MENU")) {
+            //     enterWorld();
+            // }
         }
     }
 

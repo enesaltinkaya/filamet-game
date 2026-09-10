@@ -31,7 +31,9 @@ namespace game {
     // Automated validation hook: ENGINE_CAMERA_DOLLY="vx,vy,vz" pans the camera
     // at that velocity (m/s) while the world is up. Combined with
     // ENGINE_SCREENSHOT_FRAME it screenshots a camera that has actually moved,
-    // so a headless run exercises the terrain pass' follow/evict/re-upload path.
+    // so a headless run exercises the TAA reprojection + the world anchor
+    // re-centering (the gltf placement roots re-derive against the moving
+    // camera eye every frame).
     static void updateCameraDolly() {
         static f32 vel[3]  = {};
         static bool parsed = false;
@@ -90,11 +92,34 @@ namespace game {
             utils::info("game: world loaded");
         }
 
+        // Oghuzland terrain world (scripts/blender-terrain.py export): the
+        // chunked terrain model through the standard PBR path (untextured
+        // until the splat UDIM pass lands — plans/blender-terrain.md phase 2)
+        // plus its pre-baked Jolt sidecar. The sidecar is only REGISTERED
+        // here — the physics system is (re)added deferred a frame later and
+        // restores the static terrain bodies in added() once the Jolt world
+        // is up.
+        bool terrainUp = engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
+        if (terrainUp) {
+            engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
+        }
+
         // Player character (eve): a zstd-compressed glb exported by
-        // scripts/export-models.sh. No world surface to stand on yet (the
-        // Azgaar map world is removed; the Blender splat world is pending),
-        // so the spawn sits at the origin until a world provides one.
+        // scripts/export-models.sh. Spawns on the terrain surface — a plane
+        // fit over the terrain's own vertices near the spawn xz — 2 m up so
+        // the capsule settles onto the ground on the first physics frame.
         f32 spawnPt[3] = {0.0f, 0.0f, 0.0f};
+        if (terrainUp) {
+            f32 surfaceY = 0.0f;
+            if (engine::gltf::gltfSceneSurfaceHeight(spawnPt[0], spawnPt[2], 30.0f, &surfaceY)) {
+                spawnPt[1] = surfaceY + 2.0f;
+            } else {
+                f32 tmin[3], tmax[3];
+                if (engine::gltf::gltfSceneBoundingBox(tmin, tmax)) {
+                    spawnPt[1] = (tmin[1] + tmax[1]) * 0.5f;
+                }
+            }
+        }
         // Override the spawn with an explicit position (ENGINE_TELEPORT="x,y,z").
         if (const char* tpos = getenv("ENGINE_TELEPORT")) {
             float tx = 0.0f, ty = 0.0f, tz = 0.0f;
@@ -133,8 +158,8 @@ namespace game {
         engine::playerSetSpawn(spawnPt[0], spawnPt[1], spawnPt[2]);
 
         // Camera framing: ENGINE_CAMERA selects a validation vantage; the
-        // default frames the spawn.
-        f32 center[3] = {0.0f, 0.0f, 0.0f};
+        // default frames the spawn on the terrain.
+        f32 center[3] = {spawnPt[0], spawnPt[1], spawnPt[2]};
 
         const char* cameraMode = getenv("ENGINE_CAMERA");
         if (cameraMode && utils::strequals(cameraMode, "topdown")) {
@@ -156,7 +181,7 @@ namespace game {
             // after framing, once the anchor exists).
             f32 lmin[3], lmax[3];
             if (engine::gltf::gltfLocalBoundingBox(lmin, lmax)) {
-                // feet y: the spawn y (no world surface to snap against yet)
+                // feet y: the spawn y (terrain surface probe / teleport value)
                 const f32 feetY = spawnPt[1];
                 // placement pins the local ORIGIN (feet) at the spawn point, so
                 // the body centre sits at spawn + (centre - origin) — the
@@ -179,8 +204,8 @@ namespace game {
                 utils::warn("game: character camera — no gltf bounds, keeping default camera");
             }
         } else {
-            f32 eye[3]    = {-100, 2, -100};
-            f32 lookAt[3] = {-101, 1.5, -101};
+            f32 eye[3]    = {center[0] + 180.0f, center[1] + 75.0f, center[2] + 180.0f};
+            f32 lookAt[3] = {center[0], center[1] + 30.0f, center[2]};
             f32 up[3]     = {0.0f, 1.0f, 0.0f};
             engine::renderer::rendererCameraLookAt(eye, lookAt, up);
         }

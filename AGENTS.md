@@ -34,7 +34,7 @@ PYTHONPATH=/home/enes/Apps/renderdoc/build/lib python3 <script>  # headless repl
 
 - `run.sh renderdoc` sets `LD_PRELOAD` **and** the implicit layer (`ENABLE_VULKAN_RENDERDOC_CAPTURE=1`) — both are required, since volk's dlopen/dlsym bypasses plain symbol interposition. It also forces `SDL_VIDEO_BACKEND=x11` (the layer build is wayland-OFF).
 - The trigger is frame-based (`ENGINE_RENDERDOC_CAPTURE_FRAMES`), not delay-based; pick a frame past asset loading. The engine exits on its own two frames after the capture fires (`ENGINE_LOG_TIMEOUT` is only a safety net).
-- Passes are labeled with `Diligent::ScopedDebugGroup` in `DiligentRenderer.cpp draw()`: `shadow`, `player`, `terrain`, `props`, `taa_resolve`, `gui`, `rmlui` — so `rdc.py list` / `dump <name>` work by pass name. (The `shadow` group has no color outputs — depth atlas; use qrenderdoc for it.)
+- Passes are labeled with `Diligent::ScopedDebugGroup` in `DiligentRenderer.cpp draw()`: `shadow`, `world` (nested: `terrain`, then `player` — both drawn through the shared PBR world pass; `props` will nest here when it lands), `taa_resolve`, `gui`, `rmlui` — so `rdc.py list` / `dump <name>` work by pass name (nested groups match too). (The `shadow` group has no color outputs — depth atlas; use qrenderdoc for it.)
 - The Diligent wayland-define strip lives in `cpp-thirdparty/diligent/build.sh` — after updating Diligent, re-run it before renderdoc runs.
 
 ### Old engine
