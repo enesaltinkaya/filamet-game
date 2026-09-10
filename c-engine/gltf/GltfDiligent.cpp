@@ -6,6 +6,7 @@
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
+#include "renderer/diligent/SplatTerrainDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 #include "renderer/RenderBackend.h"
 
@@ -619,7 +620,7 @@ bool gltfInitDiligent(void) {
 // entry (g_currentModelPakPath) — models ship as <name>.zstd (compressed glb).
 static const char* g_currentModelPakPath = nullptr;
 
-static bool readModelBytes(const char* path, std::vector<unsigned char>& data, std::string& error) {
+bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& data, std::string& error) {
     utils::String bytes = utils::dataManagerRead(path);
     if (!bytes.data) {
         error = std::string("cannot read ") + path;
@@ -659,7 +660,7 @@ static std::unique_ptr<GLTF::Model> loadModelBytes(const char* pakPath, std::str
     g_currentModelPakPath = pakPath;
     modelCI.ReadWholeFileCallback =
             [](const char* /*path*/, std::vector<unsigned char>& data, std::string& cbError) -> bool {
-        return readModelBytes(g_currentModelPakPath, data, cbError);
+        return gltfReadModelBytesDiligent(g_currentModelPakPath, data, cbError);
     };
     try {
         std::unique_ptr<GLTF::Model> loaded;
@@ -1020,7 +1021,7 @@ bool gltfSceneBoundingBoxDiligent(float min[3], float max[3]) {
 
 // GLB chunk walk: the file is header + (JSON | BIN) chunks; the JSON chunk
 // describes the accessors, the BIN chunk holds the vertex payloads.
-static bool glbFindChunks(const std::vector<unsigned char>& bytes,
+bool gltfGlbFindChunksDiligent(const std::vector<unsigned char>& bytes,
         const unsigned char** jsonPtr, size_t& jsonSize,
         const unsigned char** binPtr, size_t& binSize) {
     static const u32 kMagic = 0x46546C67;  // "glTF"
@@ -1061,14 +1062,14 @@ bool gltfSceneSurfaceHeightDiligent(float x, float z, float radius, float* outY)
     }
     std::vector<unsigned char> bytes;
     std::string error;
-    if (!readModelBytes(scenePakPath.c_str(), bytes, error)) {
+    if (!gltfReadModelBytesDiligent(scenePakPath.c_str(), bytes, error)) {
         utils::warn("gltf: surface probe — cannot read %s (%s)", scenePakPath.c_str(), error.c_str());
         return false;
     }
     const unsigned char* jsonPtr = nullptr;
     size_t jsonSize = 0, binSize = 0;
     const unsigned char* binPtr = nullptr;
-    if (!glbFindChunks(bytes, &jsonPtr, jsonSize, &binPtr, binSize)) {
+    if (!gltfGlbFindChunksDiligent(bytes, &jsonPtr, jsonSize, &binPtr, binSize)) {
         utils::warn("gltf: surface probe — %s is not a GLB", scenePakPath.c_str());
         return false;
     }
@@ -1414,18 +1415,22 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
                        (pbrShadowsOn() ? GLTF_PBR_Renderer::PSO_FLAG_ENABLE_SHADOWS
                                        : GLTF_PBR_Renderer::PSO_FLAG_NONE);
 
-    // Terrain under the character: the static scene model draws first, the
-    // animated character second — where their pixels overlap the character's
-    // motion vectors win (it is the nearer surface).
+    // Terrain under the character: the splat pass (task 2+, behind
+    // ENGINE_SPLAT_TERRAIN, default on) draws the culled chunks when it is
+    // active; otherwise the untextured PBR scene draw is the A/B fallback.
+    // The prev-pose snapshot keeps updating either way (the A/B switch must
+    // not stale the motion-vector reference).
     if (scene) {
         Diligent::ScopedDebugGroup terrainGroup(ctx, "terrain");
-        renderInfo.SceneIndex = worldSceneModelSceneIndex();
         static GLTF::ModelTransforms prevScenePose;
-        const GLTF::ModelTransforms* prev =
-                prevScenePose.NodeGlobalMatrices.size() == sceneT->NodeGlobalMatrices.size() &&
-                        prevScenePose.Skins.size() == sceneT->Skins.size()
-                ? &prevScenePose : nullptr;
-        pbr->Render(ctx, *scene, *sceneT, prev, renderInfo, worldSceneModelBindings());
+        if (!engine::renderer::diligent::splatTerrainDrawDiligent(ctx)) {
+            renderInfo.SceneIndex = worldSceneModelSceneIndex();
+            const GLTF::ModelTransforms* prev =
+                    prevScenePose.NodeGlobalMatrices.size() == sceneT->NodeGlobalMatrices.size() &&
+                            prevScenePose.Skins.size() == sceneT->Skins.size()
+                    ? &prevScenePose : nullptr;
+            pbr->Render(ctx, *scene, *sceneT, prev, renderInfo, worldSceneModelBindings());
+        }
         prevScenePose = *sceneT;  // next frame's motion-vector reference
     }
     if (model) {

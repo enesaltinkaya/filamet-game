@@ -11,7 +11,7 @@ first use (`static`), so set them before launch, not mid-run.
 | Var                                 | Value                                                   | Effect                                                                                                                                            |
 | ----------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ENGINE_SCREENSHOT`                 | path                                                    | Capture one frame as JPEG (quality 90) and quit. Also runs the window hidden (headless) and parks the player (the scripted camera owns the view). |
-| `ENGINE_SCREENSHOT_FRAME`           | int                                                     | Which frame to capture (default 100 when `ENGINE_SCREENSHOT` is set; 0 means 1).                                                                                                    |
+| `ENGINE_SCREENSHOT_FRAME`           | int                                                     | Which frame to capture (default 100 when `ENGINE_SCREENSHOT` is set; 0 means 1).                                                                  |
 | `ENGINE_LOG_TIMEOUT`                | ms                                                      | Auto-stop the engine after N ms of wall time — the safety net for automated runs.                                                                 |
 | `ENGINE_AUTOTEST`                   | `enter` \| `pause` \| `settings` \| `credits` \| `exit` | Main-menu scripted action, fired once. `pause` enters the world and opens the pause menu; `exit` quits.                                           |
 | `ENGINE_PAUSE_AUTOTEST`             | `back` \| `settings` \| `mainmenu`                      | Paired with `ENGINE_AUTOTEST=pause` — scripted pause-menu action, fired once.                                                                     |
@@ -37,16 +37,16 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 
 ## Camera / player
 
-| Var                   | Value                                                  | Effect                                                                                                  |
-| --------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `ENGINE_CAMERA`       | `topdown` \| `close` \| `character`                      | Pick a fixed validation vantage after world load (instead of the default framing).                      |
-| `ENGINE_CAMERA_DOLLY` | `x,y,z`                                                | Constant camera velocity in m/s (also marks the run as automated → player parked).                      |
-| `ENGINE_TELEPORT`     | `x,y,z`                                                | Override the spawn position (world metres, f32).                                                        |
-| `ENGINE_AUTO_RUN`     | truthy                                                 | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
-| `ENGINE_TPOSE`        | truthy                                                 | Always play the character T-pose (inspect hook).                                                        |
-| `ENGINE_NO_ANIM`      | any value                                              | Skip loading/playing the character animation clips.                                                     |
-| `ENGINE_NO_PLAYER`    | any value                                              | Keep the player parked (same gate as screenshot/dolly runs).                                            |
-| `ENGINE_FOG_DENSITY`  | float                                                  | Override the exponential fog density (default 0.00035).                                                 |
+| Var                   | Value                               | Effect                                                                                                  |
+| --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `ENGINE_CAMERA`       | `topdown` \| `close` \| `character` | Pick a fixed validation vantage after world load (instead of the default framing).                      |
+| `ENGINE_CAMERA_DOLLY` | `x,y,z`                             | Constant camera velocity in m/s (also marks the run as automated → player parked).                      |
+| `ENGINE_TELEPORT`     | `x,y,z`                             | Override the spawn position (world metres, f32).                                                        |
+| `ENGINE_AUTO_RUN`     | truthy                              | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
+| `ENGINE_TPOSE`        | truthy                              | Always play the character T-pose (inspect hook).                                                        |
+| `ENGINE_NO_ANIM`      | any value                           | Skip loading/playing the character animation clips.                                                     |
+| `ENGINE_NO_PLAYER`    | any value                           | Keep the player parked (same gate as screenshot/dolly runs).                                            |
+| `ENGINE_FOG_DENSITY`  | float                               | Override the exponential fog density (default 0.00035).                                                 |
 
 ## GLTF / character
 
@@ -65,13 +65,13 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 
 ## IBL
 
-| Var                        | Value  | Effect                                                                                                              |
-| -------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------- |
-| `ENGINE_IBL_ENV`           | name   | Environment file from `images/studiolights/` (stem or filename); default `kloofendal_48d_partly_cloudy_puresky_1k`. |
-| `ENGINE_IBL_INTENSITY`     | float  | Global IBL scale (diffuse + specular, each path's IBLScale); also the DebugGui IBL intensity ±0.25 steps.            |
-| `ENGINE_IBL_SPEC_INTENSITY`| float  | Specular-only attenuation: scales the prefiltered env the spec lobe samples; diffuse irradiance stays full.         |
-| `ENGINE_IBL_SPEC_CLAMP`    | float  | Luminance clamp on the specular env copy (default 100, ≤0 disables). Blanks the HDRI's baked sun disk — the analytic |
-|                            |        | sun already supplies that energy; unclamped it prefiltered into a sheen spike on sun-facing reflections.            |
+| Var                         | Value | Effect                                                                                                               |
+| --------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------- |
+| `ENGINE_IBL_ENV`            | name  | Environment file from `images/studiolights/` (stem or filename); default `kloofendal_48d_partly_cloudy_puresky_1k`.  |
+| `ENGINE_IBL_INTENSITY`      | float | Global IBL scale (diffuse + specular, each path's IBLScale); also the DebugGui IBL intensity ±0.25 steps.            |
+| `ENGINE_IBL_SPEC_INTENSITY` | float | Specular-only attenuation: scales the prefiltered env the spec lobe samples; diffuse irradiance stays full.          |
+| `ENGINE_IBL_SPEC_CLAMP`     | float | Luminance clamp on the specular env copy (default 100, ≤0 disables). Blanks the HDRI's baked sun disk — the analytic |
+|                             |       | sun already supplies that energy; unclamped it prefiltered into a sheen spike on sun-facing reflections.             |
 
 ## GUI (rmlui)
 

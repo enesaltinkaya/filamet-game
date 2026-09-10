@@ -102,6 +102,10 @@ namespace game {
         bool terrainUp = engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
         if (terrainUp) {
             engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
+            // Splat resources (phase 2): the same packed GLB re-parsed
+            // CPU-side — per-chunk buffers + AABBs, weight UDIM arrays, detail
+            // sets. No draw until the splat pass lands (tasks 2/3).
+            engine::gltf::splatTerrainLoad("models/terrain/oghuzlands.zstd");
         }
 
         // Player character (eve): a zstd-compressed glb exported by
@@ -285,6 +289,7 @@ namespace game {
         engine::systemRemove(&engine::flyingCameraSystem);
         engine::systemRemove(&engine::physicsSystem);
         if (worldLoaded) {
+            engine::gltf::splatTerrainDestroy();
             engine::gltf::gltfDestroy();
 
             // the renderer owns the sun/ambient now; they stay set for the

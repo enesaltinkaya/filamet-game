@@ -28,6 +28,16 @@ bool gltfSceneBoundingBox(f32 min[3], f32 max[3]);
 // or too few vertices fall in the window (spawn fallbacks use the bounds).
 bool gltfSceneSurfaceHeight(f32 x, f32 z, f32 radius, f32* outY);
 
+// UDIM splat resources for the scene model (plans/blender-terrain.md phase
+// 2): the same packed GLB re-parsed CPU-side and uploaded as the splat
+// pass' GPU resources — per-chunk vertex/index buffers + AABBs, the per-
+// group weight TEXTURE2DARRAYs (100 UDIM layers, missing tiles the Noop
+// weight) and the 8 detail sets (albedo sRGB / normal linear). It allocates
+// no GPU state while the splat draw pass has not landed; the untextured PBR
+// scene draw (gltfSceneLoad) stays as the A/B fallback.
+bool splatTerrainLoad(const char* pakPath);
+void splatTerrainDestroy(void);
+
 // Move the loaded instance so its LOCAL ORIGIN (the feet for character
 // assets) lands at ABSOLUTE world (x, y, z). The local origin is the pivot,
 // NOT the AABB min corner (eve's min corner sits 0.64 m to the origin's

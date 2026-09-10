@@ -26,6 +26,16 @@ Image imageLoadFromData(const u8 *data, u64 size, const char *mime) {
     if (ktxTexture2_CreateFromMemory(data, size, 0, &ktxTexture2) > 0) {
       terminate("failed to parse ktx");
     }
+    // KTX_SS_ZSTD/ZLIB supercompressed raw payloads (the terrain splat
+    // tiles) are stored compressed: CreateFromMemory leaves pData NULL
+    // until the level data is loaded. Inflate it now or the memcpy below
+    // dereferences NULL.
+    if (!ktxTexture2->pData) {
+      if (ktxTexture2_LoadImageData(ktxTexture2, NULL, 0) != KTX_SUCCESS) {
+        ktxTexture_Destroy((ktxTexture *)ktxTexture2);
+        terminate("failed to inflate ktx level data");
+      }
+    }
     image.width = ktxTexture2->baseWidth;
     image.height = ktxTexture2->baseHeight;
     image.isKtx = 1;

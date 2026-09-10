@@ -2,8 +2,20 @@
 #include "Defines.h"
 
 #include <cstddef>
+#include <string>
+#include <vector>
 
 namespace engine::gltf {
+
+// Shared packed-GLB access (zstd-aware): the pak models may be plain glb or
+// zstd-compressed glb (sniffed by magic), and the file is a GLB chunk walk
+// (header + JSON | BIN chunks). The splat terrain loader (SplatTerrainDiligent.cpp)
+// reuses both to walk the packed GLB on the CPU.
+bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& data,
+        std::string& error);
+bool gltfGlbFindChunksDiligent(const std::vector<unsigned char>& bytes,
+        const unsigned char** jsonPtr, size_t& jsonSize,
+        const unsigned char** binPtr, size_t& binSize);
 
 bool gltfInitDiligent(void);
 bool gltfLoadDiligent(const char* pakPath);

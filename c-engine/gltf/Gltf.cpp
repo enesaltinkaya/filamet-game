@@ -4,6 +4,7 @@
 #include "gltf/GltfInternal.h"
 #include "logger/Logger.h"
 #include "renderer/Renderer.h"
+#include "renderer/diligent/SplatTerrainDiligent.h"
 
 #include <cmath>
 
@@ -27,6 +28,14 @@ bool gltfSceneBoundingBox(f32 min[3], f32 max[3]) {
 
 bool gltfSceneSurfaceHeight(f32 x, f32 z, f32 radius, f32* outY) {
     return gltfSceneSurfaceHeightDiligent(x, z, radius, outY);
+}
+
+bool splatTerrainLoad(const char* pakPath) {
+    return renderer::diligent::splatTerrainLoadDiligent(pakPath);
+}
+
+void splatTerrainDestroy(void) {
+    renderer::diligent::splatTerrainDestroyDiligent();
 }
 
 bool gltfPlaceAt(double x, double y, double z) {
