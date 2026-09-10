@@ -347,7 +347,7 @@ All headless, from the project root after `./scripts/build.sh`:
 6. **Perf sanity:** the normal RT adds 8 B/px write + (SSAO half-res) read at
    target size — measure with `ENGINE_DEBUG_GPUTIME=1` (DiligentRenderer.cpp:435)
    static + moving-camera before/after; budget is the existing
-   ≤ 1.5 ms/frame post-world envelope used in the azgaar-terrain plan.
+   ≤ 1.5 ms/frame post-world envelope used in the terrain plan.
 
 ## Risks / gotchas
 

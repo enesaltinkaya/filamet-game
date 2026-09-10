@@ -1,7 +1,7 @@
-# Blender terrain — replace the Azgaar map
+# Blender terrain world
 
 Render the Blender-modeled Oghuzlands terrain (`oghuzlands.blend`) instead of
-the Azgaar heightmap world. The offline asset pipeline is done; the engine
+the procedural heightmap world. The offline asset pipeline is done; the engine
 renders the model through the standard glTF PBR path until the splat pass
 lands (phases 2-4).
 
@@ -90,9 +90,9 @@ with the receiver-side `sSlice.y` depth bias; caster stays rasterizer-bias-free)
 Self-shadowing is therefore live; verification evidence in
 `.miniagent/ledger/notes.md` round 4.
 
-## Phase 4 — World switch (azgaar removal done 2026-09-10, terrain world wired 2026-09-11)
+## Phase 4 — World switch (old map world removed 2026-09-10, terrain world wired 2026-09-11)
 
-- Azgaar map world removed: `c-game/game/azgaar/` + `loadingAzgaar/`,
+- Old map world removed: its game dir + loading screen,
   `c-engine/ecs/system/heightmap/`, the heightmap-terrain + props render
   passes, their .hlsl + pak assets, Game.cpp wiring, GUI cell/teleport, and
   the player's heightmap ground-snap gate.

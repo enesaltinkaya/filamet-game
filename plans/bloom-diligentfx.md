@@ -378,7 +378,7 @@ All headless, from the project root after `./scripts/build.sh`:
 7. **Perf sanity:** bloom adds a prefilter + mip-chain downsample/upsample at
    target size; measure with `ENGINE_DEBUG_GPUTIME=1` (DiligentRenderer.cpp)
    static + moving-camera before/after; budget is the same post-world
-   envelope used in the SSAO/azgaar plans.
+   envelope used in the SSAO/terrain plans.
 
 ## Risks / gotchas
 

@@ -216,8 +216,7 @@ headless/menu captures where the ImGui pass is inactive.
 
 What a frame looks like (frame 500, 2880x1627 — the TAA "compute" runs as
 fullscreen draws; eids are illustrative, they move with the pass set — the
-Azgaar `terrain`/`props` passes were removed 2026-09-10 with the Azgaar map
-world):
+the old map world's `terrain`/`props` passes were removed 2026-09-10 with it):
 
 | eids    | group         | what                                                       |
 | ------- | ------------- | ---------------------------------------------------------- |
