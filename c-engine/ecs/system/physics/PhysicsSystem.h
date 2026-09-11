@@ -36,4 +36,5 @@ char physicsSystemJoltActive(void);
 /// happens immediately. Re-setting replaces the previous bodies (world
 /// re-entry).
 void physicsTerrainSidecarSet(const char* pakPath);
+void physicsPropsSidecarSet(const char* pakPath);
 }

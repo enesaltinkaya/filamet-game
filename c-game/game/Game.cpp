@@ -108,6 +108,10 @@ namespace game {
             engine::gltf::splatTerrainLoad("models/terrain/oghuzlands.zstd");
         }
 
+        if (engine::gltf::gltfPropsLoad("models/test2.zstd")) {
+            engine::physicsPropsSidecarSet("models/test2.jolt.zstd");
+        }
+
         // Player character (eve): a zstd-compressed glb exported by
         // scripts/export-models.sh. Static spawn — a saved player row
         // (playerDbLoad) or ENGINE_TELEPORT overrides it on world load.

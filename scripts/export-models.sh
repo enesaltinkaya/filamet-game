@@ -95,6 +95,19 @@ convertModel() {
     echo ok
     mv "$f32" "$glb"
 
+    echo -n "jolt shapes... "
+    JOLT_SHAPE_BUILDER="$ROOT/tools/jolt-shape-builder/jolt-shape-builder"
+    local joltFile="$STAGE_DIR/${name}.jolt"
+    rm -f "$joltFile"
+    "$JOLT_SHAPE_BUILDER" "$glb" "$joltFile" >> "$log" 2>&1
+    if [ -f "$joltFile" ]; then
+        zstd -q -10 --rm -f "$joltFile"
+        mv "${joltFile}.zst" "$OUT_DIR/${name}.jolt.zstd"
+        echo "$(du -sh "$OUT_DIR/${name}.jolt.zstd" | cut -f1)"
+    else
+        echo "none"
+    fi
+
     echo -n "zstd... "
     zstd -q -10 --rm -f "$glb"
     mv "${glb}.zst" "$OUT_DIR/${name}.zstd"
@@ -107,3 +120,4 @@ mkdir -p "$SCRIPTS_TMP"
 
 convertModel "$ASSETS_DIR/Scenes/Characters/eve.blend"
 convertModel "$ASSETS_DIR/Scenes/Characters/animations.blend"
+convertModel "$ASSETS_DIR/Scenes/test2.blend"

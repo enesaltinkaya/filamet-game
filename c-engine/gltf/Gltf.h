@@ -17,6 +17,8 @@ void gltfDestroy(void);
 // Static — no animation, only the anchor-relative re-centering root moves.
 // The pak model may be plain glb or zstd-compressed glb, like gltfLoad.
 bool gltfSceneLoad(const char* pakPath);
+bool gltfPropsLoad(const char* pakPath);
+bool gltfPropsNodeGlobalTRS(const char* name, f32 pos[3], f32 quat[4], f32 scale[3]);
 
 // World-space bounding box of the scene model; false if none is loaded.
 bool gltfSceneBoundingBox(f32 min[3], f32 max[3]);

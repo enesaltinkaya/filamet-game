@@ -1,9 +1,11 @@
 #include "PhysicsSystem.h"
 #include "Utils.h"
+#include "gltf/Gltf.h"
 
 #include <zstd.h>
 
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -26,11 +28,21 @@ char physicsSystemJoltActive(void) {
 static std::string terrainSidecarPath;
 static std::vector<void*> terrainBodies;
 
+static std::string propsSidecarPath;
+static std::vector<void*> propsBodies;
+
 static void terrainBodiesDestroy(void) {
     for (void* body : terrainBodies) {
         joltBodyDestroy(static_cast<JoltBody*>(body));
     }
     terrainBodies.clear();
+}
+
+static void propsBodiesDestroy(void) {
+    for (void* body : propsBodies) {
+        joltBodyDestroy(static_cast<JoltBody*>(body));
+    }
+    propsBodies.clear();
 }
 
 // pak entry -> raw bytes (pak assets may be zstd-compressed, sniffed by
@@ -65,29 +77,21 @@ static bool sidecarReadRaw(const char* pakPath, std::vector<u8>& out, std::strin
     return true;
 }
 
-static void terrainSidecarLoad(const char* pakPath) {
-    terrainBodiesDestroy();
-
-    std::vector<u8> raw;
-    std::string error;
-    if (!sidecarReadRaw(pakPath, raw, error)) {
-        utils::warn("physics: %s", error.c_str());
-        return;
-    }
+static bool sidecarForEachEntry(const std::vector<u8>& raw, const char* pakPath,
+        const std::function<void(const char* name, u32 nameLen, u8 motionType, f32 mass,
+        f32 friction, f32 restitution, const void* blob, u32 blobSize)>& onEntry) {
     if (raw.size() < 12 || std::memcmp(raw.data(), "JBVH", 4) != 0) {
         utils::warn("physics: invalid JBVH sidecar %s", pakPath);
-        return;
+        return false;
     }
     u32 version = 0, entryCount = 0;
     memcpy(&version, raw.data() + 4, 4);
     memcpy(&entryCount, raw.data() + 8, 4);
     if (version != 2) {
         utils::warn("physics: unsupported JBVH sidecar version %u (%s)", version, pakPath);
-        return;
+        return false;
     }
     size_t off = 12;
-    float pos[3] = {0.0f, 0.0f, 0.0f};
-    float rot[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     for (u32 e = 0; e < entryCount; e++) {
         if (off + 4 > raw.size()) {
             utils::warn("physics: truncated JBVH entry %u (%s)", e, pakPath);
@@ -120,19 +124,70 @@ static void terrainSidecarLoad(const char* pakPath) {
         }
         const void* blob = raw.data() + off;
         off += blobSize;
-
-        void* body = joltCreateBodyFromShapeBlob(
-                blob, blobSize,
-                motionType == 1 ? JOLT_MOTION_DYNAMIC : JOLT_MOTION_STATIC,
-                mass, friction, restitution, nullptr, pos, rot, JOLT_TERRAIN_USER_DATA);
-        if (!body) {
-            utils::warn("physics: JBVH restore failed for %.*s", (int)nameLen, name);
-            continue;
-        }
-        terrainBodies.push_back(body);
+        onEntry(name, nameLen, motionType, mass, friction, restitution, blob, blobSize);
     }
-    utils::info("physics: %zu terrain bodies from %s (%zu JBVH entries)", terrainBodies.size(),
-            pakPath, (size_t)entryCount);
+    return true;
+}
+
+static void terrainSidecarLoad(const char* pakPath) {
+    terrainBodiesDestroy();
+
+    std::vector<u8> raw;
+    std::string error;
+    if (!sidecarReadRaw(pakPath, raw, error)) {
+        utils::warn("physics: %s", error.c_str());
+        return;
+    }
+    float pos[3] = {0.0f, 0.0f, 0.0f};
+    float rot[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    sidecarForEachEntry(raw, pakPath,
+            [&](const char*, u32, u8 motionType, f32 mass, f32 friction, f32 restitution,
+                    const void* blob, u32 blobSize) {
+                void* body = joltCreateBodyFromShapeBlob(
+                        blob, blobSize,
+                        motionType == 1 ? JOLT_MOTION_DYNAMIC : JOLT_MOTION_STATIC,
+                        mass, friction, restitution, nullptr, pos, rot, JOLT_TERRAIN_USER_DATA);
+                if (!body) {
+                    utils::warn("physics: terrain JBVH restore failed");
+                    return;
+                }
+                terrainBodies.push_back(body);
+            });
+    utils::info("physics: %zu terrain bodies from %s", terrainBodies.size(), pakPath);
+}
+
+static void propsSidecarLoad(const char* pakPath) {
+    propsBodiesDestroy();
+
+    std::vector<u8> raw;
+    std::string error;
+    if (!sidecarReadRaw(pakPath, raw, error)) {
+        utils::warn("physics: %s", error.c_str());
+        return;
+    }
+    sidecarForEachEntry(raw, pakPath,
+            [&](const char* name, u32 nameLen, u8 motionType, f32 mass, f32 friction,
+                    f32 restitution, const void* blob, u32 blobSize) {
+                std::string nodeName(name, nameLen);
+                f32 pos[3] = {0.0f, 0.0f, 0.0f};
+                f32 rot[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                f32 scl[3] = {1.0f, 1.0f, 1.0f};
+                if (!engine::gltf::gltfPropsNodeGlobalTRS(nodeName.c_str(), pos, rot, scl)) {
+                    utils::warn("physics: props sidecar entry has no node transform: %s",
+                            nodeName.c_str());
+                    return;
+                }
+                void* body = joltCreateBodyFromShapeBlob(
+                        blob, blobSize,
+                        motionType == 1 ? JOLT_MOTION_DYNAMIC : JOLT_MOTION_STATIC,
+                        mass, friction, restitution, nullptr, pos, rot, 0ULL);
+                if (!body) {
+                    utils::warn("physics: JBVH restore failed for %s", nodeName.c_str());
+                    return;
+                }
+                propsBodies.push_back(body);
+            });
+    utils::info("physics: %zu props bodies from %s", propsBodies.size(), pakPath);
 }
 
 void physicsTerrainSidecarSet(const char* pakPath) {
@@ -146,6 +201,17 @@ void physicsTerrainSidecarSet(const char* pakPath) {
     }
 }
 
+void physicsPropsSidecarSet(const char* pakPath) {
+    if (!pakPath || !pakPath[0]) {
+        return;
+    }
+    propsSidecarPath = pakPath;
+    if (joltActive) {
+        propsSidecarLoad(pakPath);
+        propsSidecarPath.clear();
+    }
+}
+
 PhysicsSystem::PhysicsSystem() : System("physics") {}
 
 void PhysicsSystem::added() {
@@ -154,6 +220,10 @@ void PhysicsSystem::added() {
     if (!terrainSidecarPath.empty()) {
         terrainSidecarLoad(terrainSidecarPath.c_str());
         terrainSidecarPath.clear();
+    }
+    if (!propsSidecarPath.empty()) {
+        propsSidecarLoad(propsSidecarPath.c_str());
+        propsSidecarPath.clear();
     }
     utils::info("physics: Jolt world up");
 }
@@ -166,6 +236,7 @@ void PhysicsSystem::removed() {
     // Terrain bodies out first — joltBodyDestroy drops them from the world
     // while it is still alive, then the world goes with the system.
     terrainBodiesDestroy();
+    propsBodiesDestroy();
     joltDestroy();
     utils::info("physics: Jolt world down");
 }

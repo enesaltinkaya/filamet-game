@@ -1,3 +1,4 @@
+Do not use git!
 Always use export ENGINE_HIDDEN_WINDOW=1 env variable.
 Always use export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json env variable.
 Do not move the player character! She will be parked to a place to demonstrate the whatever issue.

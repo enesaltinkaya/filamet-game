@@ -112,15 +112,18 @@ static char placementRebuilt = 0;
 // carry no transforms). Loaded through the same GLTF_PBR_Renderer as the
 // character and drawn under it in worldDraw. It never animates — its pose is
 // rebuilt only when the world anchor re-centers.
-static std::unique_ptr<GLTF::Model> sceneModel;
-static std::unique_ptr<GLTF::ModelTransforms> sceneTransforms;
-static GLTF_PBR_Renderer::ModelResourceBindings sceneBindings;
-static bool sceneBindingsValid = false;
-static Uint32 sceneSceneIndex = 0;
-static u32 sceneShadowBoundGeneration = ~0u;
-static BoundBox sceneLocalBounds;
-static bool sceneHaveBounds = false;
-static std::string scenePakPath;
+struct StaticSceneModel {
+    std::unique_ptr<GLTF::Model> model;
+    std::unique_ptr<GLTF::ModelTransforms> transforms;
+    GLTF_PBR_Renderer::ModelResourceBindings bindings;
+    bool bindingsValid = false;
+    Uint32 sceneIndex = 0;
+    u32 shadowBoundGeneration = ~0u;
+    BoundBox localBounds = {};
+    bool haveBounds = false;
+    std::string pakPath;
+};
+static std::vector<StaticSceneModel> sceneModels;
 static char scenePlacementDirty = true;
 static float4x4 scenePlacementMatrix = float4x4::Identity();
 static double scenePlacementAnchor[3] = {0.0, 0.0, 0.0};
@@ -181,7 +184,11 @@ static void refreshModelBindings(const char* label, GLTF::Model* m,
 
 static void pbrRefreshBindings(void) {
     refreshModelBindings("player", model.get(), modelBindings, bindingsValid, pbrShadowBoundGeneration);
-    refreshModelBindings("scene", sceneModel.get(), sceneBindings, sceneBindingsValid, sceneShadowBoundGeneration);
+    for (size_t i = 0, n = sceneModels.size(); i < n; i++) {
+        const char* label = (i == 0) ? "scene" : "props";
+        refreshModelBindings(label, sceneModels[i].model.get(), sceneModels[i].bindings,
+                sceneModels[i].bindingsValid, sceneModels[i].shadowBoundGeneration);
+    }
 }
 
 static const float4x4& placementRootMatrix(void) {
@@ -228,14 +235,16 @@ const float4x4& scenePlacementRootMatrix(void) {
 // Static model: recompute the (16-node) global matrices only when the root
 // moved this frame — the vertex data itself never changes.
 static void scenePoseRebuild(void) {
-    if (!sceneModel || !sceneTransforms || !sceneHaveBounds) {
+    if (sceneModels.empty()) {
         return;
     }
     const float4x4& root = scenePlacementRootMatrix();
     if (!scenePlacementRebuilt) {
         return;
     }
-    sceneModel->ComputeTransforms(sceneSceneIndex, *sceneTransforms, root);
+    for (auto& e : sceneModels) {
+        e.model->ComputeTransforms(e.sceneIndex, *e.transforms, root);
+    }
 }
 
 // gltfUpdate samples the active clip, blends it with a FROZEN snapshot of the
@@ -739,44 +748,137 @@ bool gltfLoadDiligent(const char* pakPath) {
     return true;
 }
 
+static bool sceneModelLoad(StaticSceneModel& entry, const char* pakPath) {
+    std::string error;
+    entry.model = loadModelBytes(pakPath, error, device, context);
+    if (!entry.model) {
+        utils::warn("gltf: scene model GLTF::Model failed for %s (%s)", pakPath, error.c_str());
+        return false;
+    }
+    entry.pakPath = pakPath;
+    entry.sceneIndex = std::min<Uint32>(entry.model->DefaultSceneId, (Uint32)entry.model->Scenes.size() - 1);
+    entry.transforms = std::make_unique<GLTF::ModelTransforms>();
+    entry.model->ComputeTransforms(entry.sceneIndex, *entry.transforms, float4x4::Identity());
+    entry.localBounds = entry.model->ComputeBoundingBox(entry.sceneIndex, *entry.transforms);
+    entry.haveBounds = true;
+    entry.bindings = pbrRenderer->CreateResourceBindings(*entry.model, frameAttribsCB);
+    entry.bindingsValid = true;
+    entry.shadowBoundGeneration = ~0u;
+    utils::info("gltf: scene model %s — %zu meshes, bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
+            pakPath, entry.model->Meshes.size(), entry.localBounds.Min.x, entry.localBounds.Min.y,
+            entry.localBounds.Min.z, entry.localBounds.Max.x, entry.localBounds.Max.y,
+            entry.localBounds.Max.z);
+    return true;
+}
+
 bool gltfSceneLoadDiligent(const char* pakPath) {
     if (!pbrRenderer) {
         utils::warn("gltf: not initialized");
         return false;
     }
 
-    sceneBindings.Clear();
-    sceneBindingsValid = false;
-    sceneModel.reset();
-    sceneTransforms.reset();
-    sceneHaveBounds = false;
+    for (auto& e : sceneModels) {
+        e.bindings.Clear();
+        e.model.reset();
+        e.transforms.reset();
+        e.haveBounds = false;
+    }
+    sceneModels.clear();
+    sceneModels.push_back(StaticSceneModel{});
+    bool ok = sceneModelLoad(sceneModels.back(), pakPath);
+    if (ok) {
+        scenePlacementDirty = true;
+        scenePlacementAnchor[0] = scenePlacementAnchor[1] = scenePlacementAnchor[2] = 0.0;
+        scenePlacementRebuilt = 0;
+    }
+    return ok;
+}
 
-    std::string error;
-    sceneModel = loadModelBytes(pakPath, error, device, context);
-    if (!sceneModel) {
-        utils::warn("gltf: scene model GLTF::Model failed for %s (%s)", pakPath, error.c_str());
+bool gltfPropsLoadDiligent(const char* pakPath) {
+    if (!pbrRenderer) {
+        utils::warn("gltf: not initialized");
         return false;
     }
+    sceneModels.push_back(StaticSceneModel{});
+    return sceneModelLoad(sceneModels.back(), pakPath);
+}
 
-    scenePakPath = pakPath;
-    sceneSceneIndex = std::min<Uint32>(sceneModel->DefaultSceneId, (Uint32)sceneModel->Scenes.size() - 1);
-    sceneTransforms = std::make_unique<GLTF::ModelTransforms>();
-    sceneModel->ComputeTransforms(sceneSceneIndex, *sceneTransforms, float4x4::Identity());
-    sceneLocalBounds = sceneModel->ComputeBoundingBox(sceneSceneIndex, *sceneTransforms);
-    sceneHaveBounds = true;
-    scenePlacementDirty = true;
-    scenePlacementAnchor[0] = scenePlacementAnchor[1] = scenePlacementAnchor[2] = 0.0;
-    scenePlacementRebuilt = 0;
-
-    sceneBindings = pbrRenderer->CreateResourceBindings(*sceneModel, frameAttribsCB);
-    sceneBindingsValid = true;
-    sceneShadowBoundGeneration = ~0u;  // next worldDraw refresh re-applies IBL + shadow SRV
-
-    utils::info("gltf: scene %s — %zu meshes, bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
-            pakPath, sceneModel->Meshes.size(), sceneLocalBounds.Min.x, sceneLocalBounds.Min.y,
-            sceneLocalBounds.Min.z, sceneLocalBounds.Max.x, sceneLocalBounds.Max.y,
-            sceneLocalBounds.Max.z);
-    return true;
+bool gltfPropsNodeGlobalTRSDiligent(const char* name, f32 pos[3], f32 quat[4], f32 scale[3]) {
+    for (size_t i = 1; i < sceneModels.size(); i++) {
+        const GLTF::Model& m = *sceneModels[i].model;
+        for (const auto& node : m.Nodes) {
+            if (node.Name != name) {
+                continue;
+            }
+            Diligent::float4x4 g = node.ComputeLocalTransform();
+            for (const GLTF::Node* parent = node.Parent; parent; parent = parent->Parent) {
+                g = parent->ComputeLocalTransform() * g;
+            }
+            const auto& mm = g.m;
+            pos[0] = (f32)mm[3][0];
+            pos[1] = (f32)mm[3][1];
+            pos[2] = (f32)mm[3][2];
+            const f32 c0[3] = {(f32)mm[0][0], (f32)mm[1][0], (f32)mm[2][0]};
+            const f32 c1[3] = {(f32)mm[0][1], (f32)mm[1][1], (f32)mm[2][1]};
+            const f32 c2[3] = {(f32)mm[0][2], (f32)mm[1][2], (f32)mm[2][2]};
+            scale[0] = sqrtf(c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2]);
+            scale[1] = sqrtf(c1[0] * c1[0] + c1[1] * c1[1] + c1[2] * c1[2]);
+            scale[2] = sqrtf(c2[0] * c2[0] + c2[1] * c2[1] + c2[2] * c2[2]);
+            if (scale[0] < 1e-9f || scale[1] < 1e-9f || scale[2] < 1e-9f) {
+                quat[0] = quat[1] = quat[2] = 0.0f;
+                quat[3] = 1.0f;
+                return true;
+            }
+            const f32 a[3] = {c0[0] / scale[0], c0[1] / scale[0], c0[2] / scale[0]};
+            f32 b[3] = {c1[0] / scale[1], c1[1] / scale[1], c1[2] / scale[1]};
+            const f32 d = b[0] * a[0] + b[1] * a[1] + b[2] * a[2];
+            b[0] -= d * a[0];
+            b[1] -= d * a[1];
+            b[2] -= d * a[2];
+            const f32 bl = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+            if (bl < 1e-9f) {
+                quat[0] = quat[1] = quat[2] = 0.0f;
+                quat[3] = 1.0f;
+                return true;
+            }
+            b[0] /= bl;
+            b[1] /= bl;
+            b[2] /= bl;
+            const f32 cc[3] = {
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0]};
+            const f32 r[9] = {a[0], b[0], cc[0], a[1], b[1], cc[1], a[2], b[2], cc[2]};
+            const f32 tr = r[0] + r[4] + r[8];
+            if (tr > 0.0f) {
+                const f32 s = sqrtf(tr + 1.0f) * 2.0f;
+                quat[3] = s * 0.25f;
+                quat[0] = (r[7] - r[5]) / s;
+                quat[1] = (r[2] - r[6]) / s;
+                quat[2] = (r[3] - r[1]) / s;
+            } else if (r[0] > r[4] && r[0] > r[8]) {
+                const f32 s = sqrtf(1.0f + r[0] - r[4] - r[8]) * 2.0f;
+                quat[0] = s * 0.25f;
+                quat[1] = (r[3] + r[1]) / s;
+                quat[2] = (r[6] + r[2]) / s;
+                quat[3] = (r[5] - r[7]) / s;
+            } else if (r[4] > r[8]) {
+                const f32 s = sqrtf(1.0f + r[4] - r[0] - r[8]) * 2.0f;
+                quat[0] = (r[1] + r[3]) / s;
+                quat[1] = s * 0.25f;
+                quat[2] = (r[7] + r[5]) / s;
+                quat[3] = (r[6] - r[2]) / s;
+            } else {
+                const f32 s = sqrtf(1.0f + r[8] - r[0] - r[4]) * 2.0f;
+                quat[0] = (r[2] + r[6]) / s;
+                quat[1] = (r[5] + r[7]) / s;
+                quat[2] = s * 0.25f;
+                quat[3] = (r[3] - r[1]) / s;
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 bool gltfPlaceAtDiligent(double x, double y, double z) {
@@ -869,11 +971,15 @@ void gltfIblUpdateDiligent(const f32 color[3], f32 intensity) {
     for (auto& srb : modelBindings.MaterialSRB) {
         pbrRenderer->SetIBLResourceViews(srb, irrSRV, pfSRV);
     }
-    for (auto& srb : sceneBindings.MaterialSRB) {
-        pbrRenderer->SetIBLResourceViews(srb, irrSRV, pfSRV);
+    size_t sceneSRBs = 0;
+    for (auto& e : sceneModels) {
+        for (auto& srb : e.bindings.MaterialSRB) {
+            pbrRenderer->SetIBLResourceViews(srb, irrSRV, pfSRV);
+        }
+        sceneSRBs += e.bindings.MaterialSRB.size();
     }
     utils::info("gltf: IBL set for %zu + %zu material SRB(s) (player + scene, %s)",
-            modelBindings.MaterialSRB.size(), sceneBindings.MaterialSRB.size(),
+            modelBindings.MaterialSRB.size(), sceneSRBs,
             engine::renderer::diligent::iblDiligentEnvName());
 }
 
@@ -1002,12 +1108,12 @@ bool gltfBoundingBoxDiligent(float min[3], float max[3]) {
 }
 
 bool gltfSceneBoundingBoxDiligent(float min[3], float max[3]) {
-    if (!sceneHaveBounds) {
+    if (sceneModels.empty()) {
         return false;
     }
     // Same re-anchoring as gltfBoundingBoxDiligent: the placed box is
     // anchor-relative, callers get absolute world coords.
-    const BoundBox placed = sceneLocalBounds.Transform(scenePlacementRootMatrix());
+    const BoundBox placed = sceneModels[0].localBounds.Transform(scenePlacementRootMatrix());
     f64 anchor[3];
     engine::renderer::diligent::diligentWorldAnchor(anchor);
     min[0] = (f32)(placed.Min.x + anchor[0]);
@@ -1057,33 +1163,33 @@ bool gltfGlbFindChunksDiligent(const std::vector<unsigned char>& bytes,
 }
 
 bool gltfSceneSurfaceHeightDiligent(float x, float z, float radius, float* outY) {
-    if (scenePakPath.empty()) {
+    if (sceneModels.empty()) {
         return false;
     }
     std::vector<unsigned char> bytes;
     std::string error;
-    if (!gltfReadModelBytesDiligent(scenePakPath.c_str(), bytes, error)) {
-        utils::warn("gltf: surface probe — cannot read %s (%s)", scenePakPath.c_str(), error.c_str());
+    if (!gltfReadModelBytesDiligent(sceneModels[0].pakPath.c_str(), bytes, error)) {
+        utils::warn("gltf: surface probe — cannot read %s (%s)", sceneModels[0].pakPath.c_str(), error.c_str());
         return false;
     }
     const unsigned char* jsonPtr = nullptr;
     size_t jsonSize = 0, binSize = 0;
     const unsigned char* binPtr = nullptr;
     if (!gltfGlbFindChunksDiligent(bytes, &jsonPtr, jsonSize, &binPtr, binSize)) {
-        utils::warn("gltf: surface probe — %s is not a GLB", scenePakPath.c_str());
+        utils::warn("gltf: surface probe — %s is not a GLB", sceneModels[0].pakPath.c_str());
         return false;
     }
 
     json_t* root = jsonParseN(reinterpret_cast<const char*>(jsonPtr), (u32)jsonSize);
     if (!root) {
-        utils::warn("gltf: surface probe — bad GLB JSON in %s", scenePakPath.c_str());
+        utils::warn("gltf: surface probe — bad GLB JSON in %s", sceneModels[0].pakPath.c_str());
         return false;
     }
     json_t* accessors = jsonGetArray(root, "accessors");
     json_t* bufferViews = jsonGetArray(root, "bufferViews");
     if (!json_is_array(accessors) || !json_is_array(bufferViews)) {
         jsonFree(root);
-        utils::warn("gltf: surface probe — GLB JSON lacks accessors/bufferViews (%s)", scenePakPath.c_str());
+        utils::warn("gltf: surface probe — GLB JSON lacks accessors/bufferViews (%s)", sceneModels[0].pakPath.c_str());
         return false;
     }
 
@@ -1164,7 +1270,7 @@ bool gltfSceneSurfaceHeightDiligent(float x, float z, float radius, float* outY)
     jsonFree(root);
     if (n33 < 3.0) {
         utils::warn("gltf: surface probe — no vertices within %.0f m of (%.0f, %.0f) in %s",
-                radius, (double)x, (double)z, scenePakPath.c_str());
+                radius, (double)x, (double)z, sceneModels[0].pakPath.c_str());
         return false;
     }
     double m[3][3] = {{n11, n12, n13}, {n12, n22, n23}, {n13, n23, n33}};
@@ -1344,10 +1450,8 @@ GLTF::ModelTransforms* worldTransforms(void) { return transforms.get(); }
 GLTF_PBR_Renderer* worldPbrRenderer(void) { return pbrRenderer.get(); }
 GLTF_PBR_Renderer::ModelResourceBindings* worldModelBindings(void) { return &modelBindings; }
 Uint32 worldSceneIndex(void) { return sceneIndex; }
-GLTF::Model* worldSceneModel(void) { return sceneModel.get(); }
-GLTF::ModelTransforms* worldSceneTransforms(void) { return sceneTransforms.get(); }
-GLTF_PBR_Renderer::ModelResourceBindings* worldSceneModelBindings(void) { return &sceneBindings; }
-Uint32 worldSceneModelSceneIndex(void) { return sceneSceneIndex; }
+GLTF::Model* worldSceneModel(void) { return sceneModels.empty() ? nullptr : sceneModels[0].model.get(); }
+GLTF::ModelTransforms* worldSceneTransforms(void) { return sceneModels.empty() ? nullptr : sceneModels[0].transforms.get(); }
 
 }
 
@@ -1420,18 +1524,25 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
     // active; otherwise the untextured PBR scene draw is the A/B fallback.
     // The prev-pose snapshot keeps updating either way (the A/B switch must
     // not stale the motion-vector reference).
-    if (scene) {
-        Diligent::ScopedDebugGroup terrainGroup(ctx, "terrain");
-        static GLTF::ModelTransforms prevScenePose;
-        if (!engine::renderer::diligent::splatTerrainDrawDiligent(ctx)) {
-            renderInfo.SceneIndex = worldSceneModelSceneIndex();
-            const GLTF::ModelTransforms* prev =
-                    prevScenePose.NodeGlobalMatrices.size() == sceneT->NodeGlobalMatrices.size() &&
-                            prevScenePose.Skins.size() == sceneT->Skins.size()
-                    ? &prevScenePose : nullptr;
-            pbr->Render(ctx, *scene, *sceneT, prev, renderInfo, worldSceneModelBindings());
+    if (!sceneModels.empty()) {
+        static std::vector<GLTF::ModelTransforms> prevPoses;
+        if (prevPoses.size() != sceneModels.size()) {
+            prevPoses.resize(sceneModels.size());
         }
-        prevScenePose = *sceneT;  // next frame's motion-vector reference
+        bool splatActive = engine::renderer::diligent::splatTerrainDrawDiligent(ctx);
+        for (size_t i = 0, n = sceneModels.size(); i < n; i++) {
+            StaticSceneModel& e = sceneModels[i];
+            if (!(i == 0 && splatActive)) {
+                Diligent::ScopedDebugGroup group(ctx, (i == 0) ? "terrain" : "props");
+                const GLTF::ModelTransforms* prev =
+                        prevPoses[i].NodeGlobalMatrices.size() == e.transforms->NodeGlobalMatrices.size() &&
+                                prevPoses[i].Skins.size() == e.transforms->Skins.size()
+                        ? &prevPoses[i] : nullptr;
+                renderInfo.SceneIndex = e.sceneIndex;
+                pbr->Render(ctx, *e.model, *e.transforms, prev, renderInfo, &e.bindings);
+            }
+            prevPoses[i] = *e.transforms;  // next frame's motion-vector reference
+        }
     }
     if (model) {
         Diligent::ScopedDebugGroup playerGroup(ctx, "player");
@@ -1539,12 +1650,12 @@ void gltfDestroyDiligent(void) {
     bindingsValid = false;
     transforms.reset();
     model.reset();
-    sceneBindings.Clear();
-    sceneBindingsValid = false;
-    sceneTransforms.reset();
-    sceneModel.reset();
-    sceneHaveBounds = false;
-    scenePakPath.clear();
+    for (auto& e : sceneModels) {
+        e.bindings.Clear();
+        e.model.reset();
+        e.transforms.reset();
+    }
+    sceneModels.clear();
     animPoseA.reset();
     animPoseB.reset();
     animSource.reset();

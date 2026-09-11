@@ -22,6 +22,14 @@ bool gltfSceneLoad(const char* pakPath) {
     return gltfSceneLoadDiligent(pakPath);
 }
 
+bool gltfPropsLoad(const char* pakPath) {
+    return gltfPropsLoadDiligent(pakPath);
+}
+
+bool gltfPropsNodeGlobalTRS(const char* name, f32 pos[3], f32 quat[4], f32 scale[3]) {
+    return gltfPropsNodeGlobalTRSDiligent(name, pos, quat, scale);
+}
+
 bool gltfSceneBoundingBox(f32 min[3], f32 max[3]) {
     return gltfSceneBoundingBoxDiligent(min, max);
 }

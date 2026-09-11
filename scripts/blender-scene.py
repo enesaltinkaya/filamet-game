@@ -6,6 +6,7 @@ import bpy.ops
 from idprop.types import IDPropertyGroup
 
 argv = sys.argv
+argv = argv[argv.index("--") + 1:]  # get all args after "--"
 outfile = argv[0]
 
 # gltfpack breaks armatures that are far from the world origin.

@@ -20,6 +20,8 @@ bool gltfGlbFindChunksDiligent(const std::vector<unsigned char>& bytes,
 bool gltfInitDiligent(void);
 bool gltfLoadDiligent(const char* pakPath);
 bool gltfSceneLoadDiligent(const char* pakPath);
+bool gltfPropsLoadDiligent(const char* pakPath);
+bool gltfPropsNodeGlobalTRSDiligent(const char* name, f32 pos[3], f32 quat[4], f32 scale[3]);
 bool gltfSceneBoundingBoxDiligent(float min[3], float max[3]);
 bool gltfSceneSurfaceHeightDiligent(float x, float z, float radius, float* outY);
 bool gltfPlaceAtDiligent(double x, double y, double z);
