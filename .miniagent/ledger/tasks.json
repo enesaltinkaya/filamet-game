@@ -2,8 +2,8 @@
  {
   "id": 1,
   "desc": "Build + boot sweep: ./scripts/build.sh (log must contain 'zipping data/pak_1' \u2014 shader edits force the repack; if absent, force repack via RELEASE=1 BIN_DIR=$(pwd)/../build/c-game ../scripts/data.sh from c-game/ and same for c-engine, then rebuild). Then per mode N in 0,1 first (gate: mode 1 must show a dark shadow region under player in overlay, mode 0 must not \u2014 else stop, this is caster/cascade-pick/repack, reframe): TERM=xterm-256color ENGINE_AUTOTEST=enter ENGINE_HIDDEN_WINDOW=1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json ENGINE_SHADOW_MODE=N ENGINE_TELEPORT=180,640,180 ENGINE_SPLAT_SHADOW_DEBUG=2 ENGINE_SCREENSHOT=/tmp/shmN.jpg ./build/c-game/c-game; check 'shadow: mode N' log line ('shadow: disabled' for 0), zero VUIDs, shot contains streamed-in terrain (if empty ground, relaunch once). If gate passes, sweep N=2,3,4 the same way -> /tmp/shm2..4.jpg.",
-  "status": "pending",
-  "result": null
+  "status": "done",
+  "result": "Gate FAILED: mode 1 shows no shadow (mode 0/1 frames pixel-identical, 'shadow-off' branch); repack and build-staleness ruled out; zero VUIDs."
  },
  {
   "id": 2,
@@ -13,7 +13,7 @@
  },
  {
   "id": 3,
-  "desc": "Dispatch only if task 2 flagged a mode: RenderDoc capture (ENGINE_RENDERDOC_CAPTURE=1 via ./scripts/run.sh renderdoc) + scripts/rdc.py dump of the 'shadow' and 'world' passes; verify atlas layout per mode (VSM/EVSM2 RG32, EVSM4 RGBA32, non-trivial moments) to split generator vs receiver; fix the splat PS branch or ShadowDiligent.cpp fVSMBias/fEVSM exponents (one coherent change), rebuild, re-run task 1 sweep for that mode only",
+  "desc": "Refocused (PCF baseline broken, before any filterable math): first cheap confirm with ENGINE_SHADOW_READBACK=frameN (per-cascade depth min/max/zero-fraction + player NDC) \u2014 is cascade 0's atlas holding the player? Then RenderDoc mode-1 capture via ./scripts/run.sh renderdoc + scripts/rdc.py dump shadow (caster drew, player depth in atlas?) vs dump world (which splat-PS overlay branch the ground is in, ShadowMapIndex value; splatShadowsOn() gate at SplatTerrainDiligent.cpp:966 vs per-pixel cascade pick f4CascadeCamSpaceZEnd). Split: (a) no player in atlas -> gltfDiligentShadowDraw no-op/box/bias; (b) atlas has player, ground in ShadowIndex<0 branch -> receiver gate/cascade-pick in splat PS; (c) ground in PCF branch but no dark region -> PCF compare/bias math. One coherent fix, rebuild (data repack! check 'zipping' log line), re-run mode 1 gate (overlay shot /tmp/shm1b.jpg must now show dark region; mode 0 still none), then proceed to task 2 for the 2-4 sweep. Useful envs: ENGINE_SPLAT_SHADOW_DEBUG=3, ENGINE_SHADOW_NO_PLAYER. Diagnostic runs: same recipe as task 1 (TERM=xterm-256color ENGINE_AUTOTEST=enter ENGINE_HIDDEN_WINDOW=1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json ENGINE_SHADOW_MODE=1 ENGINE_TELEPORT=180,640,180).",
   "status": "pending",
   "result": null
  },

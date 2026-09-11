@@ -1,3 +1,3 @@
-# task
+# Task
 
-im only seeing player shadow on the ground when pcf is active, and not other shadow methods. can you fix please? we had them working on azgaar map rendering before.
+all types of shadows were working fine on azgaar, now we switched terrain rendering. shadows are not working correctly. check diligent samples, tutorials and Radient as well.

@@ -1575,6 +1575,45 @@ bool splatTerrainDrawDiligent(Diligent::IDeviceContext* ctx) {
         context->MapBuffer(splatFrameCB, MAP_WRITE, MAP_FLAG_DISCARD, dst);
         std::memcpy(dst, &splatFrameStaging, sizeof(splatFrameStaging));
         context->UnmapBuffer(splatFrameCB, MAP_WRITE);
+        {
+            static const char* slotEnv = getenv("ENGINE_SPLAT_SLOT_DUMP");
+            if (slotEnv) {
+                const float* f = (const float*)dst;
+                const size_t n = sizeof(SplatFrameStaging) / 4;
+                // Dump only the shadow tail (sVSMParams / sTail / f4ShadowFade)
+                // — the region that feeds warpDepthEVSM in the splat PS.
+                const size_t lo = n - 32;
+                for (size_t i = lo; i < n; i++)
+                    utils::info("splat slot[%zu] %.9g", i, (double)f[i]);
+            }
+        }
+        static bool cbDumped = false;
+        if (!cbDumped) {
+            static const char* cbEnv = getenv("ENGINE_SPLAT_CB_DUMP");
+            if (cbEnv) {
+                cbDumped = true;
+                const Diligent::HLSL::ShadowMapAttribs& sa = splatFrameStaging.shadowAttribs;
+                utils::info("splat cb tail: bias %.9g bleed %.9g posExp %.9g negExp %.9g bIs32 %d fixedFilter %d worldSize %.9g fade (%g %g %g %g)",
+                            (double)sa.fVSMBias,
+                            (double)sa.fVSMLightBleedingReduction,
+                            (double)sa.fEVSMPositiveExponent,
+                            (double)sa.fEVSMNegativeExponent,
+                            (int)sa.bIs32BitEVSM,
+                            sa.iFixedFilterSize,
+                            (double)sa.fFilterWorldSize,
+                            (double)splatFrameStaging.shadowFade.x,
+                            (double)splatFrameStaging.shadowFade.y,
+                            (double)splatFrameStaging.shadowFade.z,
+                            (double)splatFrameStaging.shadowFade.w);
+                const float* b = (const float*)&sa;
+                char hex[161] = {0};
+                for (int i = 0; i < 40; i++)
+                    snprintf(hex + 2 * i, 3, "%02x", (unsigned char)b[(sizeof(sa) / 4 - 10) + i]);
+                utils::info("splat cb tail bytes (last 40 floats from fVSMBias): %s", hex);
+                for (int i = (int)(sizeof(sa) / 4) - 10; i < (int)(sizeof(sa) / 4); i++)
+                    utils::info("splat cb tail float[%d] %.9g", i, (double)b[i]);
+            }
+        }
     }
     splatBindDynamicResources();
 

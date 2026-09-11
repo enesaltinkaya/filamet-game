@@ -127,9 +127,11 @@ bool splatTerrainDrawDiligent(Diligent::IDeviceContext* ctx);
 // blender-terrain.md "terrain in the CSM shadow pass"): the shared gate —
 // true when the caster must draw with this frame's world splat pass (the
 // world pass' preconditions, SplatTerrainDiligent.cpp: ENGINE_SPLAT_TERRAIN
-// not "0" + terrain loaded + the TAA offscreen chain up, plus the PCF-mode
-// shadow receive splatShadowsOn — the VSM/EVSM atlas stores variance, not
-// depth, so a caster into it would be pure noise).
+// not "0" + terrain loaded + the TAA offscreen chain up, plus splatShadowsOn
+// = shadowDiligentActive && mode >= 1). The caster draws in EVERY shadow
+// mode (1-4), not just PCF: DiligentFX ConvertToFilterable derives the
+// VSM/EVSM variance atlas from this raw D32 depth, so casting only in PCF
+// would leave VSM/EVSM terrain with no geometry at all.
 bool splatTerrainShadowDrawsDiligent(void);
 // The depth-only re-render of the loaded chunks into one cascade's DSV
 // (mirrors gltfDiligentShadowDraw): lazily compiles

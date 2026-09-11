@@ -119,7 +119,13 @@ cbuffer cbSplatFrame
     float4   sNumCascades;         // iNumCascades fNumCascades bVisualizeCascades bVisualizeShadowing
     float4   sBiasParams;          // fReceiverPlaneDepthBiasClamp fFixedDepthBias fCascadeTransitionRegion iMaxAnisotropy
     float4   sVSMParams;           // fVSMBias fVSMLightBleedingReduction fEVSMPositiveExponent fEVSMNegativeExponent
-    float4   sTail;                // bIs32BitEVSM iFixedFilterSize fFilterWorldSize fDummy
+    // sTail: the C++ ShadowMapAttribs tail is a mix of int/BOOL and float.
+    // Declare each with its real type so the memcpy'd bit patterns read back
+    // correctly (a float4 mirror turns the int/BOOL fields into denormals).
+    int      bIs32BitEVSM;         // sTail.x  (BOOL: 1 = 32-bit EVSM atlas)
+    int      iFixedFilterSize;     // sTail.y  (int: poisson tap count)
+    float    fFilterWorldSize;     // sTail.z  (float)
+    float    fShadowDebugMode;     // sTail.w  (fDummy: raw f32 debug gate, 0 = off)
     float4   f4ShadowFade;         // x = tier shadow distance in m (0 = no fade)
 };
 
@@ -387,7 +393,9 @@ float chebyshevUpperBound(float2 moments, float mean, float minVariance)
 
 float2 warpDepthEVSM(float depth)
 {
-    float  maxExp = (sTail.x > 0.5) ? 42.0 : 5.54;
+    // bIs32BitEVSM is a BOOL (int) in the C++ ShadowMapAttribs (bit 0x1 = true);
+    // the mirror must read it as an int, not a float (float read = denormal ~0).
+    float  maxExp = (bIs32BitEVSM > 0) ? 42.0 : 5.54;
     float2 ex     = min(sVSMParams.zw, float2(maxExp, maxExp));
     float  d      = 2.0 * depth - 1.0;
     return float2(exp(ex.x * d), -exp(-ex.y * d));
@@ -643,17 +651,17 @@ PSOutput main(PSSplatIn In)
         IBL += Punctual;
     }
 
-    if (sTail.w > 0.5)
+    if (fShadowDebugMode > 0.5)
     {
         if (ShadowIndex < 0.0)
             IBL = float3(0.1, 0.1, 0.5);
-        else if (sTail.w < 1.5)
+        else if (fShadowDebugMode < 1.5)
             IBL = (dbgCascade == 0) ? float3(1.0, 0.0, 0.0)
                 : (dbgCascade == 1) ? float3(0.0, 1.0, 0.0)
                 : float3(0.0, 0.3, 1.0);
-        else if (sTail.w < 2.5)
+        else if (fShadowDebugMode < 2.5)
             IBL = float3(Attenuation, Attenuation, 0.0);
-        else if (sTail.w < 3.5)
+        else if (fShadowDebugMode < 3.5)
             IBL = (dbgRaw < 0.0) ? float3(1.0, 0.0, 1.0) : float3(1.0 - dbgRaw, dbgRaw, 0.0);
         else
             IBL = float3(frac(dbgUV), 0.0);

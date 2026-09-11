@@ -280,6 +280,163 @@ namespace engine::renderer::diligent {
             sa.fFixedDepthBias =
                 (tier.resolution >= 2048 ? 0.0025f : 0.005f) * sa.Cascades[0].f4LightSpaceScale.z;
 
+            // ENGINE_SHADOW_ORACLE=frameN: one-shot CPU check that the caster
+            // matrix (the raw GetCascadeTransform the depth pass renders with)
+            // and the receiver reconstruction (mWorldToLightView + cascade
+            // scale/scaled-bias, byte-for-byte the splat PS's per-pixel formula)
+            // land on the same NDC point for known render-space points per
+            // cascade. frameN = Nth frame the pass is ready. On mismatch the
+            // matrix bytes (hex) and full-precision floats are logged.
+            {
+                static const u64 oracleAt = [] {
+                    const char* env = getenv("ENGINE_SHADOW_ORACLE");
+                    return env ? strtoull(env, nullptr, 10) : 0;
+                }();
+                static u64 oracleCounter = 0;
+                static bool oracleDone = false;
+                oracleCounter++;
+                if (!oracleDone && oracleAt && oracleCounter >= oracleAt && hasPlayer) {
+                    struct OPt {
+                        const char* name;
+                        float x, y, z;
+                    };
+                    OPt pts[4];
+                    int np = 0;
+                    const float prx = (f32)(ppos[0] - an[0]);
+                    const float pry = (f32)(ppos[1] - an[1]);
+                    const float prz = (f32)(ppos[2] - an[2]);
+                    pts[np++] = {"feet", prx, pry, prz};
+                    pts[np++] = {"head", prx, pry + 1.8f, prz};
+                    if (const SplatTerrain* st = splatTerrainDiligent()) {
+                        const SplatChunk* best = nullptr;
+                        float bestD            = 1e30f;
+                        for (const auto& ch : st->chunks) {
+                            const float cxp = (ch.aabbMin[0] + ch.aabbMax[0]) * 0.5f;
+                            const float cyp = (ch.aabbMin[1] + ch.aabbMax[1]) * 0.5f;
+                            const float czp = (ch.aabbMin[2] + ch.aabbMax[2]) * 0.5f;
+                            const float dx  = (f32)ppos[0] - cxp;
+                            const float dy  = (f32)ppos[1] - cyp;
+                            const float dz  = (f32)ppos[2] - czp;
+                            const float d   = dx * dx + dy * dy + dz * dz;
+                            if (d < bestD) {
+                                bestD = d;
+                                best  = &ch;
+                            }
+                        }
+                        if (best) {
+                            const float cxp = (best->aabbMin[0] + best->aabbMax[0]) * 0.5f;
+                            const float cyp = (best->aabbMin[1] + best->aabbMax[1]) * 0.5f;
+                            const float czp = (best->aabbMin[2] + best->aabbMax[2]) * 0.5f;
+                            const f32 cpx  = ppos[0] < cxp ? best->aabbMin[0] : best->aabbMax[0];
+                            const f32 cpy  = ppos[1] < cyp ? best->aabbMin[1] : best->aabbMax[1];
+                            const f32 cpz  = ppos[2] < czp ? best->aabbMin[2] : best->aabbMax[2];
+                            pts[np++] = {"chunk corner", (f32)(cpx - an[0]), (f32)(cpy - an[1]), (f32)(cpz - an[2])};
+                        }
+                    }
+                    {
+                        float z = tier.distanceM * 0.6f;
+                        if (z < 40.0f) z = 40.0f;
+                        if (z > 60.0f) z = 60.0f;
+                        pts[np++] = {"view axis", 0.0f, 0.0f, z};
+                    }
+
+                    utils::info(
+                        "shadow oracle: frame %llu mode %d res %u, %u cascades, tier %.0f m",
+                        (unsigned long long)oracleCounter,
+                        curMode,
+                        tier.resolution,
+                        (unsigned)tier.cascades,
+                        (double)tier.distanceM);
+                    const Diligent::float4x4& w2l = sa.mWorldToLightView;
+                    const float res               = (float)tier.resolution;
+                    int failMask                   = 0;
+                    for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
+                        const auto& ca   = sa.Cascades[c];
+                        const auto& w2lp = mgr.GetCascadeTransform(c).WorldToLightProjSpace;
+                        for (int pi = 0; pi < np; pi++) {
+                            const OPt& p = pts[pi];
+                            // Caster: standard column-vector transform by the raw
+                            // (untransposed) matrix.
+                            const float ccx = w2lp._11 * p.x + w2lp._21 * p.y + w2lp._31 * p.z + w2lp._41;
+                            const float ccy = w2lp._12 * p.x + w2lp._22 * p.y + w2lp._32 * p.z + w2lp._42;
+                            const float ccz = w2lp._13 * p.x + w2lp._23 * p.y + w2lp._33 * p.z + w2lp._43;
+                            const float ccw = w2lp._14 * p.x + w2lp._24 * p.y + w2lp._34 * p.z + w2lp._44;
+                            // Receiver: row-vector math on the transposed-stored
+                            // mWorldToLightView + the cascade's scale/scaled-bias —
+                            // the splat_terrain_ps formula, w == 1 (ortho).
+                            const float lvx = p.x * w2l._11 + p.y * w2l._12 + p.z * w2l._13 + w2l._14;
+                            const float lvy = p.x * w2l._21 + p.y * w2l._22 + p.z * w2l._23 + w2l._24;
+                            const float lvz = p.x * w2l._31 + p.y * w2l._32 + p.z * w2l._33 + w2l._34;
+                            const float rxn = lvx * ca.f4LightSpaceScale.x + ca.f4LightSpaceScaledBias.x;
+                            const float ryn = lvy * ca.f4LightSpaceScale.y + ca.f4LightSpaceScaledBias.y;
+                            const float rzn = lvz * ca.f4LightSpaceScale.z + ca.f4LightSpaceScaledBias.z;
+                            bool bad = false;
+                            if (ccw == 0.0f) {
+                                bad = true;
+                            } else {
+                                const float iw  = 1.0f / ccw;
+                                const float czn = ccz * iw;
+                                const float cuv[2] = {0.5f + 0.5f * ccx * iw, 0.5f - 0.5f * ccy * iw};
+                                const float ruv[2] = {0.5f + 0.5f * rxn, 0.5f - 0.5f * ryn};
+                                const float duvx = fabsf(cuv[0] - ruv[0]) * res;
+                                const float duvy = fabsf(cuv[1] - ruv[1]) * res;
+                                const float dz   = fabsf(czn - rzn);
+                                // The receiver only queries in-box pixels (the
+                                // splat PS clamps + skips out-of-box), so the
+                                // criteria only bind there: far points live in
+                                // f32 precision where the two rounding orders
+                                // legitimately diverge.
+                                const bool inBox = cuv[0] >= -0.01f && cuv[0] <= 1.01f &&
+                                                   cuv[1] >= -0.01f && cuv[1] <= 1.01f &&
+                                                   czn >= -0.01f && czn <= 1.01f;
+                                bad = inBox && (duvx >= 2.0f || duvy >= 2.0f || dz >= 1e-4f);
+                                utils::info(
+                                    "shadow oracle: c%u %s caster uv(%.5f %.5f) z %.6f recv uv(%.5f %.5f) z "
+                                    "%.6f d %.2f/%.2f tex dz %.2e %s",
+                                    c,
+                                    p.name,
+                                    cuv[0],
+                                    cuv[1],
+                                    czn,
+                                    ruv[0],
+                                    ruv[1],
+                                    rzn,
+                                    duvx,
+                                    duvy,
+                                    dz,
+                                    bad ? "FAIL" : (inBox ? "ok" : "out-of-box"));
+                            }
+                            if (bad) {
+                                failMask |= 1 << c;
+                                utils::info("shadow oracle: c%u %s FAIL (caster w %f)", c, p.name, ccw);
+                            }
+                        }
+                    }
+                    if (failMask == 0) {
+                        utils::info("shadow oracle: PASS — caster and receiver agree on all points/cascades");
+                    } else {
+                        utils::info("shadow oracle: MISMATCH (cascade bits %x) — matrix dump:", failMask);
+                        auto dumpMat = [](const char* label, const void* p, int nf) {
+                            const unsigned char* b = reinterpret_cast<const unsigned char*>(p);
+                            char hex[257] = {0};
+                            for (int i = 0; i < nf * 4; i++) snprintf(hex + 2 * i, 3, "%02x", b[i]);
+                            const float* f = reinterpret_cast<const float*>(p);
+                            utils::info("shadow oracle:   %s bytes: %s", label, hex);
+                            for (int i = 0; i < nf; i++)
+                                utils::info("shadow oracle:   %s[%d] %.9g", label, i, (double)f[i]);
+                        };
+                        for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
+                            if (!(failMask & (1 << c))) continue;
+                            dumpMat("casterWorldToLightProj", &mgr.GetCascadeTransform(c).WorldToLightProjSpace, 16);
+                            dumpMat("receiverWorldToLightView", &sa.mWorldToLightView, 16);
+                            dumpMat("cascadeScale", &sa.Cascades[c].f4LightSpaceScale, 4);
+                            dumpMat("cascadeScaledBias", &sa.Cascades[c].f4LightSpaceScaledBias, 4);
+                        }
+                    }
+                    oracleDone = true;
+                }
+            }
+
             // PBR (glTF) receiver: the player is one small receiver, so the
             // per-pixel cascade pick the runtime receivers get collapses to a
             // per-frame CPU pick: the cascade whose camera-space z range covers the
@@ -598,6 +755,339 @@ namespace engine::renderer::diligent {
                                 utils::warn("shadow readback: map failed");
                             }
                             ctx->UnmapTextureSubresource(staging, 0, 0);
+                        }
+                    }
+                }
+            }
+
+            // ENGINE_SHADOW_EVSM=frameN: one-shot CPU deep-dive on the filterable
+            // (VSM/EVSM) atlas — per-cascade moment stats plus, per known point,
+            // the receiver warpDepthEVSM value vs the atlas moments (Chebyshev as
+            // the PS computes it) and the moments re-derived from the RAW depth
+            // atlas on the CPU, so a zero-moment (converter) fault is separated
+            // from a receiver-convention fault. ENGINE_EVSM_DUMP=path writes a
+            // log10(R) PGM per cascade slice.
+            {
+                static const u64 evsmAt = [] {
+                    const char* env = getenv("ENGINE_SHADOW_EVSM");
+                    return env ? strtoull(env, nullptr, 10) : 0;
+                }();
+                static u64 evsmCounter = 0;
+                static bool evsmDone = false;
+                evsmCounter++;
+                if (!evsmDone && evsmAt && evsmCounter >= evsmAt &&
+                    (curMode == 2 || curMode == 3 || curMode == 4)) {
+                    evsmDone = true;
+                    const Diligent::ShadowMapAttribs& sa = lightAttribs.ShadowAttribs;
+                    const ShadowQualityTier& tier =
+                        kQualityTiers[curQuality < 0 ? 0 : (curQuality > 2 ? 2 : curQuality)];
+                    double ppos[3] = {0.0, 0.0, 0.0};
+                    double an[3]  = {0.0, 0.0, 0.0};
+                    const bool hasPlayer = engine::playerGetFootPos(ppos);
+                    Diligent::ITextureView* fltSRV = mgr.GetFilterableSRV();
+                    Diligent::ITextureView* rawSRV = mgr.GetSRV();
+                    if (!fltSRV || !rawSRV) {
+                        utils::warn("evsm probe: no SRVs");
+                        return;
+                    }
+                    Diligent::ITexture* fltTex = fltSRV->GetTexture();
+                    Diligent::ITexture* rawTex = rawSRV->GetTexture();
+                    const Diligent::TextureDesc& fd = fltTex->GetDesc();
+                    const Diligent::TextureDesc& rd = rawTex->GetDesc();
+                    const int fpt = (fd.Format == Diligent::TEX_FORMAT_RGBA32_FLOAT) ? 4 : 2;
+                    utils::info(
+                        "evsm probe: frame %llu mode %d raw fmt %d flt fmt %d (%d floats/texel) "
+                        "exp (pos %.1f neg %.1f) bIs32 %d fixedFilter %d vsmBias %.3g",
+                        (unsigned long long)evsmCounter,
+                        curMode,
+                        (int)rd.Format,
+                        (int)fd.Format,
+                        fpt,
+                        (double)sa.fEVSMPositiveExponent,
+                        (double)sa.fEVSMNegativeExponent,
+                        (int)sa.bIs32BitEVSM,
+                        sa.iFixedFilterSize,
+                        (double)sa.fVSMBias);
+                    struct SliceData {
+                        bool ok = false;
+                        Diligent::RefCntAutoPtr<Diligent::ITexture> staging;
+                        Diligent::MappedTextureSubresource mapped;
+                        u32 w = 0, h = 0;
+                        size_t stride = 0;
+                        const float* data = nullptr;
+                    };
+                    SliceData rawSlice[8], fltSlice[8];
+                    auto copySlice = [&](Diligent::ITexture* src,
+                                         const Diligent::TextureDesc& sd,
+                                         Diligent::RESOURCE_STATE fromState,
+                                         int ci,
+                                         SliceData& out) -> bool {
+                        if (ci < 0 || ci >= (int)sd.ArraySize) return false;
+                        Diligent::TextureDesc stg = sd;
+                        stg.Name         = "evsm probe staging";
+                        stg.Usage        = Diligent::USAGE_STAGING;
+                        stg.BindFlags    = Diligent::BIND_NONE;
+                        stg.CPUAccessFlags = Diligent::CPU_ACCESS_READ;
+                        stg.MipLevels    = 1;
+                        stg.ArraySize    = 1;
+                        device->CreateTexture(stg, nullptr, &out.staging);
+                        if (out.staging == nullptr) {
+                            return false;
+                        }
+                        out.w = sd.Width;
+                        out.h = sd.Height;
+                        Diligent::StateTransitionDesc tc{
+                            src, fromState, Diligent::RESOURCE_STATE_COPY_SOURCE,
+                            Diligent::STATE_TRANSITION_FLAG_UPDATE_STATE};
+                        ctx->TransitionResourceStates(1, &tc);
+                        Diligent::CopyTextureAttribs cp(src, Diligent::RESOURCE_STATE_TRANSITION_MODE_NONE,
+                                                        out.staging, Diligent::RESOURCE_STATE_TRANSITION_MODE_NONE);
+                        cp.SrcSlice = (Diligent::Uint32)ci;
+                        ctx->CopyTexture(cp);
+                        Diligent::StateTransitionDesc back{src, Diligent::RESOURCE_STATE_COPY_SOURCE,
+                                                          fromState, Diligent::STATE_TRANSITION_FLAG_UPDATE_STATE};
+                        ctx->TransitionResourceStates(1, &back);
+                        ctx->WaitForIdle();
+                        ctx->MapTextureSubresource(out.staging, 0, 0, Diligent::MAP_READ,
+                                                  Diligent::MAP_FLAG_NONE, nullptr, out.mapped);
+                        if (!out.mapped.pData) {
+                            return false;
+                        }
+                        out.stride = out.mapped.Stride;
+                        out.data   = (const float*)out.mapped.pData;
+                        out.ok     = true;
+                        return true;
+                    };
+                    const int nCas = sa.iNumCascades;
+                    for (int ci = 0; ci < nCas; ci++) {
+                        if (!copySlice(rawTex, rd, Diligent::RESOURCE_STATE_DEPTH_WRITE, ci, rawSlice[ci]))
+                            utils::warn("evsm probe: raw slice %d copy failed", ci);
+                        if (!copySlice(fltTex, fd, Diligent::RESOURCE_STATE_RENDER_TARGET, ci, fltSlice[ci]))
+                            utils::warn("evsm probe: filterable slice %d copy failed", ci);
+                    }
+                    if (hasPlayer) diligentWorldAnchor(an);
+                    struct EPt {                        const char* name;
+                        float x, y, z;
+                    };
+                    EPt pts[4];
+                    int np = 0;
+                    if (hasPlayer) {
+                        const float px = (f32)(ppos[0] - an[0]);
+                        const float py = (f32)(ppos[1] - an[1]);
+                        const float pz = (f32)(ppos[2] - an[2]);
+                        pts[np++] = {"feet", px, py, pz};
+                        pts[np++] = {"head", px, py + 1.8f, pz};
+                    }
+                    if (const SplatTerrain* st = splatTerrainDiligent()) {
+                        const SplatChunk* best = nullptr;
+                        float bestD = 1e30f;
+                        for (const auto& ch : st->chunks) {
+                            const float cxp = (ch.aabbMin[0] + ch.aabbMax[0]) * 0.5f;
+                            const float cyp = (ch.aabbMin[1] + ch.aabbMax[1]) * 0.5f;
+                            const float czp = (ch.aabbMin[2] + ch.aabbMax[2]) * 0.5f;
+                            const float dx = (f32)ppos[0] - cxp;
+                            const float dy = (f32)ppos[1] - cyp;
+                            const float dz = (f32)ppos[2] - czp;
+                            const float d = dx * dx + dy * dy + dz * dz;
+                            if (d < bestD) {
+                                bestD = d;
+                                best = &ch;
+                            }
+                        }
+                        if (best) {
+                            const float cxp = (best->aabbMin[0] + best->aabbMax[0]) * 0.5f;
+                            const float cyp = (best->aabbMin[1] + best->aabbMax[1]) * 0.5f;
+                            const float czp = (best->aabbMin[2] + best->aabbMax[2]) * 0.5f;
+                            const f32 cpx = ppos[0] < cxp ? best->aabbMin[0] : best->aabbMax[0];
+                            const f32 cpy = ppos[1] < cyp ? best->aabbMin[1] : best->aabbMax[1];
+                            const f32 cpz = ppos[2] < czp ? best->aabbMin[2] : best->aabbMax[2];
+                            pts[np++] = {"chunk corner", (f32)(cpx - an[0]), (f32)(cpy - an[1]), (f32)(cpz - an[2])};
+                        }
+                    }
+                    {
+                        float z = tier.distanceM * 0.6f;
+                        if (z < 40.0f) z = 40.0f;
+                        if (z > 60.0f) z = 60.0f;
+                        pts[np++] = {"view axis", 0.0f, 0.0f, z};
+                    }
+                    // Same warp the PS's warpDepthEVSM runs (exponents clamped
+                    // to 42 for the 32-bit atlas, bIs32BitEVSM is 1 here).
+                    const float exP = std::min(sa.fEVSMPositiveExponent, 42.0f);
+                    const float exN = std::min(sa.fEVSMNegativeExponent, 42.0f);
+                    auto warp1 = [&](float depth) { return std::exp(exP * (2.0f * depth - 1.0f)); };
+                    auto warp2 = [&](float depth) { return -std::exp(-exN * (2.0f * depth - 1.0f)); };
+                    const float bleed = sa.fVSMLightBleedingReduction;
+                    auto cheb = [&](float m1, float m2, float mean, float minVar) {
+                        float var = std::max(m2 - m1 * m1, minVar);
+                        float d   = mean - m1;
+                        float p    = var / (var + d * d);
+                        if (bleed > 0.0f)
+                            p = std::clamp((p - bleed) / (1.0f - bleed), 0.0f, 1.0f);
+                        return mean <= m1 ? 1.0f : std::min(p, 1.0f);
+                    };
+                    auto sampleWeight = [](int x, float R) {
+                        float lo = std::max((float)x, std::min(0.5f - R, 0.0f));
+                        float hi = std::min((float)x + 1.0f, std::max(0.5f + R, 1.0f));
+                        return hi - lo;
+                    };
+                    for (int ci = 0; ci < nCas; ci++) {
+                        if (rawSlice[ci].ok) {
+                            float mn = 2.0f, mx = -1.0f, sum = 0.0f;
+                            u32 zeros = 0;
+                            const u32 n = rawSlice[ci].w * rawSlice[ci].h;
+                            for (u32 y = 0; y < rawSlice[ci].h; y++) {
+                                const float* row = (const float*)((const u8*)rawSlice[ci].data + (size_t)y * rawSlice[ci].stride);
+                                for (u32 x = 0; x < rawSlice[ci].w; x++) {
+                                    float d = row[x];
+                                    mn = std::min(mn, d);
+                                    mx = std::max(mx, d);
+                                    sum += d;
+                                    if (d == 0.0f) zeros++;
+                                }
+                            }
+                            utils::info("evsm probe: c%d raw depth min %.6f max %.6f mean %.6f zeros %.1f%%",
+                                        ci, (double)mn, (double)mx, (double)(sum / (double)n),
+                                        100.0 * zeros / (double)n);
+                        }
+                        if (fltSlice[ci].ok) {
+                            float rMin = 1e30f, rMax = -1e30f, rSum = 0.0f;
+                            float gMin = 1e30f, gMax = -1e30f, gSum = 0.0f;
+                            float bMin = 1e30f, bMax = -1e30f, aMin = 1e30f, aMax = -1e30f;
+                            u32 zeros = 0;
+                            const u32 n = fltSlice[ci].w * fltSlice[ci].h;
+                            for (u32 y = 0; y < fltSlice[ci].h; y++) {
+                                const float* row = (const float*)((const u8*)fltSlice[ci].data + (size_t)y * fltSlice[ci].stride);
+                                for (u32 x = 0; x < fltSlice[ci].w; x++) {
+                                    const float* t = row + (size_t)x * fpt;
+                                    if (t[0] == 0.0f && t[1] == 0.0f) zeros++;
+                                    rMin = std::min(rMin, t[0]); rMax = std::max(rMax, t[0]); rSum += t[0];
+                                    gMin = std::min(gMin, t[1]); gMax = std::max(gMax, t[1]); gSum += t[1];
+                                    if (fpt == 4) {
+                                        bMin = std::min(bMin, t[2]); bMax = std::max(bMax, t[2]);
+                                        aMin = std::min(aMin, t[3]); aMax = std::max(aMax, t[3]);
+                                    }
+                                }
+                            }
+                            utils::info(
+                                "evsm probe: c%d filterable zeros %.1f%% R(mean %.6g min %.6g max %.6g) "
+                                "G(mean %.6g min %.6g max %.6g)",
+                                ci, 100.0 * zeros / (double)n, (double)(rSum / (double)n),
+                                (double)rMin, (double)rMax, (double)(gSum / (double)n), (double)gMin,
+                                (double)gMax);
+                            if (fpt == 4)
+                                utils::info("evsm probe: c%d filterable B(min %.6g max %.6g) A(min %.6g max %.6g)",
+                                            ci, (double)bMin, (double)bMax, (double)aMin, (double)aMax);
+                        }
+                    }
+                    if (const char* dumpPath = getenv("ENGINE_EVSM_DUMP")) {
+                        for (int ci = 0; ci < nCas; ci++) {
+                            if (!fltSlice[ci].ok) continue;
+                            char pathBuf[512];
+                            snprintf(pathBuf, sizeof(pathBuf), "%s.%d", dumpPath, ci);
+                            FILE* f = fopen(pathBuf, "wb");
+                            if (!f) continue;
+                            fprintf(f, "P5\n%u %u\n255\n", fltSlice[ci].w, fltSlice[ci].h);
+                            for (u32 y = 0; y < fltSlice[ci].h; y++) {
+                                const float* row = (const float*)((const u8*)fltSlice[ci].data + (size_t)y * fltSlice[ci].stride);
+                                for (u32 x = 0; x < fltSlice[ci].w; x++) {
+                                    float r = row[(size_t)x * fpt];
+                                    u8 v = 0;
+                                    if (r > 0.0f) {
+                                        float lg = std::log10(r);
+                                        lg = std::clamp(lg, -18.0f, 18.0f);
+                                        v = (u8)((lg + 18.0f) * (255.0f / 36.0f));
+                                    }
+                                    fputc(v, f);
+                                }
+                            }
+                            fclose(f);
+                            utils::info("evsm probe: dump written to %s", pathBuf);
+                        }
+                    }
+                    const Diligent::float4x4& w2l = sa.mWorldToLightView;
+                    for (int ci = 0; ci < nCas; ci++) {
+                        const auto& ca = sa.Cascades[ci];
+                        const int radius = sa.iFixedFilterSize > 0 ? (sa.iFixedFilterSize - 1) / 2 : 0;
+                        for (int pi = 0; pi < np; pi++) {
+                            const EPt& p = pts[pi];
+                            // The splat PS per-pixel formula (row-vector on the
+                            // transposed-stored W2LView + cascade scale/bias).
+                            const float lvx = p.x * w2l._11 + p.y * w2l._12 + p.z * w2l._13 + w2l._14;
+                            const float lvy = p.x * w2l._21 + p.y * w2l._22 + p.z * w2l._23 + w2l._24;
+                            const float lvz = p.x * w2l._31 + p.y * w2l._32 + p.z * w2l._33 + w2l._34;
+                            const float u  = 0.5f + 0.5f * (lvx * ca.f4LightSpaceScale.x + ca.f4LightSpaceScaledBias.x);
+                            const float v  = 0.5f - 0.5f * (lvy * ca.f4LightSpaceScale.y + ca.f4LightSpaceScaledBias.y);
+                            const float z  = std::max(lvz * ca.f4LightSpaceScale.z + ca.f4LightSpaceScaledBias.z, 0.0f);
+                            const bool inBox = u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f;
+                            if (!fltSlice[ci].ok) continue;
+                            const u32 iw = fltSlice[ci].w;
+                            const u32 ih = fltSlice[ci].h;
+                            const u32 ix = (u32)std::clamp((u32)(u * (float)iw), 0u, iw - 1u);
+                            // Sampler v (0 = bottom) vs memory row 0 (top): try
+                            // both and report whichever convention matches the
+                            // atlas against the CPU-re-derived warp.
+                            const u32 iyA = (u32)std::clamp((u32)(v * (float)ih), 0u, ih - 1u);
+                            const u32 iyB = (u32)std::clamp((u32)((1.0f - v) * (float)ih), 0u, ih - 1u);
+                            const float* tA = (const float*)((const u8*)fltSlice[ci].data + (size_t)iyA * fltSlice[ci].stride) + (size_t)ix * fpt;
+                            const float* tB = (const float*)((const u8*)fltSlice[ci].data + (size_t)iyB * fltSlice[ci].stride) + (size_t)ix * fpt;
+                            float cpuW1[2] = {0.0f, 0.0f};
+                            float cpuMom[2] = {0.0f, 0.0f};
+                            bool haveCpu   = false;
+                            if (rawSlice[ci].ok) {
+                                auto rawAt = [&](u32 x, u32 y) {
+                                    return ((const float*)((const u8*)rawSlice[ci].data + (size_t)y * rawSlice[ci].stride))[x];
+                                };
+                                cpuW1[0] = warp1(rawAt(ix, iyA));
+                                cpuW1[1] = warp1(rawAt(ix, iyB));
+                                for (int ciConv = 0; ciConv < 2; ciConv++) {
+                                    const u32 base = ciConv == 0 ? iyA : iyB;
+                                    float sumW = 0.0f, tot = 0.0f;
+                                    for (int dy = -radius; dy <= radius; dy++) {
+                                        for (int dx = -radius; dx <= radius; dx++) {
+                                            const u32 rx = (u32)std::clamp((int)ix + dx, 0, (int)iw - 1);
+                                            const u32 ry = (u32)std::clamp((int)base + dy, 0, (int)ih - 1);
+                                            const float wgt = sampleWeight(dx, (float)radius) * sampleWeight(dy, (float)radius);
+                                            sumW += warp1(rawAt(rx, ry)) * wgt;
+                                            tot += wgt;
+                                        }
+                                    }
+                                    if (tot > 0.0f) {
+                                        cpuMom[ciConv] = sumW / tot;
+                                        haveCpu = true;
+                                    }
+                                }
+                            }
+                            utils::info("evsm probe: c%d %s recv uv (%.5f %.5f) z %.6f inBox %d",
+                                        ci, p.name, u, v, (double)z, inBox ? 1 : 0);
+                            const float w1 = warp1(z);
+                            const float w2 = warp2(z);
+                            const float minVarX = sa.fVSMBias * exP * w1;
+                            const float minVarY = sa.fVSMBias * exN * w2;
+                            for (int conv = 0; conv < 2; conv++) {
+                                const float* t    = conv == 0 ? tA : tB;
+                                float pPos        = cheb(t[0], t[1], w1, minVarX * minVarX);
+                                float pFinal      = pPos;
+                                float pNeg        = -1.0f;
+                                if (curMode == 4 && fpt == 4) {
+                                    pNeg   = cheb(t[2], t[3], w2, minVarY * minVarY);
+                                    pFinal = std::min(pPos, pNeg);
+                                }
+                                const char* convTag =
+                                    haveCpu ? (fabsf(t[0] - cpuMom[conv]) <=
+                                                   std::max(1e-30f, 0.1f * fabsf(cpuMom[conv]))
+                                                 ? "MATCH" : "")
+                                            : "";
+                                utils::info(
+                                    "evsm probe: c%d %s conv%d texel(%u %u) atlas(R G%s B A) = (%.6g %.6g%s %.6g %.6g) "
+                                    "cpuRawTexelW1 %.6g cpuBoxMom %.6g %s warp(w1 w2) (%.6g %.6g) "
+                                    "minVar (%.3g %.3g) pPos %.5f pNeg %.5f p %.5f",
+                                    ci, p.name, conv, ix, conv == 0 ? iyA : iyB, fpt == 4 ? " " : "",
+                                    (double)t[0], (double)t[1], fpt == 4 ? " " : "",
+                                    fpt == 4 ? (double)t[2] : 0.0, fpt == 4 ? (double)t[3] : 0.0,
+                                    (double)cpuW1[conv], (double)cpuMom[conv], convTag,
+                                    (double)w1, (double)w2, (double)minVarX, (double)minVarY,
+                                    (double)pPos, (double)pNeg, (double)pFinal);
+                            }
                         }
                     }
                 }
