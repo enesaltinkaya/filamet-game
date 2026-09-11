@@ -180,7 +180,7 @@ static void propsSidecarLoad(const char* pakPath) {
                 void* body = joltCreateBodyFromShapeBlob(
                         blob, blobSize,
                         motionType == 1 ? JOLT_MOTION_DYNAMIC : JOLT_MOTION_STATIC,
-                        mass, friction, restitution, nullptr, pos, rot, 0ULL);
+                        mass, friction, restitution, scl, pos, rot, 0ULL);
                 if (!body) {
                     utils::warn("physics: JBVH restore failed for %s", nodeName.c_str());
                     return;

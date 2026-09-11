@@ -1,10 +1,8 @@
 [
-  {"id": 1, "desc": "Baseline evidence", "status": "done", "result": "hard cut = c2 far plane; cliff chunk drawn in all cascades"},
-  {"id": 2, "desc": "Clip-plane attribution", "status": "done", "result": "c2 light-space FAR plane far-clips ~810m cliff; caster far-clip"},
-  {"id": 3, "desc": "Fix attempt 1: caster z-squeeze", "status": "done", "result": "FAILED; reverted"},
-  {"id": 4, "desc": "Fix attempt 2: far-pad + scaled bias", "status": "done", "result": "bias no-op in EVSM4; EVSM warp underflow identified; state kept"},
-  {"id": 5, "desc": "EVSM z-tilde warp remap", "status": "done", "result": "remap texel-exact; wedge still missing — no uv desync exists"},
-  {"id": 6, "desc": "Pin c1 uv desync", "status": "done", "result": "no desync: footprints agree; instead far-pad state is frame-unstable (LIT@100, dark@300, LIT@1000) — ordering/warmup race between shadowDiligentUpdateFrame and splat cbuffer fill"},
-  {"id": 7, "desc": "Identify + fix the far-pad state race: per-frame log (frame, passReady, caster counts, shadowFade.z, c2 scale.z/bias.z) frames 50..1000 in both states; fix so matrix+scale/bias+fade are atomically consistent per frame; re-capture /tmp/fixed.jpg; wedge visible AND extends past baseline tip (x≈1781,y≈870)", "status": "pending", "result": null},
-  {"id": 8, "desc": "Regression check: no acne/bleeding/peter-panning, other regions unchanged; verify with plan.md command", "status": "pending", "result": null}
+  {"id": 1, "desc": "Ground truth run: JOLT_DEBUG=1 run + visual AABB comparison.", "status": "done", "result": "All 61 props bodies match visual AABBs incl. scaled Cube.001 (scl 3.35); scale IS applied; geometry fine -> character path."},
+  {"id": 2, "desc": "Bake-side check / re-bake stale cube blobs (Cube.005/012/013/014/015 offsets).", "status": "pending", "result": null},
+  {"id": 3, "desc": "Runtime scale path check.", "status": "done", "result": "Covered by task 1: ScaledShape applied, world AABB matches visual for every scaled prop."},
+  {"id": 4, "desc": "Character controller path diagnosis.", "status": "done", "result": "Root cause: closed-box mesh + backface-ignoring character queries -> embedded capsule registers 0 contacts, cannot depenetrate."},
+  {"id": 5, "desc": "Implement fix: backface-aware character depenetration + containment escape in joltCharacterUpdate.", "status": "done", "result": "CollideShape(CollideWithBackFaces) push-out + 6-probe containment escape (farthest exit face); terrain excluded; embed test escapes in ~3 frames then blocks at rock faces; verifier PASS."},
+  {"id": 6, "desc": "Final verify with the pinned Verification command.", "status": "done", "result": "Verifier PASS: build+run exit=0, /tmp/verify.jpg written, player/camera db rows stable (sub-mm drift, camera byte-identical)."}
 ]

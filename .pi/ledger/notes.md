@@ -4,372 +4,200 @@
 
 ## Core difficulty
 
-The "cut-out" on the long cliff is a hard edge, not blur — it points at geometry being *excluded* from a cascade's light-space frustum (or culled as a caster chunk), not at PCF/bias coarseness. The cliff top/face either sits outside the cascade bounding box that `DistributeCascades` builds (StabilizeExtents sphere padding), pokes in front of the shadow camera's light-space near plane, or extends past the far plane — so the cliff stops being a depth caster and the shadow on it/behind it disappears in a straight band.
+The rock's collision shape is restored at runtime from a pre-baked blob whose space (primitive-local vs node-space) and shape type (full mesh vs convex hull) are not known, so "player walks through the rock" has three mutually exclusive causes — scale missing/misapplied, body mispositioned or absent (name lookup), or shape-space mismatch — and only a measurement of the rock's world AABB vs the visual bounds can discriminate.
 
 ## Reductions / key lemmas
 
-1. The caster and receiver use the *same* cascade transform (`mgr.GetCascadeTransform(c)`), so the shadow is only as good as the cascade's light-space box: anything outside the box never enters the depth atlas. There is no bias value that can fix a missing caster — the fix must be in cascade extents/splits or caster culling.
-2. Caster culling is per-cascade AABB-vs-NDC (`splatShadowCasterChunkVisible`, `SplatTerrainDiligent.cpp`): a chunk is dropped if its NDC box doesn't overlap `[ndcMinZ−4/size, 1+4/size]` on x/y/z. A long cliff chunk can legitimately lie outside one cascade's box but inside another's — that is fine *only if* the correct cascade also receives it. The bug shows up as: cliff in cascade k's box on the *receiver* side, but its chunks culled or clipped on the *caster* side (near/far plane carve).
-3. The depth atlas is `TEX_FORMAT_D32_FLOAT`, so extending a far plane costs almost no precision — far-plane extension for the caster is a cheap, targeted lever.
-4. Cascade 0 is widened to a "focus band" (player cam-Z + margin, clamped to 0.8·distanceM) and the rest re-split log-uniformly. A long cliff whose receiving face falls just past `distanceM` (60–120 m by tier) simply has no shadow at all — indistinguishable from clipping in a screenshot, so coverage vs. clipping must be disambiguated first.
-5. The pass is already instrumented: `splatTerrain: shadow caster frame N cascade d — x/y chunks drawn (culled)` logs per cascade, `ENGINE_SHADOW_CASTER_PROBE` dumps NDC of nearest chunk + player, and the `shadow dbg` block prints per-cascade scale/bias/zEnd. The `shadow` pass is RenderDoc-labeled, so `rdc.py dump shadow` gives per-cascade depth atlases.
+1. **Equivalence invariant.** `joltCreateBodyFromShapeBlob` creates a body at node pos/rot and decorates the blob with `ScaledShape(nodeScale)` (jolt_c_api.cpp:564-580, correct order: scale in local space under T·R). If the blob was baked in primitive-local space, the collision world AABB must *exactly* equal the visual AABB, because the same `gltfPropsNodeGlobalTRS` decomposition is used for the visual transform. So if JOLT_DEBUG shows world AABB ≠ visual bounds, the blob is not in the space we assume, or the body isn't the rock's (name mismatch → `utils::warn("...no node transform")` and body skipped, leaving no collision at all).
+2. **Hull direction of error.** A convex-hull approximation of a big rock is a *larger* envelope — it over-blocks, it does not let the player walk in. The observed symptom (walk-through) points at collision too small or mispositioned, i.e. scale-not-applied / stale sidecar / name miss, not hull concavity. Hulls matter only if the rock was baked from a *subset* of its geometry.
+3. **Layer/filter unlikely.** The character's step queries use `GetDefaultLayerFilter(Layers::MOVING)` (jolt_c_api.cpp ~1195-1251) and the MOVING layer collides with NON_MOVING; props static bodies are NON_MOVING. A filter miss is a one-grep check, low probability.
+4. **Measurement chain already instrumented.** `JSB_DEBUG` at bake prints `rawAABB` (raw glTF verts) vs `shapeLocalAABB` (Jolt local bounds) — proves what space the blob lives in. `JOLT_DEBUG` at restore prints shape type, pos, scl, `innerLocalSize`, world AABB per static body. Verdict rule: `world extent ≈ scl × innerLocalSize` (sanity), `world AABB` covers visual bounds, and no "no node transform" warn for the rock.
+5. **Staleness is a first-class suspect.** The JBVH sidecar is a baked pak in the data dir; the runtime scale fix does nothing if the pak was baked before/without the relevant glTF state, or if it was never re-baked after the scale fix landed.
 
 ## Candidate approaches
 
-1. **Diagnose, then widen caster light-space extents** (far/near padding or a caster-only extended far plane, keeping receiver matrix unchanged). Sketch: add a pad factor on the light view's near/far (or `StabilizeExtents` margin) used only for the caster draw + cull matrix. Risk: naive far-plane extension shrinks the DSV precision for everything in the cascade — mitigated by 32-bit depth and by extending only where the cliff overflows. Effort: S, once the failing plane is identified.
-2. **Re-tune cascade splits / shadow distance** (raise `tier.distanceM`, adjust `focusBand`/`fPartitioningFactor`, or add a cliff-band like the existing focus band). Sketch: move the cliff into a finer cascade or in-range. Risk: if the failure is a light-space *near* clip on the cliff, split tuning does nothing — and it makes all other shadows coarser. Effort: S (params live in one place, `kQualityTiers` + `AdjustCascadeRange`), but may be the wrong lever.
-3. **Fix caster chunk culling** (relax `splatShadowCasterChunkVisible` margin / draw a chunk into every cascade whose box it intersects, not just the picked one). Sketch: the cliff's chunk AABB may straddle a cascade boundary and be dropped from the cascade where its shadow is actually received. Risk: likely a red herring if the chunk count log shows the cliff's chunk *is* drawn in the failing cascade; over-drawing costs a little depth-pass time. Effort: S.
-4. **Coverage extension beyond distanceM** (tier distance bump + `fReceiverFadeScale` adjustment if the cliff is simply past the shadow distance). Sketch: the cliff face at 150+ m just has no cascades left. Risk: 2048×3 cascades at 200 m is coarse; also a global cost. Effort: XS.
+- **A. Measure first, then branch.** Run the parked scene with `JOLT_DEBUG=1`; capture the rock's line, the props load count, and any "no node transform" warn; compare world AABB to the visual (scaled glTF) bounds; re-run bake with `JSB_DEBUG=1` if needed. Risk: visual bounds are not printed anywhere, so someone must compute them from the glTF + node TRS by hand (small script or RenderDoc). Effort: 1-2 runs + a bounds computation, ~30 min.
+- **B. Bake the scale in.** Change `tools/jolt-shape-builder` to read the node TRS and multiply vertices by scale before building the shape (blob = node-space, runtime scale becomes 1 or is skipped for props). Risk: double-scaling if the runtime ScaledShape path stays active for the same entry; every sidecar pak must be re-baked; changes the sidecar contract for terrain/other props. Effort: tool change + re-bake + re-verify, 1-2 sessions.
+- **C. Character path fix.** If measurement shows the rock's world AABB *already* covers the visual and the player still passes through, the bug is in the CharacterVirtual: query filter, capsule layer, or contact/depenetration offsets. Risk: chasing the wrong layer if A shows a geometry mismatch. Effort: mostly greps once A rules geometry out; fix 1-2 h if real.
+- **D. Runtime restore hardening.** Make `propsSidecarLoad` log pos/rot/scl per entry and assert the node lookup hit (turn the silent-skip into a loud failure with the entry name). Risk: none, but it's a diagnostic, not a fix. Effort: 30 min.
 
 ## Recommended approach
 
-Diagnose first, then approach 1 (caster light-space extent fix) with approach 2/4 as fallbacks. The hard-band symptom plus shared caster/receiver matrix means the cliff is being clipped out of the depth atlas; a 2-minute RenderDoc dump of the `shadow` pass at the parked vantage will show exactly which cascade is empty where the cliff should be, and the per-cascade caster log will show whether the cliff's chunks are even drawn. For the fix to work by extent-widening, the cliff must be in-cascade on the receiver side (else the answer is distance/split tuning) and the depth budget must absorb the extension (32-bit depth makes this safe).
+A + D together: instrument the restore path to print the node TRS and any lookup misses, run once with `JOLT_DEBUG=1`, and compare against the visual bounds — the equivalence invariant in lemma 1 means a single run discriminates between "scale not effective/stale pak", "name miss/body absent", and "character query". It's cheapest and can't commit us to the wrong fix; B and C are chosen by what the numbers say. Must be true: the JOLT_DEBUG line's world AABB is computed through the outer (scaled) shape (it is — jolt_c_api.cpp:605 uses the outer `shape`), and the visual bounds are computed from the same glTF + `gltfPropsNodeGlobalTRS` the engine uses, not a different transform source.
 
 ## Proposed tasks
 
-1. **Baseline evidence**: run a parked headless screenshot + a RenderDoc capture (`ENGINE_RENDERDOC_CAPTURE=1 ... ./scripts/run.sh renderdoc`), then `scripts/rdc.py dump shadow` to get per-cascade depth atlases; grab the `splatTerrain: shadow caster ... (culled)` chunk counts and `shadow dbg` cascade zEnd/scale log lines. Deliverable: which cascade the cliff lives in, where the atlas goes empty, and whether the cliff's chunks are drawn in that cascade.
-2. **Clip-plane attribution**: from the capture + `shadow dbg` dump, compute/inspect the failing cascade's light-space box (near, far, x/y extents) against the cliff's AABB (the `caster probe` log gives chunk min/max); state the exact plane (near/far/top) that carves the cliff, or confirm the cliff is simply beyond `distanceM`. Deliverable: one-line root cause (e.g. "cascade 1 light-space far plane at 94 m, cliff face extends to 131 m along the sun direction").
-3. **Fix**: implement the identified correction — caster-only far/near extent padding in `ShadowDiligent.cpp` (caster transform padded before `splatTerrainShadowDrawDiligent` + its cull matrix), and/or `kQualityTiers` distance/split change. Rebuild, re-run the parked screenshot, and diff against task 1's baseline (plus a quick `rdc.py dump shadow` on the new capture to confirm the atlas now covers the cliff).
-4. **Regression check**: one parked screenshot run at the default quality tier (and the highest tier if cheap) to confirm no new acne/bleeding on the ground band and no perf-visible stutter; report pass/fail.
+1. **Add restore-side logging (D).** In `propsSidecarLoad` (PhysicsSystem.cpp:159), print per entry: name, found pos/rot/scl, body ptr; make a node-lookup miss a loud warn with the entry name (it already warns — verify it fires). Back up the file to /tmp first (no git).
+2. **Ground-truth run.** `TERM=xterm-256color ENGINE_HIDDEN_WINDOW=1 ENGINE_AUTOTEST=enter JOLT_DEBUG=1 timeout 12 ./scripts/run.sh` in the parked scene; capture the rock's JOLT_DEBUG line, the `N props bodies` count, and any transform-miss warn. Separately compute the rock's expected visual AABB from its glTF node TRS × primitive raw bounds (small standalone script or RenderDoc) and state the verdict: scale missing / mispositioned / body absent / geometry fine (→ task 4 becomes character path).
+3. **Sidecar freshness check.** Identify which glTF and when `build/c-game/data`'s props JBVH pak was last generated vs the current glTF; if stale, re-bake with `JSB_DEBUG=1`, compare `rawAABB`/`shapeLocalAABB`, and re-run task 2.
+4. **Fix + verify.** Apply the fix indicated by task 2/3 (re-bake, restore fix, or character-query fix), then verify: rock world AABB covers the visual in JOLT_DEBUG, and a screenshot run (`ENGINE_SCREENSHOT=/tmp/verify.jpg`, per plan's verification command) shows the capsule stopped at the rock face with the parked player untouched.
 
 ## round 1
 
-Baseline evidence (task 1). All runs parked (player/camera untouched), frame 300.
+### Ground truth run (task 1)
 
-### Artifacts
+Built, ran parked scene with `JOLT_DEBUG=1` (logs: `/tmp/groundtruth.log` no-names, `/tmp/groundtruth2.log` with temp entry-name log). 16 terrain + **61 props bodies**, **zero** `no node transform` warns — every sidecar name resolves. Temp log added in `propsSidecarLoad` (name/pos/rot/scl per entry, JOLT_DEBUG-guarded), file backed to `/tmp/PhysicsSystem.cpp.bak` and then **restored** (working tree clean again).
 
-- `/tmp/baseline.jpg` — parked headless screenshot. Cliff rock wall in left foreground;
-  its shadow lands on the grass as a dark triangle with a straight hard cut-out edge —
-  beyond that line the grass is fully lit (missing shadow band).
-- `/tmp/RenderDoc/c-game_frame300.rdc` (931 MB) — capture fired at frame 300.
-  Old 1.1 GB `c-game_frame450.rdc` from 07:57 still in /tmp/RenderDoc (candidate for `rdc.py clean`).
-- `rdc.py list`: shadow pass = eids 50–175 (15 draws). Per cascade: 1 player draw
-  (RT ResourceId::1135) + 2 terrain-chunk draws (RT ::1155) into the cascade DSV slice,
-  then ConvertToFilterable: raw splat (RT ::1114) + filterable EVSM atlas write
-  (RT ::1108 = R32G32B32A32_FLOAT 2048² array 3, slices 0/1/2 drawn at eids 147/161/175).
-  `rdc.py dump shadow` works (layer 0 only — SaveTexture slice mapping is IGNORED for array
-  textures in this SWIG build; all 3 dumps were md5-identical). GetBufferData on textures
-  returns 0 bytes here.
-- Raw per-cascade DSV via built-in debug: `ENGINE_SHADOW_READBACK=300
-  ENGINE_SHADOW_DUMP=/tmp/rdc-dump/rawdepth` (no renderdoc needed). PGMs:
-  `/tmp/rdc-dump/rawdepth.{0,1,2}` (2048², 0=nearest, 255=clear), annotated
-  `atlas_clear_{0,1,2}.png`, oracle log `/tmp/oracle_run.log`, capture run log
-  `/tmp/rdc_run.log`. Caster-cull reconstruction script: `/tmp/cull.py`.
+Key lines (name | shape, pos, scl, world AABB):
+- `Cube.001` (the scaled rock; node scale **3.35**): `Scaled(Mesh) pos=(-424.8,511.1,1651.1) scl=(3.35,3.35,3.35) innerLocalSize=(2,2,2) world=(-428.1,507.8,1647.7)-(-421.4,514.5,1654.4)`
+- `vjrmfb1ab_..._0` (big rock 264x153x140, scale 1): `Mesh pos=(-799.8,494.9,1802.5) scl=1 world=(-941.5,486.2,1710.3)-(-658.2,638.8,1891.5)`
+- `vjrmfb1ab_..._0.002` (scale **0.334**): `Scaled(Mesh) pos=(-227.0,508.1,1523.6) scl=(0.334) world=(-298.2,503.8,1473.8)-(-155.1,578.7,1574.8)`
 
-### Caster chunk counts (at capture frame, stable since frame 2)
+Visual AABBs computed from `/tmp/test2.glb` (unzstd `c-game/data/pak_1/models/test2.zstd`) node TRS x raw POSITION min/max, per node hierarchy. All scaled props near the player (Cube.001, cubeNoMaterial 0.5, vjrmfb1ab.002) match body world AABB **exactly** (<=0.1) — the runtime ScaledShape fix is effective; scale is NOT missing, rocks are NOT mispositioned, no body absent.
 
-cascade 0: 2/16, cascade 1: 2/16, cascade 2: 2/16 (first frame 3/3/4).
-Reconstructed each cascade's light-projection affine from the oracle dump
-(ENGINE_SHADOW_ORACLE=300 — 4 points × 3 coords, least-squares, residual ~1e-15) and
-re-ran `splatShadowCasterChunkVisible` exactly: the drawn set is chunks **{9, 13} in
-ALL three cascades**. Chunk 9 AABB [-1871,79,-12]-[37,609,1906] contains BOTH the
-camera (-320,588,344) and the parked player (-1077.78,525.76,1605.42); its top (y 609)
-≈ camera height → **the cliff is chunk 9, and it IS drawn in every cascade, including
-the one that samples the shadowed grass.** Chunk 13 = behind the player.
+**Verdict: geometry fine for the rocks -> suspect is the character path (task 4).**
 
-### Cascade math (shadow dbg, frame 300)
+Caveat + extra findings for later rounds:
+- Parked **camera** is at (-320,588,344) looking at a terrain hill (`/tmp/rock.jpg` shows terrain only); the player is parked at (-420.4,508.0,1628.8) facing roughly +z, where the props cluster is. So the screenshot does not frame the rock; the "rock in front" at ~22 units +z is the scaled cube `Cube.001` (7.7^3). If the user meant a different object, re-park and re-verify.
+- **Stale blobs (body mispositioned) for the small cubes in the same cluster** — baked geometry no longer matches the current glTF (sidecar `test2.jolt.zstd` baked from older vertex data):
+  - `Cube.005`: body shifted **-2.0 in Y** vs visual (vis top 514.2, body top 512.2)
+  - `Cube.012/013/014`: body shifted **-4.7..-5.1 in Y** (vis tops 519.6-520.1, body tops 514.9-515.4)
+  - `Cube.015`: body shifted **-10.8 X, -8.6 Z** (blob centered at node origin; visual mesh local bounds y -1.4..22.9, z 0.4..16.7)
+  - `SM_HP_Tree*` (all 33): blob = **prim0 trunk only** (innerLocalSize 1049x2464x1354 scaled ~0.01); canopy prim1 has no collision.
+  These are exactly the "stale sidecar / re-bake" items for task 2; the sidecar (14:56) is newer than the glTF (14:41) yet disagrees, so the bake source file differs from the current pak copy.
+- `deer_001` minor 0.9-unit diff (hull noise). `vjrmfb1ab.001` (scale 1, at (1136.9,362.2,-822.7)) matches in extent; its node has multiple parents in the glb, engine picks one.
+- JOLT_DEBUG `world=` AABB is tight (verified against rotated local extent for the 170-deg-rotated vjrmfb1ab.0: x-extent 283.3 = 263.9*cos+139.9*sin). Sanity `world extent == scl x innerLocalSize` holds for all scaled bodies.
+- db.db has tables `player`/`camera` (not `transform`): player=(-420.39,507.95,1628.76,...), camera=(-401.7,515.9,1626.8) + stored orientation.
 
-mode 4 (EVSM 32-bit), res 2048, 3 cascades, tier distanceM = 120 m, focus band INACTIVE.
-zEnd (cam-space): 3.01 / 14.73 / 120.00 m. scale (x=y): 0.2814 / 0.0576 / 0.0071.
-bias all cascades (0.3730, -0.4307, 0.1998). W2L (rows, rel to world anchor
-(-1095.06,521.49,1596.89)): r1 [-0.203,-0.338,0.919] r2 [-0.857,0.514,0] r3
-[-0.473,-0.788,-0.394], no translation. Oracle PASS: caster and receiver agree —
-not a convention mismatch.
-
-### Which cascade the cliff is in / where the atlas goes empty
-
-- Receiver cascade pick = camera-space z vs zEnd; the grass receiving the cliff shadow
-  at >14.7 m from the camera is in **cascade 2** (zEnd 120 m). Player itself is
-  ~1472 m from the parked camera (camera is far, looking at the parked player), so the
-  player is also clamped to cascade 2. Everything beyond ~120 m cam-distance has no
-  cascade coverage at all.
-- Raw DSV empties: c0 clear 62.9% (empty across top, geometry bbox uv y ≤ 0.887);
-  c1 clear 55.8%; **c2 clear 9.1%, confined to uv x[0.00,0.57] × v[0.67,1.00] — the
-  upper-left quadrant of the cascade 2 atlas is empty** (see atlas_clear_2.png).
-  c2 min depth 0.185 (nearest caster far from the near plane), c0/c1 min ~0.
-- Chunk 9's AABB projects OUTSIDE the c2 box on all axes (uv x[-5.7,2.5], y[-2.3,4.5],
-  z[-1.6,5.4]) — its AABB passes cull, actual coverage is the PGM's mid blob only;
-  the empty upper-left is where the near/camera-side part of the cliff face should cast.
-
-### Handoff for task 2
-
-- The straight cut-out edge = a plane (projects straight); prime candidates: the c2
-  box's far/xy edges or the 120 m coverage boundary (receiver skips out-of-box → no shadow).
-- For any world point, per-cascade atlas uv is computable from the solved affines
-  (in /tmp/cull.py, `M[c]` rows for x/y/z, uv = 0.5+0.5·X, 0.5-0.5·Y, rel to anchor
-  (-1095.06,521.49,1596.89)). Cliff chunk 9 corner (-1870,609,1906) → rel (-774.94, 87.51,
-  309.11) → c2 uv (1.90,-2.26) out-of-box.
-- Caster counts do NOT change per cascade (same {9,13}) — the bug is not chunk culling.
 
 ## round 2
 
-Task 2 — clip-plane attribution (one-line root cause). All numbers from the
-frame-300 parked run (cull.py M[2] affine, oracle-verified against in-engine
-readback "player NDC feet (-0.086, 0.422, 0.769)" — exact match; fit resid 2e-15).
+### Character controller path (task 4) — diagnosis
 
-### Setup correction (important for later tasks)
+**Verdict: the capsule passes through the rock because the rock body is a closed 2x2x2 box mesh
+(Cube.001 blob, innerLocalSize exactly (2,2,2), ScaledShape 3.35) and Jolt's character queries run in
+`IgnoreBackFaces` mode — a capsule strictly INSIDE the box registers ZERO contacts with it. The world
+AABB covering the visual is irrelevant: AABB is only the broadphase envelope; narrow phase is
+triangle-based and backfaces never collide.**
 
-The shadow cascade is distributed around `diligentFrameView()` — the
-third-person orbit camera near the PLAYER, anchor (-1095.06, 521.49, 1596.89)
-= render-space origin. The parked FLYING camera (-320,588,344, 1472 m away)
-is only the screenshot vantage. So "zEnd 120 m" / "distanceM 120 m" are
-distances from the orbit cam near the cliff, NOT from the flying camera.
-The c2 box lives at ~1275–1675 m from the flying cam = right on the cliff.
+Measured (all with the wrapper's JOLT_DEBUG hooks; rock = body 17, Scaled(Mesh), center
+(-424.8,511.1,1651.1), world AABB (-428.1,507.8,1647.7)-(-421.4,514.5,1654.4); terrain = body 9,
+big heightfield whose surface at the rock footprint is y~510.0 and dips to ~508.4 at the parked spot):
 
-### c2 light box (world meters, light-aligned)
+1. Layers/filters are fine. Character queries use `GetDefaultBroadPhaseLayerFilter(MOVING)` +
+   `GetDefaultLayerFilter(MOVING)` (jolt_c_api.cpp ExtendedUpdate call); layer table lets MOVING collide
+   with NON_MOVING; props bodies are `Layers::NON_MOVING`. A cast from outside the rock HITS the rock
+   (t=0.537 from 0.3 in front) with the character's EXACT cast settings (backface ignore, shrunk
+   shape, CollideOnlyWithActive — probed via new JOLT_TEST_CASTC hook). So the rock is visible from
+   outside and blocks a cast.
+2. Static `CollideShape` of the real capsule shape (same filters) at interior points:
+   (-424.8,509.0,1648.5) 0 hits; (-424.8,510.0,1651.0) 0; (-426.5,509,1651) 0; (-423.5,509,1651) 0.
+   Partial penetration still collides: at z=1647.7 (0.25 past the front face) the rock IS hit; at
+   z=1648.25 (fully inside) the rock disappears. Transition = capsule no longer intersecting the box
+   surface.
+3. Real character embedded (ENGINE_TELEPORT=-424.8,510.0,1651.0 + ENGINE_AUTO_RUN=1, which suppresses
+   db saves so the parked state was NOT touched): first frame `ground=3 (StuckInFloor) hits=0` — the
+   controller sees NOTHING inside the solid. It then walks freely inside the box (x -424.8 -> -427.9,
+   y 510.0 -> 507.8) and stops only when it hits the TERRAIN surface that passes through the box
+   interior (hits=2 body 9). Walk-through through a solid, reproduced end to end.
+4. Drop tests around the rock (teleport y=515, settle): terrain surface 510.01 at z 1638-1643 and at
+   z 1656 (behind); capsule lands ON the box top (feet 514.5) when dropped at z 1650/1653. The box is
+   solid from outside on all sides; a normally-walking player on the terrain is blocked by the
+   TERRAIN wall at z~1643.8 (3.9 short of the front face — auto-run from the parked spot crawls at
+   0.4 m/s, ground=0 InAir permanently: the capsule is always slightly embedded in the terrain and
+   slowly sinking 507.95->507.88).
+5. So the only realistic embed paths in actual play: fly-camera takeover (playerFollowFlyingCamera /
+   fly-end parks the capsule at the camera pos via SetPosition with no collision check) or a player
+   DB row that was saved while the capsule sat inside the rock (postUpdate saves p.pos every second,
+   autoRun-suppressed only). After embed, backface-blindness makes the rock invisible to the whole
+   controller (cast, ground, depenetrate) — nothing can push the capsule back out; that is the
+   observed "runs into the rock".
+6. Extra: a cast starting fully inside a closed mesh reports t=0 hits (front-face artifacts) under
+   default ShapeCastSettings; under the character's own settings (shrunk shape) the embedded
+   character still moved, so those artifacts do not block.
 
-half-width light X = light Y = 1/0.0071 = 140.8 m; depth light Z =
-1/0.0034 = 294 m (near NDC 0 → far NDC 1). Box center ≈ (-991, 554, 1648),
-i.e. hugging the cliff. Face distances from orbit anchor: far Z=1 ≈ 53 m,
-near Z=0 ≈ 243 m, X=±1 ≈ 126/157 m, Y=±1 ≈ 69/214 m.
+Notes on state:
+- Wrapper `cpp-thirdparty/jolt/wrapper/src/jolt_c_api.cpp` was extended (env-gated, off by default):
+  JOLT_TEST_CAST now prints per-hit fraction (`t=`) + backface flag (`bf=`); new JOLT_TEST_CASTC runs
+  the cast with CharacterVirtual's exact settings. Backup of the original at /tmp/jolt_c_api.cpp.bak.
+  build-linux/libcjolt.a was rebuilt (build-win NOT touched; wrapper build.sh would rebuild both).
+- Parked player/camera untouched (all behavioral runs used ENGINE_AUTO_RUN=1 which suppresses
+  playerDbSaveState; verify db rows unchanged if in doubt).
+- Ground states seen: ground=2 (WalkOnStairs) at terrain ledges, ground=3 (StuckInFloor) when
+  embedded; ground=0 (InAir) is the PERSISTENT state at the parked spot (capsule embedded in
+  terrain, never OnGround) — a secondary defect worth fixing in task 5 (mPenetrationRecoverySpeed
+  push-out is losing to per-tick gravity re-embed).
 
-### The cliff (real geometry, extracted from pak_1 GLB models/terrain/oghuzlands.zstd → terrain_chunk_1_2 = chunk 9)
+Fix candidates for task 5 (cheapest first):
+- (a) In joltCharacterUpdate, add a backface-aware depenetrate: CollideShape with
+  mBackFaceMode=EBackFaceMode::CollideWithBackFaces (and convex too), push the character out along
+  the deepest contact each tick (rate-limited). Makes the rock solid from the inside too, fixes any
+  embed path (fly takeover, stale db row).
+- (b) Bake Cube.* props as convex hulls (task 2 re-bake) — but verify whether convex-inside contacts
+  register for CharacterVirtual; risky, and does not fix fly-teleport embeds in ANY solid.
+- (c) Prevent embeds: clamp fly-park / teleport to the nearest non-embedded position (CastRay up +
+  collide test with backfaces).
+Recommend (a) as the primary fix; it is the only one that covers every entry path.
 
-Visible rock wall (terrain y>505 within 650 m of player): world AABB
-x[-1393,-580] y[500,593] z[1109,1906] — an ~810 m long, ~90 m tall wall
-("the long cliff"). In c2 light space (NDC): X[-2.67, 0.99], Y[-2.35, 2.06],
-Z[-0.61, 2.13] → meters X[-376,140] Y[-331,290] Zdepth[-178,628].
+## round 3
 
-### Overflow vs the c2 box ([-141,141]² m × [0,294] m depth)
+### Task 5 (fix implementation) — done
 
-The cliff overflows the box on EVERY face: 236 m past the west X=-1 face,
-~150–190 m past both Y faces, 178 m past the near plane, and 334 m past the
-FAR plane (Z=1). The cascade only contains the central ~1/3 of the wall.
+Wrapper `cpp-thirdparty/jolt/wrapper/src/jolt_c_api.cpp`, `joltCharacterUpdate` now has a
+backface-aware depenetrate before the controller's `ExtendedUpdate` (backup of the
+pre-round-3 file at `/tmp/jolt_c_api.cpp.round3.bak`; the round-2 JOLT_TEST_* env-gated hooks
+are still in the tree, unchanged):
 
-### Which plane carves the cut
+1. **Step 1 — collide push-out.** `CollideShape` of the capsule with
+   `mBackFaceMode = EBackFaceMode::CollideWithBackFaces`, deepest hit wins, capsule moved by
+   `-mPenetrationAxis * mPenetrationDepth` (Jolt contract: axis = direction to move the *body*
+   to resolve; capsule moves opposite — verified empirically, sign correct).
+   **Terrain bodies are excluded** (`BodyInterface::GetUserData == JOLT_TERRAIN_USER_DATA`,
+   i.e. the 16 chunk bodies; props use userData 0). This exclusion is load-bearing: without it,
+   the parked capsule (0.7 m embedded in terrain at the park spot) pops to the surface once and
+   then slides ~0.2 m/s down the slope (broken ground state, ground=3/StuckInFloor, no friction),
+   which both corrupted the saved player row and moved the parked player.
+2. **Step 2 — containment escape.** A capsule *fully* inside a closed mesh registers zero
+   contacts even with backface collide (no face intersection — measured in round 2), so step 1
+   alone does nothing for a center-of-rock embed. Six `CastShape` probes (±up, ±X, ±Z, 500 m,
+   backface mode on, terrain excluded): contained iff ALL six first hits are backface hits
+   (inside a closed solid ⇒ every ray exits a backface; standing in a cave/next to a wall gives
+   frontface first hits). Escape = teleport the capsule just past the **farthest** exit face
+   (travel = dist + capsule span along that axis + 0.05 m); the full-span push puts the whole
+   capsule clear of the face in one tick, and any remaining straddle with other solids is
+   resolved by step 1 next frame. "Farthest" (not "nearest") matters: with the nearest rule the
+   capsule bounces on the interior floor it is standing on and never leaves the rock.
 
-The shadow falls along the light-travel dir r3=[-0.473,-0.788,-0.394] (down,
--x, -z) = +light-Z. The cliff sits at small light Z (between sun and grass);
-the receiving grass is at larger light Z. Moving down-slope with the shadow,
-the grass's light-Z increases at constant light X/Y and leaves the c2 box
-through the FAR plane Z=1; the cliff portion that would occlude the grass
-beyond that line is at light Z>1 (far-clipped, 334 m of wall) and is not in
-the depth atlas → those grass samples read clear → fully lit. The straight
-cut edge = world line (cliff ∩ far plane Z=1) projected onto the grass.
-Not the 120 m receiver-coverage boundary (grass at the cut is still inside
-the 120 m tier / inside the box in X/Y), not the near plane, not pure xy
-(the far plane is crossed first along the shadow direction).
+Measured results:
+- Embed (`ENGINE_TELEPORT=-424.8,510.0,1651.0` inside Cube.001 + auto-run): escape fires on the
+  2nd-3rd frame (dir=+up, dist 4.12, span 1.4 → feet end 515.2, above the rock top 514.5),
+  capsule then lands on top, walks off the ledge, and is blocked by the rock's front faces from
+  outside (x pinned exactly at face − radius). No wall tunneling in any run.
+- Parked spot (no teleport): **zero** depenetrate/escape events, x drift = 0, capsule stays in
+  its original terrain-embedded equilibrium (the pre-existing slow-sink is unchanged, no new
+  motion).
+- Pinned verification passes: `... ENGINE_SCREENSHOT=/tmp/verify.jpg ... timeout 12
+  ./scripts/run.sh` → exit=0, `/tmp/verify.jpg` written, scene frames as before (terrain hill,
+  player at park spot).
 
-### ONE-LINE ROOT CAUSE
+### IMPORTANT: parked DB rows were clobbered and have been restored
 
-Cascade-2 light-space FAR plane (Z=1, far end of the 294 m-deep light box at
-the 120 m tier end) carves the cut-out: the ~810 m cliff wall overflows the
-±141 m / 294 m c2 box by ~334 m in light depth, so the far part of the wall
-(and its shadow) is clipped at the far plane, leaving a straight lit band
-where the grass leaves the box.
+Two non-automated runs (no `ENGINE_AUTO_RUN`, which is the only gate on the 1 Hz `playerDbSaveState`)
+saved the drifted capsule position before I realized saves were not suppressed. `db.db`
+(`build/c-game/data/db/db.db`) rows were restored from log-recovered values:
+- **player** pos = (-420.395721, 507.953308, 1628.768799) — exact f32 from the round-2
+  JOLT_DEBUG first-frame log (`/tmp/walk2.log`); modelYaw/camYaw/camPitch/camDist/moveYaw from the
+  pre-clobber row (angles are input-driven, unaffected by the drift).
+- **camera** pos = (-401.7, 515.9, 1626.8) + yaw 96°/pitch −20.1° — position only known to
+  0.1 m from the "flying camera: loaded saved state" log (exact f32 was lost); the eye is at
+  most ~5 cm off the original. **Ask the user to re-park / confirm the framing if the 5 cm
+  matters** — the player position itself is exact.
+- Clobbered copy kept at `/tmp/db.db.clobbered.bak`.
 
-### Fix implication for task 3
+Rule for all future rounds: any game run that may write the db (i.e. anything WITHOUT
+`ENGINE_AUTO_RUN=1` — note `ENGINE_SCREENSHOT` does NOT suppress the player-row save, it only
+skips the camera save via `p.active`) must be followed by a db check. The pinned verification
+command in plan.md re-saves the player row (sink drift ~0.1 m/12 s); that is the pre-existing
+behavior, but it means the pinned verification should be the last run before final db state is
+needed, or run with `ENGINE_AUTO_RUN=1` added.
 
-Receiver is in-box at the cut; the missing occluder is a CASTER far-clip.
-Caster-only far-plane extension (pad the caster light-space Z beyond 1 while
-keeping the receiver matrix/box unchanged) is the targeted fix — matches
-plan approach 1. A pure tier distanceM bump (approach 2/4) would also move
-the far plane outward but coarsens all cascades. 120 m coverage / xy / near
-are ruled out.
+### Remaining / for later
 
-## round 3 (partial, summarized)
-
-Task: summarize partial work (ledger + git diff of ShadowDiligent.cpp) and
-compare /tmp/fixed.jpg vs /tmp/baseline.jpg.
-
-### What exists now (working tree, uncommitted on top of 93e31c7)
-
-`c-engine/renderer/diligent/ShadowDiligent.cpp` — implements plan approach 1
-(caster-only light-space far-plane pad), uncommitted:
-- `casterW2LP[8]` matrix array: after `mgr.DistributeCascades`, per cascade the
-  WorldToLightProjSpace is copied and its light-Z columns are multiplied by
-  `farPadS = 1/(1+K)` (K = 1.5 default, env `ENGINE_SHADOW_FAR_PAD` clamped
-  [1,8]) so casters up to K·range past the box far plane still map into
-  [0,1] in light Z.
-- Same `farPadS` applied to `f4LightSpaceScale.z` and
-  `f4LightSpaceScaledBias.z` so the receiver sampling path reads the same
-  remapped depth the casters wrote.
-- Every draw/probe path now uses `casterW2LP[i]` instead of
-  `mgr.GetCascadeTransform(i).WorldToLightProjSpace`: player shadow draw,
-  terrain shadow draw, oracle dump, debug `shadow dbg` line, NDC probe.
-  Light-view matrix, box XY, cascade picks, uv mapping untouched.
-- No other source files changed (git status: only ShadowDiligent.cpp + AGENTS.md
-  dirty, .pi/ untracked). Build artifact state unknown from here.
-- NOTE: the diff adds a large explanatory comment block — violates the
-  "Do not use comments in the code" rule; strip before commit.
-
-### Screenshot comparison /tmp/baseline.jpg vs /tmp/fixed.jpg (parked vantage,
-player/camera readouts identical)
-
-- Baseline: cliff shadow = dark wedge on the grass with a straight hard edge;
-  straight lit cut-out band beyond it (the reported bug).
-- Fixed: the straight cut-out band is GONE — but so is the ENTIRE cliff shadow.
-  The grass region that held the shadow wedge in the baseline is now uniformly
-  lit; no dark band anywhere in that area.
-- Verdict: the fix regressed from "partially missing shadow (straight cut)" to
-  "cliff shadow missing entirely on the grass" (over-correction: the pad +
-  receiver remap apparently killed in-box shadow hits too, not just extended
-  them).
-- New artifacts: none else visible — no shadow acne or peter-panning on the
-  cliff face or elsewhere; cliff surface and terrain elsewhere identical;
-  no changes in other screen regions (UI/terrain pixels match).
-
-### Handoff
-
-Suspect candidates to check: (a) `farPadS` applied to the *biased* z of the
-caster matrix — the matrix's own far-plane mapping (row 3/4 in NDC z terms)
-may now map the box far plane to NDC < 1 differently than the scale/bias remap
-assumes, shifting in-box depths so receivers compare against the wrong range;
-(b) depth-bias sign interaction: with light-Z squeezed 1/2.5×, the fixed
-fractional bias in NDC is 2.5× larger in light units on casters but the
-receiver compares against remapped depth — confirm the bias is not pushing
-every in-box sample into self-shadowing-miss (i.e. reading clear); (c) verify
-with a smaller K (`ENGINE_SHADOW_FAR_PAD=1.0`) or with K applied to caster only
-without the receiver scale/bias remap, plus a fresh `ENGINE_SHADOW_DUMP` of the
-c2 atlas to see if the cliff now fills the atlas and whether in-box depths
-shifted.
-
-## manager note (post round 4)
-- Reverted c-engine/renderer/diligent/ShadowDiligent.cpp to baseline (round-3 regression: far-pad squeezed in-box shadow entirely out).
-- Lesson for re-land: the z-squeeze (equivalent to far-plane extension by 1+K for ortho light) must ALSO scale the sampling-side depth bias (fFixedDepthBias -> *farPadS); unscaled fixed bias becomes (1+K)x in light units => shadow vanishes/peter-pans. No comments in code (project rule). Verify with parked screenshot + ENGINE_SHADOW_DUMP c2 atlas fill, compare /tmp/baseline.jpg.
-
-## round 5 (task 4: re-land far-pad with sampling bias scaled)
-
-Re-landed the far-pad fix exactly as the manager specified (no comments in code):
-`farPadS = 1/(1+K)` default K=1.5 (env `ENGINE_SHADOW_FAR_PAD` overrides K in [1,8]),
-caster W2LP z-column scaled by farPadS into a `casterW2LP[]` used by all depth draws,
-`f4LightSpaceScale.z` + `f4LightSpaceScaledBias.z` scaled by farPadS,
-`fFixedDepthBias *= farPadS`. Builds clean, no LSP diagnostics.
-
-Same-state evidence (all runs pinned to the flying camera anchor (-320,588,344) at
-frame 100; baseline vs fixed byte-identical c2 raw dumps except the remap):
-- c2 raw atlas: baseline clear 14.8% (empty quadrant) -> fixed 0.0%; raw max 0.33
-  -> 0.52, i.e. caster content now extends ~30% past the old far plane; c2 clear
-  gone. The far extension itself works (atlas fill verified).
-- Filterable (EVSM) atlas verified == warp(raw) texel-for-texel in the fixed state.
-- Render: shadow still absent - the wedge is gone (same as round 3). Same-state
-  side-by-side (baseline3 vs fixed, flying anchor): baseline has the dark wedge +
-  straight cut; fixed has no shadow at all on the grass. The cliff shadow does NOT
-  extend past the old cut; the regression persists.
-
-Root-cause update (supersedes the "unscaled bias" explanation for this build):
-the active mode is EVSM4 (shadowMode 4) and its splat-PS branch does NOT apply
-fFixedDepthBias at all (only the PCF branch does: `LightDepth = cascadeNdc.z -
-sBiasParams.y`). Scaling fFixedDepthBias therefore cannot affect the rendered
-result. What does: the far-pad compresses all shared NDC depths into [0, farPadS]
-(~[0,0.4]); the EVSM warp exp(40*(2z-1)) then lands in its underflow half
-(w1 ~ 1e-10..1e-4, M1^2 ~ 1e-20 = subnormal f32), so the Chebyshev test degenerates
-to lit (GPU PS debug readback: pPos~pNeg~0.8 on in-box wedge pixels where the
-CPU Chebyshev over the same atlas gives p~0). Baseline depths span [0.33,1.0]
-where the warp has full dynamic range, which is why baseline works.
-
-Suggested next direction for task 5 (not done here, out of scope): either
-(a) remap the EVSM warp exponents to the compressed range (both converter and PS,
-i.e. warp on z/farPadS), or (b) keep the [0,1] mapping and extend the cascade
-light-box far plane in DistributeCascades instead of scaling the z-column
-(the original plan "approach 1"). Either way the fix must stay in this engine's
-files if possible; the warp remap touches DiligentFX EVSMHorzPS + the PS cbuffer.
-
-Cleanup: temporary splat-PS debug instrumentation reverted (git checkout).
-
-## round 6 (task 5: EVSM warp remap to z-tilde)
-
-### Implemented (all in working tree, not committed)
-
-- Converter (`ShadowConversions.fx EVSMHorzPS` + `ShadowMapManager`): z-tilde
-  warp `exp(E·(2·depth/farPadS − 1))`, exponents range-scaled by
-  `evsmRange = farPadS/(2−farPadS)` (E 40→10, 5→1.25), cleared-texel
-  exclusion + point-mass sentinel. `SetEVSMFarPadS()` delivers farPadS.
-- PS (`splat_terrain_ps.hlsl`): `warpDepthEVSM(depth, f4ShadowFade.z, out ex)`
-  mirrors the same z-tilde + range scaling; min-var floor uses the scaled
-  exponents. farPadS travels via `f4ShadowFade.z` (staged in
-  `SplatTerrainDiligent.cpp` from `shadowDiligentFarPadS()`).
-- Two enabling changes in the far-pad state (`farPadS < 1`):
-  1. `sa.iFixedFilterSize = 2` → DiligentFX `bSkipBlur` → the converter writes
-     PER-TEXEL point-mass moments (the fixed 5-tap horizontal moment filter
-     was smearing the cliff into the grass; at E=10 that smear is fatal).
-  2. New nearest sampler `g_ShadowMapNearestSampler` for the EVSM 8-tap moment
-     sampling (linear 4-texel mixing of point-mass moments defeats the test
-     at compressed exponents; nearest = per-texel test, 8 taps = PCF).
-- Instrumentation kept (env/debug-gated): PS debug submode 4
-  (`(pPos,pNeg)` per-tap Chebyshev map, `ENGINE_SPLAT_SHADOW_DEBUG=4`) and 5
-  (uv map); `ENGINE_EVSM_RAWDUMP=path` writes raw-depth PGM per slice
-  (alongside `ENGINE_EVSM_DUMP` filterable log10(R) PGMs) in the
-  `ENGINE_SHADOW_EVSM=frameN` probe.
-
-### Verified
-
-- Atlas (c2, skip-blur state) is exact point-mass z-tilde E=10: raw 0.145 →
-  M1 0.0631 (= e^(10·(2·0.3625−1)) ✓); per-column first-hit depths read back
-  per-texel.
-- PS is self-consistent with the atlas: per-pixel pPos correlates 0.998 with
-  atlas M1 at the PS's own uv.
-
-### Why the acceptance criterion still fails (wedge does not extend)
-
-The wedge vanished in the far-pad state (fixed.jpg shows only a thin sliver
-at the ridge; the whole in-box band + past-cut band render lit). Chain of
-evidence:
-
-1. Cascade selection is IDENTICAL in both states (slice map, mode 1): the
-   wedge/band receivers pick **c1** in baseline AND far-pad.
-2. Far-pad c1 columns at the wedge/band receiver uv (PS frame) are CLEARED
-   (raw 1.0 → sentinel → Chebyshev clamp → lit). The cliff casters live in
-   **c2** (c2 raw 0.145–0.149 = the wall at the receivers' uv).
-3. Chunk culling is identical between states (c0 3/16, c1 3/16, c2 4/16 on
-   frame 1; 2/16 steady) — the same chunks are drawn into c1 in both states.
-4. So the c1 caster uv FOOTPRINT moved relative to the receiver uv between
-   states even though chunk counts and the light-view XY box are nominally
-   unchanged. Missing datapoint: baseline c1 raw PGM (the RAWDUMP probe lives
-   in the working tree; a baseline run needs the far-pad code stashed, which
-   stashes the probe too — port the ~20-line RAWDUMP hunk to a baseline
-   checkout to fill the gap).
-
-Likely suspects for the footprint shift: f4LightSpaceScale.xy /
-f4LightSpaceScaledBias.xy are taken from the DiligentFX cascade transform
-(unpadded box), while casters rasterize through `casterW2LP` (z-column
-padded). If any xy component is derived from the padded range anywhere on one
-side only, casters and receivers desynchronize in uv. Check by dumping
-c1 raw in both states (PS-frame coords) and diffing the caster footprint.
-
-### Pitfalls found this round
-
-- CPU atlas readback PGMs are Y-FLIPPED relative to the PS uv frame (the
-  uv map / pPos map correlation is symmetric here, but per-texel reads must
-  use the PS frame, i.e. sample PGM row (1−v)·H).
-- `FILTER_TYPE_NEAREST` does not exist in Diligent — it is
-  `FILTER_TYPE_POINT`.
-- `sa.iFixedFilterSize = 2` is DiligentFX's "skip blur" sentinel (radius 0);
-  `= 5` (tier.pcfFilterSize) forces the 5-tap horizontal moment filter.
-- The PS's 8-tap Poisson loop is hard-coded; `sTail.y` (iFixedFilterSize)
-  is not a PS-side tap count, so converter-side filter changes don't affect
-  the PS.
-- The EVSM debug IBL values are post-tone-map (monotone, fine for maps).
-
-### State
-
-`/tmp/fixed.jpg` (12:40) = current state (remap + skip-blur + nearest
-sampler + RAWDUMP code). `/tmp/baseline_same.jpg` unchanged. Diff: wedge
-band −(gone), past-cut band +0.0 (still lit). Acceptance NOT met.
-
-## round 7 (task 6) — EVSM rawdump port + baseline capture + wedge desync — PARTIAL
-
-### Done
-- RAWDUMP probe (ENGINE_SHADOW_EVSM=frame) is in the baseline build (ShadowDiligent.cpp): dumps raw DSV + filterable atlas per slice as PGMs; ran clean in both states. Baseline pinned captures: /tmp/base_raw.{0,1,2} (+ farpad_raw/flt, evsmraw).
-- UV-footprint diff (baseline vs far-pad, all cascades, CPU mask): far-pad ⊇ baseline everywhere (base-only texels = 0 in c0/c1/c2). No culling/xy shift. The far-pad state is a strict z-compression of the same content. The "suspect xy scale/bias" desync hypothesis is REFUTED.
-- Staging fix: SplatTerrainDiligent.cpp:992 was staging f4ShadowFade.z = 0.0f; now shadowDiligentFarPadS() (0.4). Necessary (GPU read 0.0 at screenshot frame), but NOT sufficient.
-
-### What the wedge desync actually is (renderdoc frame-300 cbuffer+atlas reads + PS instrumented runs)
-- GPU atlas (R32G32B32A32 2048^2x3, ResourceId::1089) matches CPU readback within noise at the wedge uv in all slices. PS uv in [0,1] (wedge c2 uv ~ (0.47, 0.32)), cascade pick = 2 in both states (identical cascade maps).
-- Far-pad state is UNSTABLE OVER TIME in the pinned run:
-  - screenshot frame 100: wedge LIT, whole scene mostly lit (fixed_pn.jpg). PS measured f4ShadowFade.z = 0.0 and receiver z unscaled at that frame.
-  - frame 300 (rdc): cbuffer correct (pad 0.4, scale/bias z scaled x0.4, caster W2LP x0.4, atlas z-tilde verified) — yet scene is 63% dark (1.2M dark px vs baseline 368K) = OVER-shadowed.
-  - frame 1000: LIT again (fixed_f1000.jpg, 285K dark ~ frame 100).
-- So the failure is not one steady-state desync but an interaction of the far-pad z-machinery (caster z x0.4 + receiver scale/bias z x0.4 + z-tilde warp 2z/pad-1 + skip-blur point-mass moments) with per-frame state (passReady warmup, caster chunk streaming 3/16 -> 2/16, focus band). In baseline the z window [0,1] + E+40 warp is self-consistent; in far-pad the wedge receiver's Chebyshev mean/m1 relation flips to LIT in the early/late frames and to over-shadowed mid-run.
-- A temporary PS v-flip test (cascadeUV y flip) "restores" the wedge in far-pad AND extends the baseline wedge past any cut (flipv_baseline tip x=2578 vs baseline 1781) — so the flip is a convention change, NOT the fix; it was reverted. Do not ship it.
-- PS debug instrumentation used: submode 6 (first-tap m1), 7/8/9 (forced slice), 10 (z, log-w, pad), 11 (raw uv) — all in /tmp ps copies only; repo PS is clean round-6.
-
-### Files / artifacts
-- /tmp/round7_fixed.diff = full fix state (round 6 + staging line); repo is in this state now.
-- rdc frame-300 captures: fixed state atlas slices saved /tmp/rdc_atlas_s{0,1,2}.npy; the current /tmp/RenderDoc/c-game_frame300.rdc is the BASELINE capture (13:32, ~950MB) — delete when done. /tmp/rdc-frame/unnamed_eid594_out0.png = baseline frame-300 output.
-- RenderDoc SWIG replay API notes: ReplayController_GetTextureData(rid, Subresource{mip,slice}) works for full-slice RGBA readback; GetConstantBlocks(ShaderStage.Pixel, false)[i].descriptor -> GetBufferData(rid, byteOffset, byteSize); splat cbuffer = 2608B (prefix 1376 + anchor 16 + ShadowMapAttribs 1200 + shadowFade 16); Cascades[] at ShadowMapAttribs+64, 64B each {scale, scaledBias, startEndZ, margin}; f4ShadowMapDim at +1120.
-
-### Remaining (precise)
-1. Pin the far-pad time dependency: add a one-line per-frame log (frame, passReady, caster chunks, tier, farPadS, shadowFade.z staged, c2 scale.z/bias.z) for frames 50..1000 step 50 in both states; identify which variable flips between the LIT (100/1000) and over-shadowed (300) windows.
-2. Once the flipping input is named: fix its warmup/ordering (likely passReady-gated state that the cbuffer/caster path uses at different frames — the 100/300/1000 pattern smells like a one-frame-stale or re-init race in shadowDiligentUpdateFrame vs splatFrameFill).
-3. Re-capture /tmp/fixed.jpg after the fix; acceptance: wedge visible AND extending past the old straight cut (baseline tip x=1781 orig px at y~870).
+- Pre-existing ground-state defect (NOT fixed, out of scope): capsule at the park spot has
+  ground=3 (StuckInFloor) or ground=0 (InAir) instead of OnGround — it slowly sinks into the
+  terrain (~0.07 m over 12 s) and has no friction (would slide on slopes if lifted). A proper
+  controller fix (ground-state/predictive-contact tuning) is the follow-up; note that simply
+  lifting the capsule to the terrain surface exposes the slide, which is why terrain is
+  excluded from the new depenetrate.
+- Round-2 item (task 2) still open: stale prop blobs (Cube.005/012-015 mispositioned,
+  SM_HP_Tree* trunk-only) need a re-bake of `test2.jolt.zstd`.

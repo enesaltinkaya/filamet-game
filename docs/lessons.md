@@ -4,6 +4,11 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-11 — [entries](lessons/2026-09-11.md)
+
+- Diligent `float4x4` is ROW-VECTOR convention: decomposing its columns as if column-major yields the INVERSE rotation (pos/scale look right, AABB checks can't catch ±θ about one axis) — use `Matrix4x4::Decompose()`; fingerprint: body world-bounds print matches render but collision sits ~10 m in front of the visible surface, body quat axis component sign-flipped vs glTF
+- Numeric probe beats bound checks: matching `GetWorldSpaceBounds` ≠ matching collision surface — compare a physics raycast distance vs an analytic mesh raycast on the same ray; harness = extracted sidecar blob + `joltCreateBodyFromShapeBlob` in a tiny cjolt-linked main driving the `JOLT_TEST_*` probes
+
 ## 2026-09-10 — [entries](lessons/2026-09-10.md)
 
 - A 0-color-target + DSV depth-only PSO is accepted by CreateGraphicsPipelineState on this Vulkan build but its depth writes don't land (readback: 1-px sliver) — use a throwaway color RT + 1-RT for depth-only casts; verify a depth pass by its written bytes, not PSO-creation success

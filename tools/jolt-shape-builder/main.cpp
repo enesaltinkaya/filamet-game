@@ -236,7 +236,15 @@ static std::string build_mesh_shape(cgltf_primitive* prim) {
                 shapeResult.GetError().c_str());
         return {};
     }
-
+    if (getenv("JSB_DEBUG")) {
+        const Shape* dbg = shapeResult.Get();
+        AABox db = dbg->GetLocalBounds();
+        MyVec3 rmin{1e30,1e30,1e30}, rmax{-1e30,-1e30,-1e30};
+        for (auto& v : verts) { rmin.x=min(rmin.x,v.x); rmin.y=min(rmin.y,v.y); rmin.z=min(rmin.z,v.z); rmax.x=max(rmax.x,v.x); rmax.y=max(rmax.y,v.y); rmax.z=max(rmax.z,v.z); }
+        printf("JSB_DEBUG rawAABB=(%.2f,%.2f,%.2f) shapeLocalAABB=(%.2f,%.2f,%.2f)\n",
+            rmax.x-rmin.x, rmax.y-rmin.y, rmax.z-rmin.z,
+            (double)(db.mMax.GetX()-db.mMin.GetX()), (double)(db.mMax.GetY()-db.mMin.GetY()), (double)(db.mMax.GetZ()-db.mMin.GetZ()));
+    }
     return serialize_shape(shapeResult.Get());
 }
 

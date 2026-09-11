@@ -818,62 +818,26 @@ bool gltfPropsNodeGlobalTRSDiligent(const char* name, f32 pos[3], f32 quat[4], f
             pos[0] = (f32)mm[3][0];
             pos[1] = (f32)mm[3][1];
             pos[2] = (f32)mm[3][2];
-            const f32 c0[3] = {(f32)mm[0][0], (f32)mm[1][0], (f32)mm[2][0]};
-            const f32 c1[3] = {(f32)mm[0][1], (f32)mm[1][1], (f32)mm[2][1]};
-            const f32 c2[3] = {(f32)mm[0][2], (f32)mm[1][2], (f32)mm[2][2]};
-            scale[0] = sqrtf(c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2]);
-            scale[1] = sqrtf(c1[0] * c1[0] + c1[1] * c1[1] + c1[2] * c1[2]);
-            scale[2] = sqrtf(c2[0] * c2[0] + c2[1] * c2[1] + c2[2] * c2[2]);
+            Diligent::float3 t;
+            Diligent::QuaternionF q;
+            Diligent::float3 s;
+            if (!g.Decompose(t, q, s)) {
+                quat[0] = quat[1] = quat[2] = 0.0f;
+                quat[3] = 1.0f;
+                scale[0] = scale[1] = scale[2] = 1.0f;
+                return true;
+            }
+            quat[0] = q.q.x;
+            quat[1] = q.q.y;
+            quat[2] = q.q.z;
+            quat[3] = q.q.w;
+            scale[0] = fabsf(s.x);
+            scale[1] = fabsf(s.y);
+            scale[2] = fabsf(s.z);
             if (scale[0] < 1e-9f || scale[1] < 1e-9f || scale[2] < 1e-9f) {
                 quat[0] = quat[1] = quat[2] = 0.0f;
                 quat[3] = 1.0f;
                 return true;
-            }
-            const f32 a[3] = {c0[0] / scale[0], c0[1] / scale[0], c0[2] / scale[0]};
-            f32 b[3] = {c1[0] / scale[1], c1[1] / scale[1], c1[2] / scale[1]};
-            const f32 d = b[0] * a[0] + b[1] * a[1] + b[2] * a[2];
-            b[0] -= d * a[0];
-            b[1] -= d * a[1];
-            b[2] -= d * a[2];
-            const f32 bl = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
-            if (bl < 1e-9f) {
-                quat[0] = quat[1] = quat[2] = 0.0f;
-                quat[3] = 1.0f;
-                return true;
-            }
-            b[0] /= bl;
-            b[1] /= bl;
-            b[2] /= bl;
-            const f32 cc[3] = {
-                a[1] * b[2] - a[2] * b[1],
-                a[2] * b[0] - a[0] * b[2],
-                a[0] * b[1] - a[1] * b[0]};
-            const f32 r[9] = {a[0], b[0], cc[0], a[1], b[1], cc[1], a[2], b[2], cc[2]};
-            const f32 tr = r[0] + r[4] + r[8];
-            if (tr > 0.0f) {
-                const f32 s = sqrtf(tr + 1.0f) * 2.0f;
-                quat[3] = s * 0.25f;
-                quat[0] = (r[7] - r[5]) / s;
-                quat[1] = (r[2] - r[6]) / s;
-                quat[2] = (r[3] - r[1]) / s;
-            } else if (r[0] > r[4] && r[0] > r[8]) {
-                const f32 s = sqrtf(1.0f + r[0] - r[4] - r[8]) * 2.0f;
-                quat[0] = s * 0.25f;
-                quat[1] = (r[3] + r[1]) / s;
-                quat[2] = (r[6] + r[2]) / s;
-                quat[3] = (r[5] - r[7]) / s;
-            } else if (r[4] > r[8]) {
-                const f32 s = sqrtf(1.0f + r[4] - r[0] - r[8]) * 2.0f;
-                quat[0] = (r[1] + r[3]) / s;
-                quat[1] = s * 0.25f;
-                quat[2] = (r[7] + r[5]) / s;
-                quat[3] = (r[6] - r[2]) / s;
-            } else {
-                const f32 s = sqrtf(1.0f + r[8] - r[0] - r[4]) * 2.0f;
-                quat[0] = (r[2] + r[6]) / s;
-                quat[1] = (r[5] + r[7]) / s;
-                quat[2] = s * 0.25f;
-                quat[3] = (r[3] - r[1]) / s;
             }
             return true;
         }

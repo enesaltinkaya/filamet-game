@@ -46,7 +46,7 @@ namespace engine::renderer::diligent {
         ssaoIntensityValue            = intensity;
         ssaoAttribs.EffectRadius      = radius;
         ssaoAttribs.Algorithm         = (uint)algorithm;
-        ssaoAttribs.ResetAccumulation = 1;
+        ssaoAttribs.ResetAccumulation = true;
     }
 
     bool ssaoOn(void) {
