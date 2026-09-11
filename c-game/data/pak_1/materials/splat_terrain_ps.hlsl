@@ -153,10 +153,12 @@ TextureCube g_IrradianceMap;
 TextureCube g_PrefilteredEnvMap;
 Texture2D g_PreintegratedGGX;
 Texture2DArray g_ShadowMap;
+Texture2DArray g_ShadowMapLinear;
 SamplerState g_Sampler;
 SamplerState g_DetailSampler;
 SamplerState g_LinearClampSampler;
 SamplerComparisonState g_ShadowMap_sampler;
+SamplerState g_ShadowMapLinearSampler;
 
 struct PSOutput
 {
@@ -313,6 +315,124 @@ float filterShadowPCF3(float2 uv, float slice, float lightDepth)
     return sum / 16.0;
 }
 
+// The VSM (mode 2) receive: the filterable atlas stores (R = mean depth,
+// G = mean depth^2) pre-filtered over the tier's radius (ShadowConversions.fx
+// VSMHorzPS/VertBlurPS). Per tap the one-tailed Chebyshev bound (Shadows.fxh
+// ChebyshevUpperBound, VSM's fMinVariance floor = fVSMBias, the cbuffer's
+// sVSMParams.x): in front of the occluder mean -> lit, behind ->
+// Var / (Var + d^2), which falls off over ~2 sqrt(Var) and needs no separate
+// depth bias (fFixedDepthBias would double-bias and peter-pan). 8 Poisson
+// taps (unit radius) around the texel, averaged like the PCF3 kernel; the
+// clamp keeps the taps inside the cascade tile.
+float filterShadowVSM(float2 uv, float slice, float lightDepth)
+{
+    float4 dims;
+    g_ShadowMapLinear.GetDimensions(dims.x, dims.y, dims.z);
+    float2 px     = uv * dims.xy;
+    float2 baseUV = floor(px + 0.5) - 0.5;
+    float  s      = (px.x + 0.5) - (baseUV.x + 0.5);
+    float  t      = (px.y + 0.5) - (baseUV.y + 0.5);
+    float2 texel  = 1.0 / dims.xy;
+
+    const float2 poisson[8] =
+    {
+        float2( 0.9362,  0.5513),
+        float2(-0.4554,  0.9537),
+        float2( 0.6568, -0.8001),
+        float2( 0.8798, -0.5202),
+        float2(-0.8181,  0.2479),
+        float2(-0.1008, -0.8778),
+        float2(-0.2477,  0.3971),
+        float2( 0.8349,  0.4302)
+    };
+
+    lightDepth = max(lightDepth, 0.0);
+    float sum = 0.0;
+    for (int i = 0; i < 8; ++i)
+    {
+        float2 tUV = (baseUV + float2(s, t) + poisson[i]) * texel;
+        tUV        = clamp(tUV, 0.0, 1.0);
+        float2 m   = g_ShadowMapLinear.Sample(g_ShadowMapLinearSampler, float3(tUV, slice)).xy;
+        float  variance = max(m.y - m.x * m.x, sVSMParams.x);
+        float  d        = lightDepth - m.x;
+        float  p        = (d < 0.0) ? 1.0 : min(variance / (variance + d * d), 1.0);
+        if (sVSMParams.y > 0.0)
+            p = saturate((p - sVSMParams.y) / (1.0 - sVSMParams.y));
+        sum += p;
+    }
+    return sum / 8.0;
+}
+
+// EVSM (modes 3/4) receive. The filterable atlas stores warped-depth moments
+// (ShadowConversions.fx EVSMHorzPS): R,G = (mean w1, mean w1^2) with
+// w1 = +exp(+posExp * (2d - 1)) and, for EVSM4 only (RGBA32; the EVSM2 atlas is
+// RG32 so .zw read back as 0), B,A = (mean w2, mean w2^2) with
+// w2 = -exp(-negExp * (2d - 1)). The receiver un-warps its RAW cascade z with
+// the same mirrored exponents (Shadows.fxh WarpDepthEVSM, clamped to 42 for
+// 32-bit per GetEVSMExponents) and runs the same one-tailed Chebyshev test in
+// the warped domain — but the min-variance floor is per-dimension and scales
+// with the warp itself: (fVSMBias * exponent * warpedDepth)^2 (Shadows.fxh
+// SampleEVSM), which is the mode's clamp offset (the exponential warp is the
+// depth bias; no fFixedDepthBias). EVSM2 tests only the positive dimension;
+// EVSM4 additionally tests the negative one and takes the min of both.
+float chebyshevUpperBound(float2 moments, float mean, float minVariance)
+{
+    float variance = max(moments.y - moments.x * moments.x, minVariance);
+    float d        = mean - moments.x;
+    float pMax     = variance / (variance + d * d);
+    if (sVSMParams.y > 0.0)
+        pMax = saturate((pMax - sVSMParams.y) / (1.0 - sVSMParams.y));
+    return (mean <= moments.x) ? 1.0 : min(pMax, 1.0);
+}
+
+float2 warpDepthEVSM(float depth)
+{
+    float  maxExp = (sTail.x > 0.5) ? 42.0 : 5.54;
+    float2 ex     = min(sVSMParams.zw, float2(maxExp, maxExp));
+    float  d      = 2.0 * depth - 1.0;
+    return float2(exp(ex.x * d), -exp(-ex.y * d));
+}
+
+float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4)
+{
+    float4 dims;
+    g_ShadowMapLinear.GetDimensions(dims.x, dims.y, dims.z);
+    float2 px     = uv * dims.xy;
+    float2 baseUV = floor(px + 0.5) - 0.5;
+    float  s      = (px.x + 0.5) - (baseUV.x + 0.5);
+    float  t      = (px.y + 0.5) - (baseUV.y + 0.5);
+    float2 texel  = 1.0 / dims.xy;
+
+    const float2 poisson[8] =
+    {
+        float2( 0.9362,  0.5513),
+        float2(-0.4554,  0.9537),
+        float2( 0.6568, -0.8001),
+        float2( 0.8798, -0.5202),
+        float2(-0.8181,  0.2479),
+        float2(-0.1008, -0.8778),
+        float2(-0.2477,  0.3971),
+        float2( 0.8349,  0.4302)
+    };
+
+    lightDepth = max(lightDepth, 0.0);
+    float2 w      = warpDepthEVSM(lightDepth);
+    float2 minVar = sVSMParams.x * sVSMParams.zw * w;
+
+    float sum = 0.0;
+    for (int i = 0; i < 8; ++i)
+    {
+        float2 tUV = (baseUV + float2(s, t) + poisson[i]) * texel;
+        tUV        = clamp(tUV, 0.0, 1.0);
+        float4 m  = g_ShadowMapLinear.Sample(g_ShadowMapLinearSampler, float3(tUV, slice));
+        float  p  = chebyshevUpperBound(m.xy, w.x, minVar.x * minVar.x);
+        if (evsm4)
+            p = min(p, chebyshevUpperBound(m.zw, w.y, minVar.y * minVar.y));
+        sum += p;
+    }
+    return sum / 8.0;
+}
+
 float3 rotateAroundY(float3 d, float2 rot)
 {
     return float3(rot.x * d.x + rot.y * d.z, d.y, -rot.y * d.x + rot.x * d.z);
@@ -428,6 +548,7 @@ PSOutput main(PSSplatIn In)
     float3 LightDir    = lDir.xyz;       // travel direction
     float  ShadowIndex = lDir.w;
     float3 LightIntensity = lInt.xyz;
+    float  shadowMode = f4ShadowFade.y;
     float  Attenuation = 1.0;
     int    dbgCascade = -2;
     float2 dbgUV      = float2(0.0, 0.0);
@@ -469,8 +590,25 @@ PSOutput main(PSSplatIn In)
             if (cascadeUV.x >= 0.0 && cascadeUV.x <= 1.0 &&
                 cascadeUV.y >= 0.0 && cascadeUV.y <= 1.0)
             {
-                Attenuation = filterShadowPCF3(cascadeUV, float(cascade), LightDepth);
-                dbgRaw      = g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(cascadeUV, float(cascade)), max(LightDepth, 1e-8));
+                if (shadowMode < 1.5)
+                {
+                    Attenuation = filterShadowPCF3(cascadeUV, float(cascade), LightDepth);
+                    dbgRaw      = g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(cascadeUV, float(cascade)), max(LightDepth, 1e-8));
+                }
+                else if (shadowMode < 2.5)
+                {
+                    // Raw cascade z (no fFixedDepthBias — the variance floor is
+                    // this branch's bias; LightDepth carries the PCF bias).
+                    Attenuation = filterShadowVSM(cascadeUV, float(cascade), cascadeNdc.z);
+                }
+                else if (shadowMode < 3.5)
+                {
+                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, false);
+                }
+                else
+                {
+                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, true);
+                }
             }
             // Receiver-side tier-distance fade (lessons.md 2026-09-07): the
             // padded light cube still samples past the tier distance, so fade

@@ -86,7 +86,7 @@ static int refresh(void*) {
 static int toggleShadows(void* _) {
     (void)_;
     auto g = renderer::rendererGraphicsSettings();
-    g.shadowMode = (g.shadowMode == 0) ? 1 : 0;  // off <-> PCF
+    g.shadowMode = (g.shadowMode + 1) % 5;
     renderer::rendererGraphicsApply(g);
     return refresh(_);
 }

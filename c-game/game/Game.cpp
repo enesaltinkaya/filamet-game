@@ -109,21 +109,9 @@ namespace game {
         }
 
         // Player character (eve): a zstd-compressed glb exported by
-        // scripts/export-models.sh. Spawns on the terrain surface — a plane
-        // fit over the terrain's own vertices near the spawn xz — 2 m up so
-        // the capsule settles onto the ground on the first physics frame.
-        f32 spawnPt[3] = {0.0f, 0.0f, 0.0f};
-        if (terrainUp) {
-            f32 surfaceY = 0.0f;
-            if (engine::gltf::gltfSceneSurfaceHeight(spawnPt[0], spawnPt[2], 30.0f, &surfaceY)) {
-                spawnPt[1] = surfaceY + 2.0f;
-            } else {
-                f32 tmin[3], tmax[3];
-                if (engine::gltf::gltfSceneBoundingBox(tmin, tmax)) {
-                    spawnPt[1] = (tmin[1] + tmax[1]) * 0.5f;
-                }
-            }
-        }
+        // scripts/export-models.sh. Static spawn — a saved player row
+        // (playerDbLoad) or ENGINE_TELEPORT overrides it on world load.
+        f32 spawnPt[3] = {-500.0f, 513.0f, 164.0f};
         // Override the spawn with an explicit position (ENGINE_TELEPORT="x,y,z").
         if (const char* tpos = getenv("ENGINE_TELEPORT")) {
             float tx = 0.0f, ty = 0.0f, tz = 0.0f;

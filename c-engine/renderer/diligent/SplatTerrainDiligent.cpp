@@ -866,14 +866,14 @@ struct SplatFrameStaging {
 static_assert(sizeof(SplatFrameStaging) % 16 == 0, "splat frame attribs layout");
 static SplatFrameStaging splatFrameStaging;
 
-// The PBR pass' CSM-receive condition (pbrShadowsOn in GltfDiligent.cpp):
-// the PBR receiver only receives in PCF mode — the filterable VSM/EVSM
-// atlas stores variance, not depth.
+// The splat pass' CSM-receive condition (pbrShadowsOn in GltfDiligent.cpp):
+// the receiver runs for every shadow mode — the PCF kernel only in mode 1,
+// the filterable VSM/EVSM branch (f4ShadowFade.y) in modes 2-4.
 static bool splatShadowsOn(void) {
     if (getenv("ENGINE_PBR_NO_RECEIVE")) {
         return false;
     }
-    return shadowDiligentActive() && shadowDiligentMode() == 1 &&
+    return shadowDiligentActive() && shadowDiligentMode() >= 1 &&
            shadowDiligentShadowSRV() != nullptr;
 }
 
@@ -989,7 +989,7 @@ static void splatFrameFill(void) {
                       "debug-mode slot must hold a raw f32");
         std::memcpy(&splatFrameStaging.shadowAttribs.fDummy, &mode, sizeof(mode));
     }
-    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), 0.0f, 0.0f, 0.0f};
+    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), (f32)shadowDiligentMode(), 0.0f, 0.0f};
 }
 
 static IShader*                    splatVS = nullptr;
@@ -1001,6 +1001,7 @@ static ISampler*                   splatSampler = nullptr;       // group weight
 static ISampler*                   splatDetailSampler = nullptr; // tiled details (linear repeat, aniso 16)
 static ISampler*                   splatIblSampler = nullptr;    // env cubes + GGX LUT (linear clamp)
 static ISampler*                   splatShadowSampler = nullptr; // comparison linear clamp (PCF)
+static ISampler*                   splatShadowLinearSampler = nullptr; // linear clamp (VSM/EVSM filterable receive)
 static IBuffer*                    splatFrameCB = nullptr;
 static ITexture*                   splatShadowDummyTex = nullptr;
 static ITextureView*               splatShadowDummySRV = nullptr;
@@ -1012,9 +1013,11 @@ static ITextureView*               splatPrefilteredDummySRV = nullptr;
 static IShaderResourceVariable*    splatSrvIrradiance = nullptr;
 static IShaderResourceVariable*    splatSrvPrefiltered = nullptr;
 static IShaderResourceVariable*    splatSrvShadow = nullptr;
+static IShaderResourceVariable*    splatSrvShadowLinear = nullptr;
 static ITexture*                   splatBoundIrradiance = nullptr;
 static ITexture*                   splatBoundPrefiltered = nullptr;
 static ITextureView*               splatBoundShadow = nullptr;
+static ITextureView*               splatBoundShadowLinear = nullptr;
 static bool                        splatPassReady = false;
 static bool                        splatPassFailed = false;
 static u64                         splatFrameNo = 0;
@@ -1185,6 +1188,20 @@ void splatPassInit(const SplatTerrain* t) {
         splatPassFailed = true;
         return;
     }
+    SamplerDesc sdShadowLin;
+    sdShadowLin.Name         = "splat shadow linear";
+    sdShadowLin.MinFilter     = FILTER_TYPE_LINEAR;
+    sdShadowLin.MagFilter     = FILTER_TYPE_LINEAR;
+    sdShadowLin.MipFilter     = FILTER_TYPE_LINEAR;
+    sdShadowLin.AddressU      = TEXTURE_ADDRESS_CLAMP;
+    sdShadowLin.AddressV      = TEXTURE_ADDRESS_CLAMP;
+    sdShadowLin.AddressW      = TEXTURE_ADDRESS_CLAMP;
+    device->CreateSampler(sdShadowLin, &splatShadowLinearSampler);
+    if (!splatShadowLinearSampler) {
+        splatPassRelease();
+        splatPassFailed = true;
+        return;
+    }
 
     // Fallback 1x1 depth-array shadow SRV + dim constant IBL cubes (the PS
     // binds these while the shadow pass / IBL module are not ready; nothing
@@ -1287,6 +1304,8 @@ void splatPassInit(const SplatTerrain* t) {
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_ShadowMap_sampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_ShadowMapLinearSampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_Weights0", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_Weights1", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
@@ -1347,6 +1366,8 @@ void splatPassInit(const SplatTerrain* t) {
                     SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
             {SHADER_TYPE_PIXEL, "g_ShadowMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "g_ShadowMapLinear", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
     };
     PipelineResourceSignatureDesc prsDesc;
     prsDesc.Resources      = resources;
@@ -1372,6 +1393,9 @@ void splatPassInit(const SplatTerrain* t) {
     }
     if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMap_sampler")) {
         v->Set(splatShadowSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    }
+    if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMapLinearSampler")) {
+        v->Set(splatShadowLinearSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     }
     auto setView = [](const char* name, Diligent::ITextureView* view) {
         if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, name)) {
@@ -1430,7 +1454,8 @@ void splatPassInit(const SplatTerrain* t) {
     splatSrvIrradiance  = splatSrb->GetVariableByName(SHADER_TYPE_PIXEL, "g_IrradianceMap");
     splatSrvPrefiltered = splatSrb->GetVariableByName(SHADER_TYPE_PIXEL, "g_PrefilteredEnvMap");
     splatSrvShadow      = splatSrb->GetVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMap");
-    if (!splatSrvIrradiance || !splatSrvPrefiltered || !splatSrvShadow) {
+    splatSrvShadowLinear = splatSrb->GetVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMapLinear");
+    if (!splatSrvIrradiance || !splatSrvPrefiltered || !splatSrvShadow || !splatSrvShadowLinear) {
         utils::warn("splatTerrain: dynamic SRB slots missing");
         splatPassRelease();
         splatPassFailed = true;
@@ -1493,7 +1518,9 @@ i32 splatCellOf(const SplatChunk& ch, int axis) {
 static void splatBindDynamicResources(void) {
     ITexture* irr = iblDiligentReady() ? iblDiligentIrradianceCube() : splatIrradianceDummyTex;
     ITexture* pfl = iblDiligentReady() ? iblDiligentPrefilteredCube() : splatPrefilteredDummyTex;
-    ITextureView* shd = splatShadowsOn() ? shadowDiligentShadowSRV() : splatShadowDummySRV;
+    const int mode = shadowDiligentMode();
+    ITextureView* shdCmp = (splatShadowsOn() && mode == 1) ? shadowDiligentShadowSRV() : splatShadowDummySRV;
+    ITextureView* shdLin = (splatShadowsOn() && mode >= 2) ? shadowDiligentShadowSRV() : splatShadowDummySRV;
     if (splatBoundIrradiance != irr) {
         splatBoundIrradiance = irr;
         splatSrvIrradiance->Set(irr ? irr->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr);
@@ -1502,9 +1529,13 @@ static void splatBindDynamicResources(void) {
         splatBoundPrefiltered = pfl;
         splatSrvPrefiltered->Set(pfl ? pfl->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr);
     }
-    if (splatBoundShadow != shd) {
-        splatBoundShadow = shd;
-        splatSrvShadow->Set(shd);
+    if (splatBoundShadow != shdCmp) {
+        splatBoundShadow = shdCmp;
+        splatSrvShadow->Set(shdCmp);
+    }
+    if (splatBoundShadowLinear != shdLin) {
+        splatBoundShadowLinear = shdLin;
+        splatSrvShadowLinear->Set(shdLin);
     }
 }
 
@@ -1932,9 +1963,11 @@ void splatPassRelease(void) {
     if (splatSrvIrradiance) { splatSrvIrradiance = nullptr; }
     if (splatSrvPrefiltered) { splatSrvPrefiltered = nullptr; }
     if (splatSrvShadow) { splatSrvShadow = nullptr; }
+    if (splatSrvShadowLinear) { splatSrvShadowLinear = nullptr; }
     splatBoundIrradiance = nullptr;
     splatBoundPrefiltered = nullptr;
     splatBoundShadow = nullptr;
+    splatBoundShadowLinear = nullptr;
     if (splatSrb) { splatSrb->Release(); splatSrb = nullptr; }
     if (splatPRS) { splatPRS->Release(); splatPRS = nullptr; }
     if (splatPipeline) { splatPipeline->Release(); splatPipeline = nullptr; }
@@ -1951,6 +1984,7 @@ void splatPassRelease(void) {
     if (splatDetailSampler) { splatDetailSampler->Release(); splatDetailSampler = nullptr; }
     if (splatIblSampler) { splatIblSampler->Release(); splatIblSampler = nullptr; }
     if (splatShadowSampler) { splatShadowSampler->Release(); splatShadowSampler = nullptr; }
+    if (splatShadowLinearSampler) { splatShadowLinearSampler->Release(); splatShadowLinearSampler = nullptr; }
     splatPassReady = false;
     splatPassFailed = false;
     splatFrameNo = 0;

@@ -233,6 +233,9 @@ void rendererGraphicsLoad(void) {
     s.casStrength   = (float)utils::settingsGetDouble("casStrength");
     s.msaa          = utils::settingsGetBool("msaaEnabled");
     s.shadowMode    = utils::settingsGetInt("shadowMode");
+    if (const char* shadowModeEnv = getenv("ENGINE_SHADOW_MODE")) {
+        s.shadowMode = atoi(shadowModeEnv);
+    }
     s.shadowQuality = utils::settingsGetInt("shadowQuality");
     s.ssao          = !utils::settingsGetBool("aoDisabled");
     s.ssaoRadius    = (float)utils::settingsGetDouble("ssaoRadius");
