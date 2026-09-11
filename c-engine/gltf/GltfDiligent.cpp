@@ -1521,8 +1521,8 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
     }
 }
 
-// CSM caster: re-renders the character through the PBR pipeline into the
-// cascade's depth atlas so it casts a shadow like terrain/props. The PBR VS
+// CSM caster: re-renders the character AND the scene/prop models through the
+// PBR pipeline into the cascade's depth atlas so they cast shadows. The PBR VS
 // projects with g_Frame.Camera.mViewProj, so the light view-proj (the same
 // anchor-relative mLightViewProj the depth pass draws with) is written into
 // the frame attribs for this draw only; worldDraw's fillFrameAttribs restores
@@ -1542,16 +1542,18 @@ void gltfDiligentShadowDraw(Diligent::IDeviceContext* ctx,
     GLTF::Model* model = worldModel();
     GLTF::ModelTransforms* transforms = worldTransforms();
     GLTF_PBR_Renderer* pbr = worldPbrRenderer();
-    if (!model || !transforms || !pbr) {
+    if (!pbr || (!model || !transforms) && sceneModels.empty()) {
         return;
     }
-    // The shadow pass runs BEFORE worldDraw, whose poseRebuild would otherwise
-    // leave the caster's placement pinned to LAST frame's anchor: the depth
-    // silhouette lands dEye away from the player and the ground shadow detaches
-    // while the orbit camera moves (TAA then holds the displaced shadow for
-    // ~stability/(1-stability) frames after the drag stops). poseRebuild is
-    // idempotent within a frame — animation advances only in the update phase.
+    // The shadow pass runs BEFORE worldDraw, whose poseRebuild/scenePoseRebuild
+    // would otherwise leave the casters' placement pinned to LAST frame's
+    // anchor: the depth silhouette lands dEye away from the player and the
+    // ground shadow detaches while the orbit camera moves (TAA then holds the
+    // displaced shadow for ~stability/(1-stability) frames after the drag
+    // stops). Both rebuilds are idempotent within a frame — animation advances
+    // only in the update phase.
     poseRebuild();
+    scenePoseRebuild();
     // The PBR PSOs expect 3 color RTs beside the DSV. The full-res world RTs
     // are wider than the cascade atlas, which would push the render area past
     // the 2048 depth attachment (VUID-VkRenderingInfo-pNext-06079) — so use
@@ -1601,8 +1603,25 @@ void gltfDiligentShadowDraw(Diligent::IDeviceContext* ctx,
     renderInfo.SceneIndex = worldSceneIndex();
     renderInfo.AlphaModes = GLTF_PBR_Renderer::RenderInfo::ALPHA_MODE_FLAG_ALL;
     renderInfo.Flags = GLTF_PBR_Renderer::PSO_FLAG_DEFAULT;
-    pbr->Render(ctx, *model, *transforms, transforms, renderInfo,
-            worldModelBindings());
+    if (model && transforms) {
+        pbr->Render(ctx, *model, *transforms, transforms, renderInfo,
+                worldModelBindings());
+    }
+    static const bool noProps = getenv("ENGINE_SHADOW_NO_PROPS") != nullptr;
+    const bool splatActive = engine::renderer::diligent::splatTerrainShadowDrawsDiligent();
+    for (size_t i = 0, n = sceneModels.size(); i < n; i++) {
+        StaticSceneModel& e = sceneModels[i];
+        if (noProps || (i == 0 && splatActive)) {
+            continue;
+        }
+        if (!e.model || !e.transforms || !e.bindingsValid) {
+            continue;
+        }
+        Diligent::ScopedDebugGroup group(ctx, (i == 0) ? "terrain" : "props");
+        renderInfo.SceneIndex = e.sceneIndex;
+        pbr->Render(ctx, *e.model, *e.transforms, e.transforms.get(), renderInfo,
+                &e.bindings);
+    }
 }
 
 }
