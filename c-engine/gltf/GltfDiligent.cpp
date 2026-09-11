@@ -812,7 +812,7 @@ bool gltfPropsNodeGlobalTRSDiligent(const char* name, f32 pos[3], f32 quat[4], f
             }
             Diligent::float4x4 g = node.ComputeLocalTransform();
             for (const GLTF::Node* parent = node.Parent; parent; parent = parent->Parent) {
-                g = parent->ComputeLocalTransform() * g;
+                g = g * parent->ComputeLocalTransform();
             }
             const auto& mm = g.m;
             pos[0] = (f32)mm[3][0];

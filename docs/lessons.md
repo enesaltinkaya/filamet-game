@@ -7,6 +7,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 ## 2026-09-11 — [entries](lessons/2026-09-11.md)
 
 - Diligent `float4x4` is ROW-VECTOR convention: decomposing its columns as if column-major yields the INVERSE rotation (pos/scale look right, AABB checks can't catch ±θ about one axis) — use `Matrix4x4::Decompose()`; fingerprint: body world-bounds print matches render but collision sits ~10 m in front of the visible surface, body quat axis component sign-flipped vs glTF
+- Row-vector global composition is `global = local * parent` (`UpdateNodeGlobalTransform`) — left-multiplying parents (`parentLocal * g`) scrambles chains with rotated ancestors, pure-translation chains commute and look fine; fingerprint: body pos = (x, −z, y) of expected, only nodes under rotated parents wrong
 - Numeric probe beats bound checks: matching `GetWorldSpaceBounds` ≠ matching collision surface — compare a physics raycast distance vs an analytic mesh raycast on the same ray; harness = extracted sidecar blob + `joltCreateBodyFromShapeBlob` in a tiny cjolt-linked main driving the `JOLT_TEST_*` probes
 
 ## 2026-09-10 — [entries](lessons/2026-09-10.md)
