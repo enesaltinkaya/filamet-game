@@ -1,0 +1,10 @@
+[
+  {"id": 1, "desc": "Baseline evidence", "status": "done", "result": "hard cut = c2 far plane; cliff chunk drawn in all cascades"},
+  {"id": 2, "desc": "Clip-plane attribution", "status": "done", "result": "c2 light-space FAR plane far-clips ~810m cliff; caster far-clip"},
+  {"id": 3, "desc": "Fix attempt 1: caster z-squeeze", "status": "done", "result": "FAILED; reverted"},
+  {"id": 4, "desc": "Fix attempt 2: far-pad + scaled bias", "status": "done", "result": "bias no-op in EVSM4; EVSM warp underflow identified; state kept"},
+  {"id": 5, "desc": "EVSM z-tilde warp remap", "status": "done", "result": "remap texel-exact; wedge still missing — no uv desync exists"},
+  {"id": 6, "desc": "Pin c1 uv desync", "status": "done", "result": "no desync: footprints agree; instead far-pad state is frame-unstable (LIT@100, dark@300, LIT@1000) — ordering/warmup race between shadowDiligentUpdateFrame and splat cbuffer fill"},
+  {"id": 7, "desc": "Identify + fix the far-pad state race: per-frame log (frame, passReady, caster counts, shadowFade.z, c2 scale.z/bias.z) frames 50..1000 in both states; fix so matrix+scale/bias+fade are atomically consistent per frame; re-capture /tmp/fixed.jpg; wedge visible AND extends past baseline tip (x≈1781,y≈870)", "status": "pending", "result": null},
+  {"id": 8, "desc": "Regression check: no acne/bleeding/peter-panning, other regions unchanged; verify with plan.md command", "status": "pending", "result": null}
+]

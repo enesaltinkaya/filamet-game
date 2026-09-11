@@ -90,6 +90,19 @@ namespace engine::renderer::diligent {
         int pbrSlice              = 0;
         float pbrBias             = 0.0f;
         bool pbrReady             = false;
+        const float farPadS = [] {
+            float v = 1.0f / (1.0f + 1.5f);
+            if (const char* padEnv = getenv("ENGINE_SHADOW_FAR_PAD")) {
+                const float parsed = (float)atof(padEnv);
+                if (parsed >= 0.0f && parsed <= 8.0f)
+                    v = parsed <= 0.0f ? 1.0f : 1.0f / (1.0f + parsed);
+            }
+            return v;
+        }();
+        static const bool shadowTraceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
+        bool shadowTraceWanted(u64 f) { return f == 1u || (f >= 50u && f <= 1000u && f % 50u == 0u); }
+        u64 shadowTraceFrame = 0;
+        Diligent::float4x4 casterW2LP[8];
 
         void createSamplers(void) {
             if (!cmpSampler) {
@@ -182,8 +195,8 @@ namespace engine::renderer::diligent {
             Diligent::ShadowMapAttribs& sa  = lightAttribs.ShadowAttribs;
             sa.iNumCascades                 = (int)tier.cascades;
             sa.fNumCascades                 = (float)tier.cascades;
-            sa.iFixedFilterSize             = tier.pcfFilterSize;
-            sa.fFilterWorldSize             = 0.1f;
+            sa.iFixedFilterSize             = farPadS < 1.0f ? 2 : tier.pcfFilterSize;
+            sa.fFilterWorldSize             = farPadS < 1.0f ? 0.0f : 0.1f;
             sa.fCascadeTransitionRegion     = 0.1f;
             sa.fReceiverPlaneDepthBiasClamp = 10.0f;
             sa.iMaxAnisotropy               = 4;
@@ -191,6 +204,7 @@ namespace engine::renderer::diligent {
             sa.fEVSMPositiveExponent        = 40.0f;
             sa.fEVSMNegativeExponent        = 5.0f;
             sa.bIs32BitEVSM                 = 1;
+            mgr.SetEVSMFarPadS(farPadS);
 
             // Distribute around the camera anchor: the view is rotation-only, so
             // the derived camera world position is the render-space origin. The
@@ -275,12 +289,24 @@ namespace engine::renderer::diligent {
             };
             mgr.DistributeCascades(dist, lightAttribs.ShadowAttribs);
 
+            for (int c = 0; c < (int)tier.cascades; c++) {
+                casterW2LP[c] = mgr.GetCascadeTransform((u32)c).WorldToLightProjSpace;
+                casterW2LP[c]._13 *= farPadS;
+                casterW2LP[c]._23 *= farPadS;
+                casterW2LP[c]._33 *= farPadS;
+                casterW2LP[c]._43 *= farPadS;
+            }
+
             // Depth bias per resolution (the Shadows sample's policy), normalized
             // to the cascade z range: FractionalSamplingError adds it verbatim in
             // NDC depth, so a fixed 0.005 is ~30 texels of cascade-0 depth here and
             // washes every comparison to lit. Scale by the light-space z scale.
             sa.fFixedDepthBias =
-                (tier.resolution >= 2048 ? 0.0025f : 0.005f) * sa.Cascades[0].f4LightSpaceScale.z;
+                (tier.resolution >= 2048 ? 0.0025f : 0.005f) * sa.Cascades[0].f4LightSpaceScale.z * farPadS;
+            for (int c = 0; c < sa.iNumCascades; c++) {
+                sa.Cascades[c].f4LightSpaceScale.z *= farPadS;
+                sa.Cascades[c].f4LightSpaceScaledBias.z *= farPadS;
+            }
 
             // ENGINE_SHADOW_ORACLE=frameN: one-shot CPU check that the caster
             // matrix (the raw GetCascadeTransform the depth pass renders with)
@@ -354,7 +380,7 @@ namespace engine::renderer::diligent {
                     int failMask                   = 0;
                     for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
                         const auto& ca   = sa.Cascades[c];
-                        const auto& w2lp = mgr.GetCascadeTransform(c).WorldToLightProjSpace;
+                        const auto& w2lp = casterW2LP[c];
                         for (int pi = 0; pi < np; pi++) {
                             const OPt& p = pts[pi];
                             // Caster: standard column-vector transform by the raw
@@ -452,7 +478,7 @@ namespace engine::renderer::diligent {
                 if (sa.fCascadeCamSpaceZEnd[c] < camZ) cascade = c + 1;
             }
             if (cascade >= sa.iNumCascades) cascade = sa.iNumCascades - 1;
-            pbrW2L   = mgr.GetCascadeTransform((u32)cascade).WorldToLightProjSpace;
+            pbrW2L   = casterW2LP[cascade];
             pbrSlice = cascade;
             pbrBias  = sa.fFixedDepthBias;
             pbrReady = true;
@@ -514,7 +540,7 @@ namespace engine::renderer::diligent {
                     nz * 0.5f + 0.5f);
                 // Cross-check: the actual cascade proj (what the depth pass renders
                 // with) vs the scale/bias the sampling path uses.
-                const Diligent::float4x4& w2lp = mgr.GetCascadeTransform(0).WorldToLightProjSpace;
+                const Diligent::float4x4& w2lp = casterW2LP[0];
                 utils::info(
                     "shadow dbg: W2LP0 [%.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f "
                     "%.4f | %.4f %.4f %.4f %.4f]",
@@ -534,6 +560,29 @@ namespace engine::renderer::diligent {
                     w2lp._42,
                     w2lp._43,
                     w2lp._44);
+            }
+            if (shadowTraceOn && shadowTraceWanted(shadowTraceFrame)) {
+                char line[768];
+                int off = snprintf(line,
+                                   sizeof(line),
+                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f",
+                                   (unsigned long long)shadowTraceFrame,
+                                   passReady ? 1 : 0,
+                                   curMode,
+                                   (double)farPadS,
+                                   (double)focusBand);
+                for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
+                    off += snprintf(line + off,
+                                    sizeof(line) - off,
+                                    " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f",
+                                    c,
+                                    (double)sa.Cascades[c].f4LightSpaceScale.z,
+                                    (double)sa.Cascades[c].f4LightSpaceScaledBias.z,
+                                    (double)sa.fCascadeCamSpaceZEnd[c],
+                                    (double)casterW2LP[c]._33,
+                                    (double)casterW2LP[c]._43);
+                }
+                utils::info("%s", line);
             }
         }
 
@@ -565,15 +614,10 @@ namespace engine::renderer::diligent {
                 ctx->SetScissorRects(1, &scissor, 0, 0);
 
                 if (!noPlayer)
-                    gltfDiligentShadowDraw(ctx,
-                                           mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace,
-                                           dsv);
+                    gltfDiligentShadowDraw(ctx, casterW2LP[i], dsv);
                 if (splatTerrainShadowDrawsDiligent()) {
                     Diligent::ScopedDebugGroup terrainGroup(ctx, "terrain");
-                    splatTerrainShadowDrawDiligent(ctx,
-                                                  mgr.GetCascadeTransform((u32)i).WorldToLightProjSpace,
-                                                  dsv,
-                                                  i);
+                    splatTerrainShadowDrawDiligent(ctx, casterW2LP[i], dsv, i);
                 }
             }
 
@@ -662,8 +706,7 @@ namespace engine::renderer::diligent {
                                                          (f32)(pp[1] - an[1]),
                                                          (f32)(pp[2] - an[2])};
                                     const float hd[3] = {ft[0], ft[1] + 1.8f, ft[2]};
-                                    const Diligent::float4x4& w2lp =
-                                        mgr.GetCascadeTransform((u32)ci).WorldToLightProjSpace;
+                                    const Diligent::float4x4& w2lp = casterW2LP[ci];
                                     auto ndc = [&](const float* p) {
                                         return Diligent::float3{
                                             p[0] * w2lp._11 + p[1] * w2lp._21 + p[2] * w2lp._31 +
@@ -871,8 +914,46 @@ namespace engine::renderer::diligent {
                     struct EPt {                        const char* name;
                         float x, y, z;
                     };
-                    EPt pts[4];
+                    EPt pts[64];
                     int np = 0;
+                    if (const char* uvEnv = getenv("ENGINE_EVSM_PROBE_UV")) {
+                        const auto& w2l = sa.mWorldToLightView;
+                        const auto& ca2 = sa.Cascades[2];
+                        const char* p = uvEnv;
+                        while (np < 60 && sscanf(p, "%f %f %f", &pts[np].x, &pts[np].y, &pts[np].z) == 3) {
+                            const float u = pts[np].x, v = pts[np].y, z = pts[np].z;
+                            const float lvx = (2.0f * u - 1.0f - ca2.f4LightSpaceScaledBias.x) / ca2.f4LightSpaceScale.x;
+                            const float lvy = (1.0f - 2.0f * v - ca2.f4LightSpaceScaledBias.y) / ca2.f4LightSpaceScale.y;
+                            const float lvz = (z - ca2.f4LightSpaceScaledBias.z) / ca2.f4LightSpaceScale.z;
+                            const float tx = w2l._14, ty = w2l._24, tz = w2l._34;
+                            const float wx = w2l._11 * (lvx - tx) + w2l._21 * (lvy - ty) + w2l._31 * (lvz - tz);
+                            const float wy = w2l._12 * (lvx - tx) + w2l._22 * (lvy - ty) + w2l._32 * (lvz - tz);
+                            const float wz = w2l._13 * (lvx - tx) + w2l._23 * (lvy - ty) + w2l._33 * (lvz - tz);
+                            pts[np].x = wx;
+                            pts[np].y = wy;
+                            pts[np].z = wz;
+                            pts[np].name = "uv";
+                            np++;
+                            const char* comma = strchr(p, ',');
+                            if (!comma) break;
+                            p = comma + 1;
+                        }
+                    }
+                    if (const char* ptsEnv = getenv("ENGINE_EVSM_PROBE_PTS")) {
+                        const char* p = ptsEnv;
+                        while (np < 60 && sscanf(p, "%f %f %f", &pts[np].x, &pts[np].y, &pts[np].z) == 3) {
+                            if (hasPlayer) {
+                                pts[np].x -= (f32)an[0];
+                                pts[np].y -= (f32)an[1];
+                                pts[np].z -= (f32)an[2];
+                            }
+                            pts[np].name = "env";
+                            np++;
+                            const char* comma = strchr(p, ',');
+                            if (!comma) break;
+                            p = comma + 1;
+                        }
+                    }
                     if (hasPlayer) {
                         const float px = (f32)(ppos[0] - an[0]);
                         const float py = (f32)(ppos[1] - an[1]);
@@ -912,12 +993,25 @@ namespace engine::renderer::diligent {
                         if (z > 60.0f) z = 60.0f;
                         pts[np++] = {"view axis", 0.0f, 0.0f, z};
                     }
+                    if (hasPlayer) {
+                        const f32 lx = (f32)lightAttribs.f4Direction.x;
+                        const f32 ly = (f32)lightAttribs.f4Direction.y;
+                        const f32 lz = (f32)lightAttribs.f4Direction.z;
+                        for (int s = 0; s < 4; s++) {
+                            const float t = 20.0f + 20.0f * s;
+                            pts[np++] = {"light ray", (f32)(ppos[0] - an[0]) + t * lx,
+                                                             (f32)(ppos[1] - an[1]) + t * ly,
+                                                             (f32)(ppos[2] - an[2]) + t * lz};
+                        }
+                    }
                     // Same warp the PS's warpDepthEVSM runs (exponents clamped
                     // to 42 for the 32-bit atlas, bIs32BitEVSM is 1 here).
-                    const float exP = std::min(sa.fEVSMPositiveExponent, 42.0f);
-                    const float exN = std::min(sa.fEVSMNegativeExponent, 42.0f);
-                    auto warp1 = [&](float depth) { return std::exp(exP * (2.0f * depth - 1.0f)); };
-                    auto warp2 = [&](float depth) { return -std::exp(-exN * (2.0f * depth - 1.0f)); };
+                    const float invFarPad = farPadS > 0.0f ? 1.0f / farPadS : 1.0f;
+                    const float evsmRange = (farPadS < 1.0f) ? farPadS / (2.0f - farPadS) : 1.0f;
+                    const float exP = std::min(sa.fEVSMPositiveExponent, 42.0f) * evsmRange;
+                    const float exN = std::min(sa.fEVSMNegativeExponent, 42.0f) * evsmRange;
+                    auto warp1 = [&](float depth) { return std::exp(exP * (2.0f * depth * invFarPad - 1.0f)); };
+                    auto warp2 = [&](float depth) { return -std::exp(-exN * (2.0f * depth * invFarPad - 1.0f)); };
                     const float bleed = sa.fVSMLightBleedingReduction;
                     auto cheb = [&](float m1, float m2, float mean, float minVar) {
                         float var = std::max(m2 - m1 * m1, minVar);
@@ -1004,6 +1098,26 @@ namespace engine::renderer::diligent {
                             }
                             fclose(f);
                             utils::info("evsm probe: dump written to %s", pathBuf);
+                        }
+                    }
+                    if (const char* rawDumpPath = getenv("ENGINE_EVSM_RAWDUMP")) {
+                        for (int ci = 0; ci < nCas; ci++) {
+                            if (!rawSlice[ci].ok) continue;
+                            char pathBuf[512];
+                            snprintf(pathBuf, sizeof(pathBuf), "%s.%d", rawDumpPath, ci);
+                            FILE* f = fopen(pathBuf, "wb");
+                            if (!f) continue;
+                            fprintf(f, "P5\n%u %u\n255\n", rawSlice[ci].w, rawSlice[ci].h);
+                            for (u32 y = 0; y < rawSlice[ci].h; y++) {
+                                const float* row = (const float*)((const u8*)rawSlice[ci].data + (size_t)y * rawSlice[ci].stride);
+                                for (u32 x = 0; x < rawSlice[ci].w; x++) {
+                                    float d = row[x];
+                                    d = std::clamp(d, 0.0f, 1.0f);
+                                    fputc((u8)(d * 255.0f), f);
+                                }
+                            }
+                            fclose(f);
+                            utils::info("evsm probe: raw dump written to %s", pathBuf);
                         }
                     }
                     const Diligent::float4x4& w2l = sa.mWorldToLightView;
@@ -1099,6 +1213,7 @@ namespace engine::renderer::diligent {
     }  // namespace
 
     void shadowDiligentUpdateFrame(void) {
+        shadowTraceFrame++;
         updateFrameImpl();
     }
 
@@ -1139,6 +1254,14 @@ namespace engine::renderer::diligent {
         if (!passReady) return 0.0f;
         if (curQuality < 0 || curQuality > 2) return 0.0f;
         return kQualityTiers[curQuality].distanceM * kReceiverFadeScale[curQuality];
+    }
+
+    float shadowDiligentFarPadS(void) {
+        return passReady ? farPadS : 1.0f;
+    }
+
+    u64 shadowDiligentTraceFrame(void) {
+        return shadowTraceFrame;
     }
 
     const void* shadowDiligentLightAttribs(void) {

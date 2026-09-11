@@ -59,6 +59,8 @@ int  shadowDiligentPcfFilterSize(void);
 // contribution to lit by this view-space depth (f4ShadowFade in their frame
 // cbuffers) — it is the effective receiver cutoff.
 float shadowDiligentTierDistance(void);
+float shadowDiligentFarPadS(void);
+u64 shadowDiligentTraceFrame(void);
 
 // Master LightAttribs (ShadowMapAttribs included; matrices transposed for
 // the runtime shaders). Copies into the passes' frame cbuffers.

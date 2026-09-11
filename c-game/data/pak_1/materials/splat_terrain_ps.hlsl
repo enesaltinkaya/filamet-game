@@ -126,7 +126,7 @@ cbuffer cbSplatFrame
     int      iFixedFilterSize;     // sTail.y  (int: poisson tap count)
     float    fFilterWorldSize;     // sTail.z  (float)
     float    fShadowDebugMode;     // sTail.w  (fDummy: raw f32 debug gate, 0 = off)
-    float4   f4ShadowFade;         // x = tier shadow distance in m (0 = no fade)
+    float4   f4ShadowFade;         // x = tier shadow distance in m, y = mode, z = EVSM far-pad scale (1.0 = none)
 };
 
 Texture2DArray g_Weights0;   // splatInfo group 0 (grass1 — the top group)
@@ -165,6 +165,7 @@ SamplerState g_DetailSampler;
 SamplerState g_LinearClampSampler;
 SamplerComparisonState g_ShadowMap_sampler;
 SamplerState g_ShadowMapLinearSampler;
+SamplerState g_ShadowMapNearestSampler;
 
 struct PSOutput
 {
@@ -373,8 +374,9 @@ float filterShadowVSM(float2 uv, float slice, float lightDepth)
 // (ShadowConversions.fx EVSMHorzPS): R,G = (mean w1, mean w1^2) with
 // w1 = +exp(+posExp * (2d - 1)) and, for EVSM4 only (RGBA32; the EVSM2 atlas is
 // RG32 so .zw read back as 0), B,A = (mean w2, mean w2^2) with
-// w2 = -exp(-negExp * (2d - 1)). The receiver un-warps its RAW cascade z with
-// the same mirrored exponents (Shadows.fxh WarpDepthEVSM, clamped to 42 for
+// w2 = -exp(-negExp * (2d - 1)). With the caster far-pad (fFarPadS) both sides
+// warp z/farPadS (atlas and receiver depths are compressed by farPadS). The
+// receiver un-warps its RAW cascade z * 1/farPadS with the same mirrored exponents (Shadows.fxh WarpDepthEVSM, clamped to 42 for
 // 32-bit per GetEVSMExponents) and runs the same one-tailed Chebyshev test in
 // the warped domain — but the min-variance floor is per-dimension and scales
 // with the warp itself: (fVSMBias * exponent * warpedDepth)^2 (Shadows.fxh
@@ -391,18 +393,25 @@ float chebyshevUpperBound(float2 moments, float mean, float minVariance)
     return (mean <= moments.x) ? 1.0 : min(pMax, 1.0);
 }
 
-float2 warpDepthEVSM(float depth)
+float2 warpDepthEVSM(float depth, float farPadS, out float2 exOut)
 {
     // bIs32BitEVSM is a BOOL (int) in the C++ ShadowMapAttribs (bit 0x1 = true);
     // the mirror must read it as an int, not a float (float read = denormal ~0).
     float  maxExp = (bIs32BitEVSM > 0) ? 42.0 : 5.54;
     float2 ex     = min(sVSMParams.zw, float2(maxExp, maxExp));
-    float  d      = 2.0 * depth - 1.0;
+    float  pad    = farPadS;
+    ex *= (pad > 0.0 && pad < 1.0) ? pad / (2.0 - pad) : 1.0;
+    exOut = ex;
+    float  d      = 2.0 * depth * (pad > 0.0 ? 1.0 / pad : 1.0) - 1.0;
     return float2(exp(ex.x * d), -exp(-ex.y * d));
 }
 
-float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4)
+float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4, out float pPosOut, out float pNegOut, out float dbgM1, out float2 dbgTapUV)
 {
+    pPosOut = 1.0;
+    pNegOut = 1.0;
+    dbgM1 = -1.0;
+    dbgTapUV = uv;
     float4 dims;
     g_ShadowMapLinear.GetDimensions(dims.x, dims.y, dims.z);
     float2 px     = uv * dims.xy;
@@ -424,20 +433,35 @@ float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4)
     };
 
     lightDepth = max(lightDepth, 0.0);
-    float2 w      = warpDepthEVSM(lightDepth);
-    float2 minVar = sVSMParams.x * sVSMParams.zw * w;
+    float2 exWarp;
+    float2 w      = warpDepthEVSM(lightDepth, f4ShadowFade.z, exWarp);
+    float2 minVar = sVSMParams.x * exWarp * w;
 
     float sum = 0.0;
+    float sumPos = 0.0;
+    float sumNeg = 0.0;
     for (int i = 0; i < 8; ++i)
     {
         float2 tUV = (baseUV + float2(s, t) + poisson[i]) * texel;
         tUV        = clamp(tUV, 0.0, 1.0);
-        float4 m  = g_ShadowMapLinear.Sample(g_ShadowMapLinearSampler, float3(tUV, slice));
+        float4 m  = g_ShadowMapLinear.Sample(g_ShadowMapNearestSampler, float3(tUV, slice));
+        if (i == 0)
+        {
+            dbgM1 = m.x;
+            dbgTapUV = tUV;
+        }
         float  p  = chebyshevUpperBound(m.xy, w.x, minVar.x * minVar.x);
         if (evsm4)
-            p = min(p, chebyshevUpperBound(m.zw, w.y, minVar.y * minVar.y));
+        {
+            float pN = chebyshevUpperBound(m.zw, w.y, minVar.y * minVar.y);
+            sumPos += p;
+            sumNeg += pN;
+            p = min(p, pN);
+        }
         sum += p;
     }
+    pPosOut = sumPos / 8.0;
+    pNegOut = sumNeg / 8.0;
     return sum / 8.0;
 }
 
@@ -561,6 +585,10 @@ PSOutput main(PSSplatIn In)
     int    dbgCascade = -2;
     float2 dbgUV      = float2(0.0, 0.0);
     float  dbgRaw     = -1.0;
+    float  dbgPos     = 1.0;
+    float  dbgNeg     = 1.0;
+    float  dbgZ       = -1.0;
+    float  dbgM1      = -1.0;
     if (ShadowIndex >= 0.0)
     {
         // Per-pixel cascade pick (Shadows.fxh FindCascade, non-best search):
@@ -611,11 +639,15 @@ PSOutput main(PSSplatIn In)
                 }
                 else if (shadowMode < 3.5)
                 {
-                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, false);
+                    float2 dbgTapUV2;
+                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, false, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
+                    dbgZ = cascadeNdc.z;
                 }
                 else
                 {
-                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, true);
+                    float2 dbgTapUV2;
+                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, true, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
+                    dbgZ = cascadeNdc.z;
                 }
             }
             // Receiver-side tier-distance fade (lessons.md 2026-09-07): the
@@ -663,6 +695,10 @@ PSOutput main(PSSplatIn In)
             IBL = float3(Attenuation, Attenuation, 0.0);
         else if (fShadowDebugMode < 3.5)
             IBL = (dbgRaw < 0.0) ? float3(1.0, 0.0, 1.0) : float3(1.0 - dbgRaw, dbgRaw, 0.0);
+        else if (fShadowDebugMode < 4.5)
+            IBL = float3(dbgPos, dbgNeg, 0.0);
+        else if (fShadowDebugMode < 6.5)
+            IBL = float3(dbgZ * 2.5, dbgM1 > 0.0 ? min(log10(1.0 + dbgM1) * 0.1, 1.0) : 0.0, dbgUV.y);
         else
             IBL = float3(frac(dbgUV), 0.0);
     }

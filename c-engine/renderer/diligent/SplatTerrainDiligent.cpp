@@ -989,7 +989,20 @@ static void splatFrameFill(void) {
                       "debug-mode slot must hold a raw f32");
         std::memcpy(&splatFrameStaging.shadowAttribs.fDummy, &mode, sizeof(mode));
     }
-    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), (f32)shadowDiligentMode(), 0.0f, 0.0f};
+    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), (f32)shadowDiligentMode(), shadowDiligentFarPadS(), 0.0f};
+    {
+        static const bool traceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
+        if (traceOn) {
+            const u64 f = shadowDiligentTraceFrame();
+            if (f == 1 || (f >= 50 && f <= 1000 && f % 50 == 0))
+                utils::info(
+                    "shadow trace: f%llu staged fade (%g %.0f %g)",
+                    (unsigned long long)f,
+                    (double)splatFrameStaging.shadowFade.x,
+                    (double)splatFrameStaging.shadowFade.y,
+                    (double)splatFrameStaging.shadowFade.z);
+        }
+    }
 }
 
 static IShader*                    splatVS = nullptr;
@@ -1002,6 +1015,7 @@ static ISampler*                   splatDetailSampler = nullptr; // tiled detail
 static ISampler*                   splatIblSampler = nullptr;    // env cubes + GGX LUT (linear clamp)
 static ISampler*                   splatShadowSampler = nullptr; // comparison linear clamp (PCF)
 static ISampler*                   splatShadowLinearSampler = nullptr; // linear clamp (VSM/EVSM filterable receive)
+static ISampler*                   splatShadowNearestSampler = nullptr; // nearest clamp (EVSM per-texel moments)
 static IBuffer*                    splatFrameCB = nullptr;
 static ITexture*                   splatShadowDummyTex = nullptr;
 static ITextureView*               splatShadowDummySRV = nullptr;
@@ -1202,6 +1216,20 @@ void splatPassInit(const SplatTerrain* t) {
         splatPassFailed = true;
         return;
     }
+    SamplerDesc sdShadowNearest;
+    sdShadowNearest.Name         = "splat shadow nearest";
+    sdShadowNearest.MinFilter    = FILTER_TYPE_POINT;
+    sdShadowNearest.MagFilter    = FILTER_TYPE_POINT;
+    sdShadowNearest.MipFilter    = FILTER_TYPE_POINT;
+    sdShadowNearest.AddressU     = TEXTURE_ADDRESS_CLAMP;
+    sdShadowNearest.AddressV     = TEXTURE_ADDRESS_CLAMP;
+    sdShadowNearest.AddressW     = TEXTURE_ADDRESS_CLAMP;
+    device->CreateSampler(sdShadowNearest, &splatShadowNearestSampler);
+    if (!splatShadowNearestSampler) {
+        splatPassRelease();
+        splatPassFailed = true;
+        return;
+    }
 
     // Fallback 1x1 depth-array shadow SRV + dim constant IBL cubes (the PS
     // binds these while the shadow pass / IBL module are not ready; nothing
@@ -1306,6 +1334,8 @@ void splatPassInit(const SplatTerrain* t) {
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_ShadowMapLinearSampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_ShadowMapNearestSampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_Weights0", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_Weights1", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
@@ -1396,6 +1426,9 @@ void splatPassInit(const SplatTerrain* t) {
     }
     if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMapLinearSampler")) {
         v->Set(splatShadowLinearSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    }
+    if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMapNearestSampler")) {
+        v->Set(splatShadowNearestSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     }
     auto setView = [](const char* name, Diligent::ITextureView* view) {
         if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, name)) {
@@ -1987,6 +2020,19 @@ void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
         drawn++;
     }
     splatShadowCasterFrameNo++;
+    {
+        static const bool traceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
+        if (traceOn) {
+            const u64 f = shadowDiligentTraceFrame();
+            if (f == 1 || (f >= 50 && f <= 1000 && f % 50 == 0))
+                utils::info(
+                    "shadow trace: f%llu caster cascade %d — %zu/%zu chunks drawn",
+                    (unsigned long long)f,
+                    cascadeIndex,
+                    drawn,
+                    t->chunks.size());
+        }
+    }
     if (getenv("ENGINE_SHADOW_CASTER_PROBE") || splatShadowCasterFrameNo == 1 || splatShadowCasterFrameNo % 300 == 0) {
         if (casterNoCull) {
             utils::info("splatTerrain: shadow caster frame %llu — %zu/%zu chunks drawn (unculled, per-cascade)",
@@ -2024,6 +2070,7 @@ void splatPassRelease(void) {
     if (splatIblSampler) { splatIblSampler->Release(); splatIblSampler = nullptr; }
     if (splatShadowSampler) { splatShadowSampler->Release(); splatShadowSampler = nullptr; }
     if (splatShadowLinearSampler) { splatShadowLinearSampler->Release(); splatShadowLinearSampler = nullptr; }
+    if (splatShadowNearestSampler) { splatShadowNearestSampler->Release(); splatShadowNearestSampler = nullptr; }
     splatPassReady = false;
     splatPassFailed = false;
     splatFrameNo = 0;
