@@ -621,7 +621,7 @@ PSOutput main(PSSplatIn In)
             // Receiver-side tier-distance fade (lessons.md 2026-09-07): the
             // padded light cube still samples past the tier distance, so fade
             // the shadow to lit over the last 25 % of it — the effective
-            // cutoff (f4ShadowFade.x = 0 disables: ENGINE_SHADOW_FADE=0 A/B).
+            // cutoff.
             float tier = f4ShadowFade.x;
             if (tier > 0.0)
             {

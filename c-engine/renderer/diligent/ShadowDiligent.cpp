@@ -74,6 +74,8 @@ namespace engine::renderer::diligent {
             {2048, 3, 120.0f, 5},
         };
 
+        constexpr float kReceiverFadeScale[3] = {2.82f, 2.79f, 3.70f};
+
         bool passReady  = false;
         bool initFailed = false;
         u32 generation  = 0;
@@ -1135,14 +1137,8 @@ namespace engine::renderer::diligent {
 
     float shadowDiligentTierDistance(void) {
         if (!passReady) return 0.0f;
-        static const bool fadeDisabled = [] {
-            const char* fadeEnv = getenv("ENGINE_SHADOW_FADE");
-            return fadeEnv != nullptr && atof(fadeEnv) <= 0.0;
-        }();
-        if (fadeDisabled)
-            return 0.0f;  // A/B: disable the receiver fade
         if (curQuality < 0 || curQuality > 2) return 0.0f;
-        return kQualityTiers[curQuality].distanceM;
+        return kQualityTiers[curQuality].distanceM * kReceiverFadeScale[curQuality];
     }
 
     const void* shadowDiligentLightAttribs(void) {
