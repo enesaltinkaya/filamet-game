@@ -32,6 +32,8 @@ static char  aoEnabled             = 1;
 static float ssaoRadius            = 1.0f;   // AO radius 0.1..10 (world-space)
 static int   ssaoAlgorithm         = 0;      // 0=GTAO 1=HBAO 2=VBAO
 static float ssaoIntensity         = 1.0f;   // AO composite strength 0..2
+static char  ssrEnabled             = 1;
+static float ssrStrength            = 1.0f;   // SSR composite strength 0..2
 static char  giEnabled             = 1;
 static char  bloomEnabled          = 1;
 
@@ -57,6 +59,7 @@ static char* shadowsLabel;
 static char* shadowQualityLabel;
 static char* aoLabel;
 static char* ssaoAlgorithmLabel;
+static char* ssrLabel;
 static char* giLabel;
 static char* bloomLabel;
 static char* taaLabel;
@@ -64,6 +67,7 @@ static char shadowsLabelText[16];
 static char shadowQualityLabelText[16];
 static char aoLabelText[16];
 static char ssaoAlgorithmLabelText[16];
+static char ssrLabelText[16];
 static char giLabelText[16];
 static char bloomLabelText[16];
 static char taaLabelText[16];
@@ -74,12 +78,14 @@ static int taaWeightChange(void* _);
 static int casStrengthChange(void* _);
 static int ssaoRadiusChange(void* _);
 static int ssaoIntensityChange(void* _);
+static int ssrStrengthChange(void* _);
 static int graphicsClose(void* _);
 static int toggleShadows(void* _);
 static int toggleShadowsPrev(void* _);
 static int toggleShadowQuality(void* _);
 static int toggleShadowQualityPrev(void* _);
 static int toggleAo(void* _);
+static int toggleSsr(void* _);
 static int toggleSsaoAlgorithm(void* _);
 static int toggleSsaoAlgorithmPrev(void* _);
 static int toggleGi(void* _);
@@ -104,6 +110,8 @@ static void applyRenderer(void) {
     g.ssaoRadius    = ssaoRadius;
     g.ssaoAlgorithm = ssaoAlgorithm;
     g.ssaoIntensity = ssaoIntensity;
+    g.ssr           = ssrEnabled != 0;
+    g.ssrStrength   = ssrStrength;
     g.bloom         = bloomEnabled != 0;
     engine::renderer::rendererGraphicsApply(g);
 }
@@ -139,6 +147,7 @@ static double lastChange = 0.0;
 static char   dirtyScale = 0;
 static char   dirtyAA    = 0;
 static char   dirtySsao  = 0;
+static char   dirtySsr   = 0;
 
 static void markSliderDirty(char* dirty) {
     *dirty     = 1;
@@ -146,10 +155,10 @@ static void markSliderDirty(char* dirty) {
 }
 
 static void applySliderChanges(void) {
-    if (!(dirtyScale | dirtyAA | dirtySsao)) {
+    if (!(dirtyScale | dirtyAA | dirtySsao | dirtySsr)) {
         return;
     }
-    dirtyScale = dirtyAA = dirtySsao = 0;
+    dirtyScale = dirtyAA = dirtySsao = dirtySsr = 0;
 
     applyRenderer();
     persistDouble("renderScale", renderScalePercent / 100.0);
@@ -157,6 +166,7 @@ static void applySliderChanges(void) {
     persistDouble("casStrength", casStrengthPercent / 100.0);
     persistDouble("ssaoRadius", ssaoRadius);
     persistDouble("ssaoIntensity", ssaoIntensity);
+    persistDouble("ssrStrength", ssrStrength);
 
     if (model) {
         rmlUpdateDirtyAll(model);
@@ -177,10 +187,12 @@ void SettingsGraphicsGui::added() {
     engine::luaRegisterFunction("toggleShadowQuality", toggleShadowQuality);
     engine::luaRegisterFunction("toggleShadowQualityPrev", toggleShadowQualityPrev);
     engine::luaRegisterFunction("toggleAo", toggleAo);
+    engine::luaRegisterFunction("toggleSsr", toggleSsr);
     engine::luaRegisterFunction("toggleSsaoAlgorithm", toggleSsaoAlgorithm);
     engine::luaRegisterFunction("toggleSsaoAlgorithmPrev", toggleSsaoAlgorithmPrev);
     engine::luaRegisterFunction("ssaoRadiusChange", ssaoRadiusChange);
     engine::luaRegisterFunction("ssaoIntensityChange", ssaoIntensityChange);
+    engine::luaRegisterFunction("ssrStrengthChange", ssrStrengthChange);
     engine::luaRegisterFunction("toggleGi", toggleGi);
     engine::luaRegisterFunction("toggleBloom", toggleBloom);
     engine::luaRegisterFunction("toggleTaa", toggleTaa);
@@ -198,12 +210,16 @@ void SettingsGraphicsGui::added() {
     ssaoRadius           = (float)utils::settingsGetDouble("ssaoRadius");
     ssaoAlgorithm        = utils::settingsGetInt("ssaoAlgorithm");
     ssaoIntensity        = (float)utils::settingsGetDouble("ssaoIntensity");
+    ssrEnabled           = (char)!utils::settingsGetBool("ssrDisabled");
+    ssrStrength          = (float)utils::settingsGetDouble("ssrStrength");
     giEnabled            = (char)!utils::settingsGetBool("giDisabled");
     bloomEnabled         = (char)!utils::settingsGetBool("bloomDisabled");
     // clamp hand-edited files (the renderer re-clamps its own copy on apply)
     if (shadowsMode < 0 || shadowsMode > 4) shadowsMode = 1;
     if (shadowsQuality < 0 || shadowsQuality > 2) shadowsQuality = 2;
     if (ssaoAlgorithm < 0 || ssaoAlgorithm > 2) ssaoAlgorithm = 0;
+    if (ssrStrength < 0.0f) ssrStrength = 0.0f;
+    if (ssrStrength > 2.0f) ssrStrength = 2.0f;
     shadowQualityDisabled = shadowsMode == 0;
     syncLabels();
 
@@ -213,11 +229,13 @@ void SettingsGraphicsGui::added() {
     rmlBindFloat(model, "casStrengthPercent", &casStrengthPercent);
     rmlBindFloat(model, "ssaoRadius", &ssaoRadius);
     rmlBindFloat(model, "ssaoIntensity", &ssaoIntensity);
+    rmlBindFloat(model, "ssrStrength", &ssrStrength);
     rmlBind(model, "shadowsLabel", &shadowsLabel);
     rmlBind(model, "shadowQualityLabel", &shadowQualityLabel);
     rmlBindBool(model, "shadowQualityDisabled", &shadowQualityDisabled);
     rmlBind(model, "aoLabel", &aoLabel);
     rmlBind(model, "ssaoAlgorithmLabel", &ssaoAlgorithmLabel);
+    rmlBind(model, "ssrLabel", &ssrLabel);
     rmlBind(model, "giLabel", &giLabel);
     rmlBind(model, "bloomLabel", &bloomLabel);
     rmlBind(model, "taaLabel", &taaLabel);
@@ -245,6 +263,7 @@ void SettingsGraphicsGui::added() {
             while (shadowsMode != 1) toggleShadows(nullptr);
             while (shadowsQuality != 1) toggleShadowQuality(nullptr);
             while (bloomEnabled) toggleBloom(nullptr);
+            while (ssrEnabled) toggleSsr(nullptr);
             renderScalePercent  = 130.0f;
             taaWeightPercent    = 85.0f;
             casStrengthPercent  = 75.0f;
@@ -262,10 +281,10 @@ void SettingsGraphicsGui::update() {
     // Slider settle: apply + persist 50 ms after the last change — always at
     // least one frame after the 'change' event, i.e. after RMLUI wrote the
     // fresh values into the bound floats.
-    if ((dirtyScale | dirtyAA | dirtySsao) && utils::millies() > lastChange + 50.0) {
+    if ((dirtyScale | dirtyAA | dirtySsao | dirtySsr) && utils::millies() > lastChange + 50.0) {
         applySliderChanges();
     }
-    if (autotestWireClose && !(dirtyScale | dirtyAA | dirtySsao)) {
+    if (autotestWireClose && !(dirtyScale | dirtyAA | dirtySsao | dirtySsr)) {
         autotestWireClose = 0;
         graphicsClose(nullptr);
     }
@@ -301,6 +320,8 @@ static void syncLabels(void) {
     shadowQualityLabel = shadowQualityLabelText;
     snprintf(aoLabelText, sizeof(aoLabelText), "%s", aoEnabled ? "On" : "Off");
     aoLabel = aoLabelText;
+    snprintf(ssrLabelText, sizeof(ssrLabelText), "%s", ssrEnabled ? "On" : "Off");
+    ssrLabel = ssrLabelText;
     snprintf(ssaoAlgorithmLabelText, sizeof(ssaoAlgorithmLabelText), "%s",
              ssaoAlgorithmNames[ssaoAlgorithm]);
     ssaoAlgorithmLabel = ssaoAlgorithmLabelText;
@@ -378,6 +399,15 @@ static int toggleAo(void* _) {
     return 0;
 }
 
+static int toggleSsr(void* _) {
+    ssrEnabled = !ssrEnabled;
+    applyRenderer();
+    persistBool("ssrDisabled", ssrEnabled == 0);
+    syncLabels();
+    rmlUpdateDirtyAll(model);
+    return 0;
+}
+
 static void ssaoAlgorithmApply(int algorithm) {
     ssaoAlgorithm = algorithm;
     applyRenderer();
@@ -439,6 +469,11 @@ int ssaoRadiusChange(void* _) {
 
 int ssaoIntensityChange(void* _) {
     markSliderDirty(&dirtySsao);
+    return 0;
+}
+
+int ssrStrengthChange(void* _) {
+    markSliderDirty(&dirtySsr);
     return 0;
 }
 

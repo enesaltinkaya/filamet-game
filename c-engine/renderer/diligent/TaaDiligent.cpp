@@ -25,6 +25,7 @@
 #include "renderer/RenderBackend.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/SsaoDiligent.h"
+#include "renderer/diligent/SsrDiligent.h"
 #include "renderer/diligent/BloomDiligent.h"
 #include "Graphics/GraphicsTools/interface/ScopedDebugGroup.hpp"
 #include "stb/git/stb_image_write.h"
@@ -62,6 +63,7 @@ static RefCntAutoPtr<ITexture> sceneColorTex;  // RGBA16F linear
 static RefCntAutoPtr<ITexture> motionTex;      // RG16F, NDC deltas
 static RefCntAutoPtr<ITexture> normalTex;
 static RefCntAutoPtr<ITexture> aoCompositeTex; // RGBA16F, AO-applied world color
+static RefCntAutoPtr<ITexture> ssrCompositeTex; // RGBA16F, SSR-composited color
 static RefCntAutoPtr<ITexture> depthTex[2];    // D32, double-buffered
 
 static u32 frameIdx = 0;
@@ -770,6 +772,175 @@ static ITextureView* aoCompositeApply(IDeviceContext* ctx, ITextureView* src, IT
     return aoCompositeTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 }
 
+// SSR application: 1:1 point-tap additive composite of the SSR radiance map
+// (rgb = traced radiance, a = confidence; the map is cleared to 0 outside the
+// reflective stencil every frame, so confidence ~ 0 reliably marks miss /
+// ineligible pixels) into the resolved world color. The env fallback keeps a
+// miss from darkening: the source color (which already carries the env IBL)
+// blends in where confidence ~ 0. fresnel is a roughness-weighted specular
+// weight from the normal buffer's alpha (perceptual roughness) — smooth
+// surfaces reflect more. strength scales the whole term (ssrStrength()).
+static constexpr char kSsrCompositePS[] = R"(
+Texture2D<float4> g_Source;
+Texture2D<float4> g_SSR;
+Texture2D<float4> g_Normal;
+SamplerState g_Source_sampler;
+
+struct SsrCompositeAttribs
+{
+    float Strength;
+    float EnvFallback;
+    float2 Pad;
+};
+cbuffer cbSsrCompositeAttribs
+{
+    SsrCompositeAttribs g_SsrComposite;
+}
+
+struct PSIn
+{
+    float4 Pos : SV_Position;
+    float2 UV : UV;
+};
+
+float4 main(in PSIn In) : SV_Target
+{
+    float4 c = g_Source.Sample(g_Source_sampler, In.UV);
+    float4 ssr = g_SSR.Sample(g_Source_sampler, In.UV);
+    float rough = g_Normal.Sample(g_Source_sampler, In.UV).a;
+    float conf = ssr.a;
+    float fresnel = 0.04 + 0.96 * pow(saturate(1.0 - rough), 2.0);
+    float3 reflected = lerp(c.rgb * g_SsrComposite.EnvFallback, ssr.rgb, conf);
+    c.rgb += reflected * fresnel * conf * g_SsrComposite.Strength;
+    return c;
+}
+)";
+
+struct SsrCompositeAttribs {
+    float strength;
+    float envFallback;
+    float2 pad;
+};
+
+static RefCntAutoPtr<IShader> ssrPS;
+static RefCntAutoPtr<IPipelineState> ssrPSO;
+static RefCntAutoPtr<ISampler> ssrSampler;
+static RefCntAutoPtr<IBuffer> ssrCB;
+static std::unordered_map<ITexture*, RefCntAutoPtr<IShaderResourceBinding>> ssrSrbs;
+
+static void createSsrPSO(void) {
+    if (ssrPSO) {
+        return;
+    }
+    if (!blitVS) {
+        createBlitPSO();
+    }
+
+    ShaderCreateInfo shaderCI;
+    shaderCI.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+    shaderCI.Desc.ShaderType = SHADER_TYPE_PIXEL;
+    shaderCI.EntryPoint = "main";
+    shaderCI.Desc.Name = "ssrCompositePS";
+    shaderCI.Source = kSsrCompositePS;
+    device->CreateShader(shaderCI, &ssrPS);
+    if (!ssrPS) {
+        utils::warn("taa: ssr composite PS failed");
+        return;
+    }
+
+    GraphicsPipelineStateCreateInfo psoCI;
+    psoCI.PSODesc.Name = "ssrComposite";
+    psoCI.pVS = blitVS;
+    psoCI.pPS = ssrPS;
+    GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
+    gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+    gp.DepthStencilDesc.DepthEnable = False;
+    gp.NumRenderTargets = 1;
+    gp.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
+    PipelineResourceLayoutDesc& layout = psoCI.PSODesc.ResourceLayout;
+    ShaderResourceVariableDesc vars[5] = {
+            {SHADER_TYPE_PIXEL, "g_Source", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "g_SSR", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "g_Normal", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "g_Source_sampler", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "cbSsrCompositeAttribs", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+    };
+    layout.Variables = vars;
+    layout.NumVariables = 5;
+
+    device->CreateGraphicsPipelineState(psoCI, &ssrPSO);
+    if (!ssrPSO) {
+        utils::warn("taa: ssr composite PSO failed");
+        return;
+    }
+
+    SamplerDesc sampDesc;
+    sampDesc.MagFilter = FILTER_TYPE_POINT;
+    sampDesc.MinFilter = FILTER_TYPE_POINT;
+    sampDesc.AddressU = TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressV = TEXTURE_ADDRESS_CLAMP;
+    device->CreateSampler(sampDesc, &ssrSampler);
+    if (IShaderResourceVariable* v = ssrPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_Source_sampler")) {
+        v->Set(ssrSampler);
+    }
+    if (IShaderResourceVariable* v = ssrPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cbSsrCompositeAttribs")) {
+        v->Set(ssrCB, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    }
+}
+
+static IShaderResourceBinding* ssrSrbFor(ITextureView* src, ITextureView* ssr, ITextureView* normal) {
+    auto it = ssrSrbs.find(src->GetTexture());
+    if (it != ssrSrbs.end()) {
+        return it->second;
+    }
+    RefCntAutoPtr<IShaderResourceBinding> srb;
+    ssrPSO->CreateShaderResourceBinding(&srb, true);
+    if (!srb) {
+        utils::warn("taa: ssr composite SRB creation failed");
+        return nullptr;
+    }
+    if (IShaderResourceVariable* v = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Source")) {
+        v->Set(src);
+    }
+    if (IShaderResourceVariable* v = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_SSR")) {
+        v->Set(ssr);
+    }
+    if (IShaderResourceVariable* v = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Normal")) {
+        v->Set(normal);
+    }
+    auto inserted = ssrSrbs.emplace(src->GetTexture(), std::move(srb));
+    return inserted.first->second;  // NOT the (moved-from) local
+}
+
+// Adds the SSR radiance into src into ssrCompositeTex; returns its SRV for
+// the downsample/CAS/blit, or nullptr when the pass is unavailable (the
+// caller keeps the plain source).
+static ITextureView* ssrCompositeApply(IDeviceContext* ctx, ITextureView* src,
+        ITextureView* ssr, ITextureView* normal) {
+    if (!ssrCompositeTex || !ssrCB || !src || !ssr || !normal) {
+        return nullptr;
+    }
+    createSsrPSO();
+    if (!ssrPSO) {
+        return nullptr;
+    }
+    {
+        MapHelper<SsrCompositeAttribs> cb(ctx, ssrCB, MAP_WRITE, MAP_FLAG_DISCARD);
+        cb[0].strength = ssrStrength();
+        cb[0].envFallback = 1.0f;
+        cb[0].pad = float2(0.0f, 0.0f);
+    }
+    IShaderResourceBinding* srb = ssrSrbFor(src, ssr, normal);
+    if (!srb) {
+        return nullptr;
+    }
+    ITextureView* rtv = ssrCompositeTex->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+    drawFullscreenToRtv(ctx, ssrPSO, srb, rtv,
+            ssrCompositeTex->GetDesc().Width, ssrCompositeTex->GetDesc().Height);
+    return ssrCompositeTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+}
+
 static IShaderResourceBinding* blitSrbFor(ITextureView* src) {
     auto it = blitSrbs.find(src->GetTexture());
     if (it != blitSrbs.end()) {
@@ -828,6 +999,7 @@ static void destroyTargets(void) {
     motionTex.Release();
     normalTex.Release();
     aoCompositeTex.Release();
+    ssrCompositeTex.Release();
     depthTex[0].Release();
     depthTex[1].Release();
     downTex.Release();
@@ -838,6 +1010,7 @@ static void destroyTargets(void) {
     casSrbs.clear();
     downSrbs.clear();
     aoSrbs.clear();
+    ssrSrbs.clear();
 }
 
 static void createTargets(u32 width, u32 height) {
@@ -876,6 +1049,12 @@ static void createTargets(u32 width, u32 height) {
     device->CreateTexture(desc, nullptr, &aoCompositeTex);
     if (!aoCompositeTex) {
         utils::warn("taa: ao composite target failed");
+    }
+
+    desc.Name = "ssrComposite";
+    device->CreateTexture(desc, nullptr, &ssrCompositeTex);
+    if (!ssrCompositeTex) {
+        utils::warn("taa: ssr composite target failed");
     }
 
     // Downsample intermediate: backbuffer-sized (the box pass' output, the
@@ -952,6 +1131,11 @@ void taaInit(void) {
         utils::warn("taa: ao composite attribs buffer failed");
     }
 
+    CreateUniformBuffer(device, sizeof(SsrCompositeAttribs), "taa ssr composite attribs", &ssrCB);
+    if (!ssrCB) {
+        utils::warn("taa: ssr composite attribs buffer failed");
+    }
+
     frameIdx = 0;
 }
 
@@ -960,6 +1144,7 @@ void taaDestroy(void) {
     casSrbs.clear();
     downSrbs.clear();
     aoSrbs.clear();
+    ssrSrbs.clear();
     blitPSO.Release();;
     blitVS.Release();
     blitPS.Release();
@@ -975,6 +1160,10 @@ void taaDestroy(void) {
     aoPS.Release();
     aoSampler.Release();
     aoCB.Release();
+    ssrPSO.Release();
+    ssrPS.Release();
+    ssrSampler.Release();
+    ssrCB.Release();
     destroyTargets();
     cameraCB.Release();
     taa.reset();
@@ -1041,6 +1230,7 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
             TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE;
     taa->PrepareResources(device, ctx, postFXContext.get(), taaFlags);
     ssaoFrameBegin(ctx);
+    ssrFrameBegin(ctx);
     bloomFrameBegin(ctx);
 
     // Jitter this frame's projection (TAA picks the Halton phase for the
@@ -1320,6 +1510,7 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
 
     ITextureView* srcColorSRV = sceneColorTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     bool ssaoRan = false;
+    bool ssrRan = false;
 
     if (taaOn && postFXContext && taa && cameraCB) {
         const u32 curr = frameIdx & 1;
@@ -1337,6 +1528,12 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         if (ssaoReady() && ssaoOn()) {
             Diligent::ScopedDebugGroup ssaoGroup(ctx, "ssao");
             ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr));
+        }
+
+        if (ssrReady() && ssrOn()) {
+            Diligent::ScopedDebugGroup ssrGroup(ctx, "ssr");
+            ssrRan = ssrExecute(ctx, srcColorSRV, taaDepthSRV(curr),
+                    motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
         }
 
         HLSL::TemporalAntiAliasingAttribs attribs{};
@@ -1357,7 +1554,7 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     }
 
     if (!taaOn && postFXContext && cameraCB &&
-            (ssaoReady() && ssaoOn())) {
+            ((ssaoReady() && ssaoOn()) || (ssrReady() && ssrOn()))) {
         const u32 curr = frameIdx & 1;
         const u32 prev = (frameIdx + 1) & 1;
 
@@ -1370,9 +1567,15 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         pa.pMotionVectorsSRV = motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         postFXContext->Execute(pa);
 
-        {
+        if (ssaoReady() && ssaoOn()) {
             Diligent::ScopedDebugGroup ssaoGroup(ctx, "ssao");
             ssaoRan = ssaoExecute(ctx, taaDepthSRV(curr));
+        }
+
+        if (ssrReady() && ssrOn()) {
+            Diligent::ScopedDebugGroup ssrGroup(ctx, "ssr");
+            ssrRan = ssrExecute(ctx, srcColorSRV, taaDepthSRV(curr),
+                    motionTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
         }
     }
 
@@ -1392,6 +1595,17 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     // then undefined, not a no-op AO=1).
     if (!debugMv && ssaoOn() && ssaoRan) {
         if (ITextureView* c = aoCompositeApply(ctx, srcColorSRV, ssaoAOSRV())) {
+            srcColorSRV = c;
+        }
+    }
+
+    // SSR additive composite on top of the (AO'd) resolved color — same
+    // 1:1 target-sized reasoning and the same debug-MV skip. Gated on the
+    // SSR radiance map being produced THIS frame (pending — the map is
+    // then stale, not a no-op confidence 0).
+    if (!debugMv && ssrOn() && ssrRan) {
+        if (ITextureView* c = ssrCompositeApply(ctx, srcColorSRV, ssrRadianceSRV(),
+                taaNormalSRV())) {
             srcColorSRV = c;
         }
     }

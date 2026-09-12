@@ -19,6 +19,7 @@
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/SsaoDiligent.h"
+#include "renderer/diligent/SsrDiligent.h"
 #include "renderer/diligent/BloomDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 
@@ -349,6 +350,7 @@ namespace engine::renderer::diligent {
             resize(window.width, window.height);
             taaInit();
             ssaoInit();
+            ssrInit();
             bloomInit();
             iblDiligentInit();
             return true;
@@ -715,6 +717,7 @@ namespace engine::renderer::diligent {
 
             taaDestroy();
             ssaoDestroy();
+            ssrDestroy();
             bloomDestroy();
 
             swapChain = nullptr;
@@ -787,6 +790,7 @@ namespace engine::renderer::diligent {
         void applyGraphicsSettings(const GraphicsSettings& s) override {
             taaSettingsApply(s.taa, s.taaWeight, s.casStrength, s.renderScale);
             ssaoSettingsApply(s.ssao, s.ssaoRadius, s.ssaoAlgorithm, s.ssaoIntensity);
+            ssrSettingsApply(s.ssr, s.ssrStrength);
             bloomSettingsApply(s.bloom);
         }
 

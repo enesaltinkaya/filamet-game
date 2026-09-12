@@ -20,6 +20,8 @@ struct GraphicsSettings {
     float ssaoRadius    = 1.0f;   // 0.1..10 world-space AO radius (DiligentFX EffectRadius)
     int ssaoAlgorithm   = 0;      // 0=GTAO 1=HBAO 2=VBAO
     float ssaoIntensity = 1.0f;   // 0..2 composite strength (ao.r multiply)
+    bool ssr = true;
+    float ssrStrength = 1.0f;      // 0..2 composite strength (ssr.r multiply)
     bool bloom = true;
     float vignette = 0.7f;         // 0..1
     bool fog = true;

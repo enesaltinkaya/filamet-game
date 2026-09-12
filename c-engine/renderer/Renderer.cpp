@@ -209,6 +209,8 @@ static GraphicsSettings graphicsNormalize(GraphicsSettings s) {
     if (s.ssaoAlgorithm > 2) s.ssaoAlgorithm = 2;
     if (s.ssaoIntensity < 0.0f) s.ssaoIntensity = 0.0f;
     if (s.ssaoIntensity > 2.0f) s.ssaoIntensity = 2.0f;
+    if (s.ssrStrength < 0.0f) s.ssrStrength = 0.0f;
+    if (s.ssrStrength > 2.0f) s.ssrStrength = 2.0f;
     if (s.vignette < 0.0f) s.vignette = 0.0f;
     if (s.vignette > 1.0f) s.vignette = 1.0f;
     return s;
@@ -241,6 +243,8 @@ void rendererGraphicsLoad(void) {
     s.ssaoRadius    = (float)utils::settingsGetDouble("ssaoRadius");
     s.ssaoAlgorithm = utils::settingsGetInt("ssaoAlgorithm");
     s.ssaoIntensity = (float)utils::settingsGetDouble("ssaoIntensity");
+    s.ssr           = !utils::settingsGetBool("ssrDisabled");
+    s.ssrStrength   = (float)utils::settingsGetDouble("ssrStrength");
     s.bloom         = !utils::settingsGetBool("bloomDisabled");
     s.vignette      = (float)(utils::settingsGetDouble("lensVignette") / 100.0);
     s.fog           = utils::settingsGetDouble("fogMode") > 0.5;

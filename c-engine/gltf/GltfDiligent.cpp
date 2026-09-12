@@ -600,11 +600,19 @@ bool gltfInitDiligent(void) {
     }
 #endif
 #if COMPUTE_MOTION_VECTORS
+#if UNSHADED
     PSOut.WorldNormal =
 #if USE_VERTEX_NORMALS
         float4(VSOut.Normal, 1.0);
 #else
-        float4(0, 0, 1, 0);
+        float4(0.0, 0.0, 1.0, 1.0);
+#endif
+#else
+#if USE_VERTEX_NORMALS
+    PSOut.WorldNormal = float4(VSOut.Normal, Shading.BaseLayer.Srf.PerceptualRoughness);
+#else
+    PSOut.WorldNormal = float4(0.0, 0.0, 1.0, 1.0);
+#endif
 #endif
 #endif
     return PSOut;

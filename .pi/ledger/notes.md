@@ -2,202 +2,320 @@
 
 ## brainstorm
 
+### Session context (verified facts, not guesses)
+
+- `SsaoDiligent.{h,cpp}` is the template: static `ScreenSpaceAmbientOcclusion` + attribs, `PrepareResources` per frame on the shared `postFXContext`, `Execute` with depth/normal SRVs, called from `taaWorldResolve` (TaaDiligent.cpp ~1338 and ~1374 for the `!taaOn` branch), composite via `aoCompositeApply` after TAA.
+- SSR interface (`ScreenSpaceReflection.hpp`): RenderAttributes = color, depth, **normal, material**, motion SRVs + attribs; output `GetSSRRadianceSRV()` = RGBA (rgb radiance, a confidence).
+- Contracts verified compatible with our engine:
+  - Normals must be **world-space** (SSR_ComputeIntersection.fx `LoadNormalWS` → mul by `g_Camera.mView` in-shader). Our GLTF footer writes `VSOut.Normal` (world). ✓
+  - Depth: engine clears 1.0 (standard Z), `PostFXContext` created with `FEATURE_FLAG_NONE` (TaaDiligent.cpp:1033) → SSR reads the same flags (ScreenSpaceReflection.cpp:73) and compiles `SSR_OPTION_INVERTED_DEPTH=0` — the supported non-reversed path, same as the proven SSAO config. ✓
+  - Motion: SSR multiplies by `F3NDC_XYZ_TO_UVD_SCALE.xy` — same RG16F NDC convention as our motionTex. ✓
+  - Material: stencil pass declares `Texture2D<float4> g_TextureMaterialParameters` with `RoughnessChannel` (0..3) and `IsRoughnessPerceptual` attribs → binding the RGBA16F normal texture as material SRV is contract-legal (`RoughnessChannel=3`, `IsRoughnessPerceptual=TRUE`).
+  - Roughness availability: the PS footer override in `gltfInitDiligent()` (GltfDiligent.cpp ~581-615) runs at end of main of the stock RenderPBR.psh, where `Shading.BaseLayer.Srf.PerceptualRoughness` is in scope — a one-line **local** footer change writes roughness into `WorldNormal.a`. No third-party shader edits needed.
+  - SSAO safety: every SSAO shader reads the normal buffer as float3/`.xyz` only → alpha reuse is invisible to SSAO.
+- Reference composite (Hydrogent/shaders/HnPostProcess.psh:147-171): `Color.rgb += (GetSpecularIBL_GGX(SSR) - SpecularIBL) * SSR.w * SSRScale` — it **replaces** the G-buffer IBL specular. We have no SpecularIBL G-buffer; our color already contains the near-flat constant-cube IBL specular.
+- Settings plumbing shape to mirror: `applyGraphicsSettings` (DiligentRenderer.cpp:787-791) forwards `s.ssao*` to `ssaoSettingsApply`; init/destroy beside ssao at :351/:717.
+
 ## Core difficulty
 
-The rock's collision shape is restored at runtime from a pre-baked blob whose space (primitive-local vs node-space) and shape type (full mesh vs convex hull) are not known, so "player walks through the rock" has three mutually exclusive causes — scale missing/misapplied, body mispositioned or absent (name lookup), or shape-space mismatch — and only a measurement of the rock's world AABB vs the visual bounds can discriminate.
+Wiring itself is de-risked by the SSAO integration; the real difficulty is feeding SSR its two inputs we don't currently produce (per-pixel perceptual roughness, and a material buffer at all) and compositing without the reference's SpecularIBL G-buffer — each silent contract mismatch (normal space, depth convention, motion encoding, roughness channel) yields black/garbage reflections that are expensive to debug blind.
 
 ## Reductions / key lemmas
 
-1. **Equivalence invariant.** `joltCreateBodyFromShapeBlob` creates a body at node pos/rot and decorates the blob with `ScaledShape(nodeScale)` (jolt_c_api.cpp:564-580, correct order: scale in local space under T·R). If the blob was baked in primitive-local space, the collision world AABB must *exactly* equal the visual AABB, because the same `gltfPropsNodeGlobalTRS` decomposition is used for the visual transform. So if JOLT_DEBUG shows world AABB ≠ visual bounds, the blob is not in the space we assume, or the body isn't the rock's (name mismatch → `utils::warn("...no node transform")` and body skipped, leaving no collision at all).
-2. **Hull direction of error.** A convex-hull approximation of a big rock is a *larger* envelope — it over-blocks, it does not let the player walk in. The observed symptom (walk-through) points at collision too small or mispositioned, i.e. scale-not-applied / stale sidecar / name miss, not hull concavity. Hulls matter only if the rock was baked from a *subset* of its geometry.
-3. **Layer/filter unlikely.** The character's step queries use `GetDefaultLayerFilter(Layers::MOVING)` (jolt_c_api.cpp ~1195-1251) and the MOVING layer collides with NON_MOVING; props static bodies are NON_MOVING. A filter miss is a one-grep check, low probability.
-4. **Measurement chain already instrumented.** `JSB_DEBUG` at bake prints `rawAABB` (raw glTF verts) vs `shapeLocalAABB` (Jolt local bounds) — proves what space the blob lives in. `JOLT_DEBUG` at restore prints shape type, pos, scl, `innerLocalSize`, world AABB per static body. Verdict rule: `world extent ≈ scl × innerLocalSize` (sanity), `world AABB` covers visual bounds, and no "no node transform" warn for the rock.
-5. **Staleness is a first-class suspect.** The JBVH sidecar is a baked pak in the data dir; the runtime scale fix does nothing if the pak was baked before/without the relevant glTF state, or if it was never re-baked after the scale fix landed.
+1. **Contract audit (done, above): every SSR input matches what the engine already produces or can produce with local one-line changes.** No third-party source edits; no new G-buffer target required.
+2. **Monotonic bring-up invariant:** current `WorldNormal.a = 1.0` everywhere ⇒ perceptual roughness 1.0 ⇒ `IsReflectionSample` false everywhere ⇒ empty stencil mask ⇒ SSR renders nothing. So "wire first, roughness second" is safe: step 1 cannot visually regress, and the reflection mask only grows deliberately.
+3. **Composite reduction:** reference subtracts per-pixel IBL specular; our IBL is a flat 1×1 constant cube, so that term is nearly constant → v1 composite `color += ssr.rgb * fresnelApprox * confidence * strength` turns a missing-G-buffer problem into a one-shader tuning knob. Cheap mitigation for miss-regions (sky): lerp toward the ambient/env constant where confidence ≈ 0.
+4. **Execution-order constraint:** SSR consumes PostFXContext-produced reprojected depth + closest motion, so like SSAO it must run after `postFXContext->Execute` in BOTH the `taaOn` and `!taaOn` branches; radiance input is pre-TAA `sceneColorTex`; composite after the TAA resolve beside `aoCompositeApply` (target-sized 1:1, so downsample/CAS see it exactly as they see AO'd color).
 
 ## Candidate approaches
 
-- **A. Measure first, then branch.** Run the parked scene with `JOLT_DEBUG=1`; capture the rock's line, the props load count, and any "no node transform" warn; compare world AABB to the visual (scaled glTF) bounds; re-run bake with `JSB_DEBUG=1` if needed. Risk: visual bounds are not printed anywhere, so someone must compute them from the glTF + node TRS by hand (small script or RenderDoc). Effort: 1-2 runs + a bounds computation, ~30 min.
-- **B. Bake the scale in.** Change `tools/jolt-shape-builder` to read the node TRS and multiply vertices by scale before building the shape (blob = node-space, runtime scale becomes 1 or is skipped for props). Risk: double-scaling if the runtime ScaledShape path stays active for the same entry; every sidecar pak must be re-baked; changes the sidecar contract for terrain/other props. Effort: tool change + re-bake + re-verify, 1-2 sessions.
-- **C. Character path fix.** If measurement shows the rock's world AABB *already* covers the visual and the player still passes through, the bug is in the CharacterVirtual: query filter, capsule layer, or contact/depenetration offsets. Risk: chasing the wrong layer if A shows a geometry mismatch. Effort: mostly greps once A rules geometry out; fix 1-2 h if real.
-- **D. Runtime restore hardening.** Make `propsSidecarLoad` log pos/rot/scl per entry and assert the node lookup hit (turn the silent-skip into a loud failure with the entry name). Risk: none, but it's a diagnostic, not a fix. Effort: 30 min.
+- **A. Plan-as-written + amendments:** `SsrDiligent` module mirroring `SsaoDiligent`, roughness packed into normal alpha (RoughnessChannel=3), custom composite beside aoCompositeApply. Risk: additive composite double-counts specular energy (over-bright glossy pixels) → tune fresnel/strength; sky-miss shows black unless fallback added. Effort: medium (~SSAO-shaped module + ~100-line composite PSO + 4-point settings plumbing).
+- **B. Hydrogent-faithful separate material RT:** 4th world RT (roughness+metallic). Risk: +1 RT bandwidth and SetRenderTargets/PSO/both world-shader-footer churn for the same visual result today (metallic only matters later). Effort: medium-high.
+- **C. Sky-fallback-first:** A but composite lerps to env color where confidence≈0. Not a separate track — fold into A's composite; the *decision* (fallback color) is the fork.
+- **D. Hand-rolled SSR:** rejected — reimplements tested Hi-Z tracing/reconstruction DiligentFX already ships and whose sibling is already integrated.
 
 ## Recommended approach
 
-A + D together: instrument the restore path to print the node TRS and any lookup misses, run once with `JOLT_DEBUG=1`, and compare against the visual bounds — the equivalence invariant in lemma 1 means a single run discriminates between "scale not effective/stale pak", "name miss/body absent", and "character query". It's cheapest and can't commit us to the wrong fix; B and C are chosen by what the numbers say. Must be true: the JOLT_DEBUG line's world AABB is computed through the outer (scaled) shape (it is — jolt_c_api.cpp:605 uses the outer `shape`), and the visual bounds are computed from the same glTF + `gltfPropsNodeGlobalTRS` the engine uses, not a different transform source.
+A, with C's fallback folded into the composite. Everything required is verified present: exported `libDiligentFX` symbols, shared `PostFXContext` in the FEATURE_FLAG_NONE-consistent configuration, RGBA16F normal buffer with a free alpha channel, local footer override in scope of `Shading.BaseLayer.Srf.PerceptualRoughness`, and a proven SSAO-shaped template. Must be true: (a) the footer compiles `PerceptualRoughness` access for every PSO variant (UNSHADED/unlit branches need the same #if guard shape as the existing footer), (b) terrain footer writes a constant roughness — 1.0 (no rays) initially, small value only if terrain reflections are wanted, (c) the parked-scene view used for verification actually contains a low-roughness GLTF surface, else reflections won't be visible in screenshots.
 
 ## Proposed tasks
 
-1. **Add restore-side logging (D).** In `propsSidecarLoad` (PhysicsSystem.cpp:159), print per entry: name, found pos/rot/scl, body ptr; make a node-lookup miss a loud warn with the entry name (it already warns — verify it fires). Back up the file to /tmp first (no git).
-2. **Ground-truth run.** `TERM=xterm-256color ENGINE_HIDDEN_WINDOW=1 ENGINE_AUTOTEST=enter JOLT_DEBUG=1 timeout 12 ./scripts/run.sh` in the parked scene; capture the rock's JOLT_DEBUG line, the `N props bodies` count, and any transform-miss warn. Separately compute the rock's expected visual AABB from its glTF node TRS × primitive raw bounds (small standalone script or RenderDoc) and state the verdict: scale missing / mispositioned / body absent / geometry fine (→ task 4 becomes character path).
-3. **Sidecar freshness check.** Identify which glTF and when `build/c-game/data`'s props JBVH pak was last generated vs the current glTF; if stale, re-bake with `JSB_DEBUG=1`, compare `rawAABB`/`shapeLocalAABB`, and re-run task 2.
-4. **Fix + verify.** Apply the fix indicated by task 2/3 (re-bake, restore fix, or character-query fix), then verify: rock world AABB covers the visual in JOLT_DEBUG, and a screenshot run (`ENGINE_SCREENSHOT=/tmp/verify.jpg`, per plan's verification command) shows the capsule stopped at the rock face with the parked player untouched.
+1. **SSR module skeleton + conservative wiring.** `SsrDiligent.{h,cpp}` mirroring `SsaoDiligent` (init/destroy/settingsApply/frameBegin/execute; attribs: RoughnessThreshold 0.2, MostDetailedMip 0, IsRoughnessPerceptual TRUE, RoughnessChannel 3, FEATURE_FLAG_NONE). Slot `ssrFrameBegin` beside `ssaoFrameBegin`, `ssrExecute` under `ScopedDebugGroup "ssr"` in both `taaWorldResolve` branches, `pMaterialBufferSRV = taaNormalSRV()`. Verify: build clean; settings off → frame identical to baseline; on → no crash (alpha=1.0 ⇒ empty stencil ⇒ no visual change expected).
+2. **Roughness into normal alpha (GLTF footer).** One-line footer change to `float4(VSOut.Normal, Shading.BaseLayer.Srf.PerceptualRoughness)` with the UNSHADED guard; terrain keeps 1.0. Verify: SSAO screenshots unchanged (xyz-only consumers); roughness present via RenderDoc `world` pass dump of RT2.a if needed.
+3. **Composite pass.** `ssrCompositeApply` PSO mirroring `aoCompositeApply` (target-sized RGBA16F, 1:1 UV): `color += ssr.rgb * fresnel * ssr.a * strength` with env-color fallback where confidence ≈ 0; call after TAA beside the AO composite, gated `ssrOn() && ssrRan` and skipped on debug-MV blit. Verify: parked-scene screenshot shows reflections on glossy surfaces; RenderDoc `ssr` group visible in `scripts/rdc.py list`.
+4. **Settings plumbing + tuning.** `GraphicsSettings.ssr` (+strength/persistence), DebugGui + SettingsGraphicsGui toggles, `applyGraphicsSettings` forwarding; tune RoughnessThreshold/strength/fallback against the parked scene; clean up /tmp/RenderDoc captures.
+
+Effort: ~1.5-2 SSAO-sized sessions. Baseline commit e7208cfbf160bedf34d0b95a76121c8d4606ed38.
 
 ## round 1
 
-### Ground truth run (task 1)
+### Done (task 2)
 
-Built, ran parked scene with `JOLT_DEBUG=1` (logs: `/tmp/groundtruth.log` no-names, `/tmp/groundtruth2.log` with temp entry-name log). 16 terrain + **61 props bodies**, **zero** `no node transform` warns — every sidecar name resolves. Temp log added in `propsSidecarLoad` (name/pos/rot/scl per entry, JOLT_DEBUG-guarded), file backed to `/tmp/PhysicsSystem.cpp.bak` and then **restored** (working tree clean again).
+- `SsrDiligent.{h,cpp}` created in `c-engine/renderer/diligent/`, 1:1 mirror of `SsaoDiligent`:
+  `ssrInit/ssrDestroy/ssrSettingsApply(enabled,strength)/ssrOn/ssrReady/ssrFrameBegin/ssrExecute/ssrRadianceSRV/ssrStrength`.
+  Attribs: `RoughnessThreshold=0.2`, `MostDetailedMip=0`, `IsRoughnessPerceptual=TRUE`, `RoughnessChannel=3`,
+  rest from fxh DEFAULT_VALUEs; `FEATURE_FLAG_NONE` in PrepareResources; `EnableAsyncCreation=false`;
+  `pMaterialBufferSRV = pNormalBufferSRV = taaNormalSRV()` (RGBA16F, alpha = perceptual roughness).
+  `ssrExecute(ctx, colorSRV, depthSRV, motionSRV)` — color/depth/motion passed in by the caller
+  (taaWorldResolve locals), normal+material fetched internally; returns `status == POST_FX_EXECUTION_STATUS_READY`.
+- Wired in `TaaDiligent.cpp`: `#include`, `ssrFrameBegin(ctx)` beside `ssaoFrameBegin` in `taaFrameBegin`,
+  `ssrExecute` under `ScopedDebugGroup "ssr"` after `postFXContext->Execute` in BOTH `taaWorldResolve` branches
+  (taaOn: after the ssao block, before TAA attribs; !taaOn: after the ssao block).
+  The `!taaOn` postFXContext block condition extended to
+  `((ssaoReady() && ssaoOn()) || (ssrReady() && ssrOn()))` with the inner ssao block now gated
+  `ssaoReady() && ssaoOn()` — SSR needs PostFXContext outputs even when SSAO is off.
+- `DiligentRenderer.cpp`: `ssrInit()` beside `ssaoInit()`, `ssrDestroy()` beside `ssaoDestroy()`.
+- CMake: `SsrDiligent.cpp` added to the skip-pch list (source list is GLOB_RECURSE, auto-picked-up).
+- Default `ssrEnabled = false` — `ssrSettingsApply` is NOT yet called from `applyGraphicsSettings`
+  (task 5); frame identical to baseline until then.
 
-Key lines (name | shape, pos, scl, world AABB):
-- `Cube.001` (the scaled rock; node scale **3.35**): `Scaled(Mesh) pos=(-424.8,511.1,1651.1) scl=(3.35,3.35,3.35) innerLocalSize=(2,2,2) world=(-428.1,507.8,1647.7)-(-421.4,514.5,1654.4)`
-- `vjrmfb1ab_..._0` (big rock 264x153x140, scale 1): `Mesh pos=(-799.8,494.9,1802.5) scl=1 world=(-941.5,486.2,1710.3)-(-658.2,638.8,1891.5)`
-- `vjrmfb1ab_..._0.002` (scale **0.334**): `Scaled(Mesh) pos=(-227.0,508.1,1523.6) scl=(0.334) world=(-298.2,503.8,1473.8)-(-155.1,578.7,1574.8)`
+### Verified
 
-Visual AABBs computed from `/tmp/test2.glb` (unzstd `c-game/data/pak_1/models/test2.zstd`) node TRS x raw POSITION min/max, per node hierarchy. All scaled props near the player (Cube.001, cubeNoMaterial 0.5, vjrmfb1ab.002) match body world AABB **exactly** (<=0.1) — the runtime ScaledShape fix is effective; scale is NOT missing, rocks are NOT mispositioned, no body absent.
+- `./scripts/build.sh` clean; links against prebuilt `git/build-linux/DiligentFX/libDiligentFX.a`
+  (SSR symbols present — nm count 24; NOTE: path is `diligent/git/build-linux/...`, NOT `diligent/build-linux/...`).
+- Smoke runs (ENGINE_AUTOTEST=enter + ENGINE_SCREENSHOT): ssr off → exit 0; temporarily flipped
+  `ssrEnabled=true`, rebuilt, ran → SSR Execute ran with zero errors/crash, exit 0, and the screenshot
+  was byte-size-identical to the off run (empty stencil mask invariant holds: alpha=1.0 ≥ 0.2 threshold
+  → no rays). Flip reverted, rebuilt clean. /tmp smoke shots removed.
+- SSR contracts re-confirmed in source: all five RenderAttributes SRVs are DEV_CHECK_ERR-mandatory;
+  `Execute` copies attribs internally on change (static attribs struct is safe, same as SSAO);
+  `TRUE` comes from ShaderDefinitions.fxh C++ mode (`#define TRUE 1`).
 
-**Verdict: geometry fine for the rocks -> suspect is the character path (task 4).**
+### For later tasks
 
-Caveat + extra findings for later rounds:
-- Parked **camera** is at (-320,588,344) looking at a terrain hill (`/tmp/rock.jpg` shows terrain only); the player is parked at (-420.4,508.0,1628.8) facing roughly +z, where the props cluster is. So the screenshot does not frame the rock; the "rock in front" at ~22 units +z is the scaled cube `Cube.001` (7.7^3). If the user meant a different object, re-park and re-verify.
-- **Stale blobs (body mispositioned) for the small cubes in the same cluster** — baked geometry no longer matches the current glTF (sidecar `test2.jolt.zstd` baked from older vertex data):
-  - `Cube.005`: body shifted **-2.0 in Y** vs visual (vis top 514.2, body top 512.2)
-  - `Cube.012/013/014`: body shifted **-4.7..-5.1 in Y** (vis tops 519.6-520.1, body tops 514.9-515.4)
-  - `Cube.015`: body shifted **-10.8 X, -8.6 Z** (blob centered at node origin; visual mesh local bounds y -1.4..22.9, z 0.4..16.7)
-  - `SM_HP_Tree*` (all 33): blob = **prim0 trunk only** (innerLocalSize 1049x2464x1354 scaled ~0.01); canopy prim1 has no collision.
-  These are exactly the "stale sidecar / re-bake" items for task 2; the sidecar (14:56) is newer than the glTF (14:41) yet disagrees, so the bake source file differs from the current pak copy.
-- `deer_001` minor 0.9-unit diff (hull noise). `vjrmfb1ab.001` (scale 1, at (1136.9,362.2,-822.7)) matches in extent; its node has multiple parents in the glb, engine picks one.
-- JOLT_DEBUG `world=` AABB is tight (verified against rotated local extent for the 170-deg-rotated vjrmfb1ab.0: x-extent 283.3 = 263.9*cos+139.9*sin). Sanity `world extent == scl x innerLocalSize` holds for all scaled bodies.
-- db.db has tables `player`/`camera` (not `transform`): player=(-420.39,507.95,1628.76,...), camera=(-401.7,515.9,1626.8) + stored orientation.
-
+- Task 4 (composite): introduce `bool ssrRan` at top of `taaWorldResolve` (beside `ssaoRan`) capturing
+  `ssrExecute`'s return in both branches; gate `ssrCompositeApply` on `!debugMv && ssrOn() && ssrRan`;
+  radiance SRV = `ssrRadianceSRV()` (rgb = radiance, a = confidence); strength knob already exposed as `ssrStrength()`.
+- Task 5 (settings): `ssrSettingsApply(enabled, strength)` signature ready; also decide persistence + DebugGui.
+- First `ssrExecute` call compiles 7 SSR techniques synchronously — expect a one-frame hitch the first
+  time SSR is enabled (same shape as SSAO's first-execute compile).
 
 ## round 2
 
-### Character controller path (task 4) — diagnosis
+### Done (task 3)
 
-**Verdict: the capsule passes through the rock because the rock body is a closed 2x2x2 box mesh
-(Cube.001 blob, innerLocalSize exactly (2,2,2), ScaledShape 3.35) and Jolt's character queries run in
-`IgnoreBackFaces` mode — a capsule strictly INSIDE the box registers ZERO contacts with it. The world
-AABB covering the visual is irrelevant: AABB is only the broadphase envelope; narrow phase is
-triangle-based and backfaces never collide.**
+- GLTF PS footer (`c-engine/gltf/GltfDiligent.cpp` GetPSMainSource footer): `PSOut.WorldNormal` alpha
+  now writes `Shading.BaseLayer.Srf.PerceptualRoughness` (shaded, USE_VERTEX_NORMALS branch).
+  UNSHADED branch (wireframe only — nothing in c-engine sets RenderParams.Wireframe) and the
+  no-vertex-normals fallback write constant 1.0. Note: the old no-vertex-normals fallback alpha 0.0
+  is now 1.0 (rough ⇒ excluded from SSR; the (0,0,1) fake normal must not trace).
+- Scope facts proven from DiligentFX source: `UNSHADED` never appears in RenderPBR.psh — main body
+  (and local `Shading`) compile identically for all variants; the flag only strips to
+  ALL_USER_DEFINED (bits 0..38, so COMPUTE_MOTION_VECTORS/USE_VERTEX_NORMALS survive) in the footer.
+  `Shading.BaseLayer.Srf.PerceptualRoughness` is clamped to [0,1] by GetSurfaceReflectance.
+- Terrain (`c-game/data/pak_1/materials/splat_terrain_ps.hlsl:965`): already wrote constant
+  `float4(N, 1.0)` — no change needed, verified.
 
-Measured (all with the wrapper's JOLT_DEBUG hooks; rock = body 17, Scaled(Mesh), center
-(-424.8,511.1,1651.1), world AABB (-428.1,507.8,1647.7)-(-421.4,514.5,1654.4); terrain = body 9,
-big heightfield whose surface at the rock footprint is y~510.0 and dips to ~508.4 at the parked spot):
+### Verified
 
-1. Layers/filters are fine. Character queries use `GetDefaultBroadPhaseLayerFilter(MOVING)` +
-   `GetDefaultLayerFilter(MOVING)` (jolt_c_api.cpp ExtendedUpdate call); layer table lets MOVING collide
-   with NON_MOVING; props bodies are `Layers::NON_MOVING`. A cast from outside the rock HITS the rock
-   (t=0.537 from 0.3 in front) with the character's EXACT cast settings (backface ignore, shrunk
-   shape, CollideOnlyWithActive — probed via new JOLT_TEST_CASTC hook). So the rock is visible from
-   outside and blocks a cast.
-2. Static `CollideShape` of the real capsule shape (same filters) at interior points:
-   (-424.8,509.0,1648.5) 0 hits; (-424.8,510.0,1651.0) 0; (-426.5,509,1651) 0; (-423.5,509,1651) 0.
-   Partial penetration still collides: at z=1647.7 (0.25 past the front face) the rock IS hit; at
-   z=1648.25 (fully inside) the rock disappears. Transition = capsule no longer intersecting the box
-   surface.
-3. Real character embedded (ENGINE_TELEPORT=-424.8,510.0,1651.0 + ENGINE_AUTO_RUN=1, which suppresses
-   db saves so the parked state was NOT touched): first frame `ground=3 (StuckInFloor) hits=0` — the
-   controller sees NOTHING inside the solid. It then walks freely inside the box (x -424.8 -> -427.9,
-   y 510.0 -> 507.8) and stops only when it hits the TERRAIN surface that passes through the box
-   interior (hits=2 body 9). Walk-through through a solid, reproduced end to end.
-4. Drop tests around the rock (teleport y=515, settle): terrain surface 510.01 at z 1638-1643 and at
-   z 1656 (behind); capsule lands ON the box top (feet 514.5) when dropped at z 1650/1653. The box is
-   solid from outside on all sides; a normally-walking player on the terrain is blocked by the
-   TERRAIN wall at z~1643.8 (3.9 short of the front face — auto-run from the parked spot crawls at
-   0.4 m/s, ground=0 InAir permanently: the capsule is always slightly embedded in the terrain and
-   slowly sinking 507.95->507.88).
-5. So the only realistic embed paths in actual play: fly-camera takeover (playerFollowFlyingCamera /
-   fly-end parks the capsule at the camera pos via SetPosition with no collision check) or a player
-   DB row that was saved while the capsule sat inside the rock (postUpdate saves p.pos every second,
-   autoRun-suppressed only). After embed, backface-blindness makes the rock invisible to the whole
-   controller (cast, ground, depenetrate) — nothing can push the capsule back out; that is the
-   observed "runs into the rock".
-6. Extra: a cast starting fully inside a closed mesh reports t=0 hits (front-face artifacts) under
-   default ShapeCastSettings; under the character's own settings (shrunk shape) the embedded
-   character still moved, so those artifacts do not block.
+- Build clean; settings.json untouched default run shape.
+- **SSAO unchanged (empirical, SSAO ON via temp settings.json edit aoDisabled=false + showFps=false,
+  restored after):** pre-change vs post-change footer screenshots byte-identical (A2==B2).
+  Earlier HUD-polluted comparison showed diffs ONLY in the showFps cpu/gpu text — first A/B run is
+  a trap unless showFps=false. SSR-off run with SSR enabled in code also byte-identical (B2==C2):
+  radiance not consumed yet, as expected.
+- **Alpha really carries roughness (RenderDoc, eid 1182 world RT[2] raw fp16):** 99.5% of
+  valid-normal pixels = 1.00 (terrain/rough props), ~0.5% = 0.50–0.54 (eve's materials), min 0.50.
+  Not constant ⇒ write is live, not optimized away.
+- SSR executed with real alpha, zero errors, exit 0. `scripts/rdc.py list` shows the `ssr` group
+  (world eid 808-1182, ssao 1225-1349, ssr 1356-1446).
 
-Notes on state:
-- Wrapper `cpp-thirdparty/jolt/wrapper/src/jolt_c_api.cpp` was extended (env-gated, off by default):
-  JOLT_TEST_CAST now prints per-hit fraction (`t=`) + backface flag (`bf=`); new JOLT_TEST_CASTC runs
-  the cast with CharacterVirtual's exact settings. Backup of the original at /tmp/jolt_c_api.cpp.bak.
-  build-linux/libcjolt.a was rebuilt (build-win NOT touched; wrapper build.sh would rebuild both).
-- Parked player/camera untouched (all behavioral runs used ENGINE_AUTO_RUN=1 which suppresses
-  playerDbSaveState; verify db rows unchanged if in doubt).
-- Ground states seen: ground=2 (WalkOnStairs) at terrain ledges, ground=3 (StuckInFloor) when
-  embedded; ground=0 (InAir) is the PERSISTENT state at the parked spot (capsule embedded in
-  terrain, never OnGround) — a secondary defect worth fixing in task 5 (mPenetrationRecoverySpeed
-  push-out is losing to per-tick gravity re-embed).
+### For later tasks
 
-Fix candidates for task 5 (cheapest first):
-- (a) In joltCharacterUpdate, add a backface-aware depenetrate: CollideShape with
-  mBackFaceMode=EBackFaceMode::CollideWithBackFaces (and convex too), push the character out along
-  the deepest contact each tick (rate-limited). Makes the rock solid from the inside too, fixes any
-  embed path (fly takeover, stale db row).
-- (b) Bake Cube.* props as convex hulls (task 2 re-bake) — but verify whether convex-inside contacts
-  register for CharacterVirtual; risky, and does not fix fly-teleport embeds in ANY solid.
-- (c) Prevent embeds: clamp fly-park / teleport to the nearest non-embedded position (CastRay up +
-  collide test with backfaces).
-Recommend (a) as the primary fix; it is the only one that covers every entry path.
+- **Task 6 visibility caveat:** parked scene has min perceptual roughness 0.50 > RoughnessThreshold
+  0.2 ⇒ SSR stencil is empty here; no reflections will be visible from this vantage. Either ask the
+  user to park at a glossier surface, or raise RoughnessThreshold (e.g. 0.45-0.6) for bring-up.
+- `ssrEnabled` remains default false; task 5 owns ssrSettingsApply wiring.
+- 1.6 GB /tmp/RenderDoc capture + dumps cleaned; settings.json restored (showFps=true,
+  aoDisabled=true as user had it).
 
 ## round 3
 
-### Task 5 (fix implementation) — done
+### Done (task 4)
 
-Wrapper `cpp-thirdparty/jolt/wrapper/src/jolt_c_api.cpp`, `joltCharacterUpdate` now has a
-backface-aware depenetrate before the controller's `ExtendedUpdate` (backup of the
-pre-round-3 file at `/tmp/jolt_c_api.cpp.round3.bak`; the round-2 JOLT_TEST_* env-gated hooks
-are still in the tree, unchanged):
+- `ssrCompositeApply` implemented in `TaaDiligent.cpp`, 1:1 mirror of `aoCompositeApply`:
+  inline HLSL PS `ssrCompositePS` on the shared `blitVS`, POINT clamp sampler (1:1 target-sized
+  composite), static CB + dynamic SRBs keyed on src texture (cache cleared in destroyTargets).
+  New `ssrCompositeTex` (target-sized RGBA16F) created in createTargets / released in destroyTargets;
+  `ssrCB` via CreateUniformBuffer in taaInit; PSO/PS/sampler/CB released in taaDestroy; `ssrSrbs` cleared.
+- Shader math: `conf = ssr.a`; `fresnel = 0.04 + 0.96 * pow(saturate(1 - g_Normal.a), 2)` (roughness-
+  weighted specular weight from the normal-buffer alpha — no view-vector reconstruction, chosen for
+  v1 simplicity/risk); `reflected = lerp(c.rgb * EnvFallback, ssr.rgb, conf)`; `c.rgb += reflected *
+  fresnel * conf * Strength`. EnvFallback = 1.0 constant in the CB (tunable knob for task 5).
+  At conf = 0 the added term is exactly 0 (strict no-op — existing env IBL in the base color is what
+  you see; the fallback can only ever blend toward it, never brighten by accident).
+- Wiring in `taaWorldResolve`: `bool ssrRan` beside `ssaoRan`, captured from `ssrExecute`'s return in
+  BOTH branches; composite call after the AO composite, gated `!debugMv && ssrOn() && ssrRan`,
+  inputs `(srcColorSRV, ssrRadianceSRV(), taaNormalSRV())`. No debug group (mirrors aoComposite).
 
-1. **Step 1 — collide push-out.** `CollideShape` of the capsule with
-   `mBackFaceMode = EBackFaceMode::CollideWithBackFaces`, deepest hit wins, capsule moved by
-   `-mPenetrationAxis * mPenetrationDepth` (Jolt contract: axis = direction to move the *body*
-   to resolve; capsule moves opposite — verified empirically, sign correct).
-   **Terrain bodies are excluded** (`BodyInterface::GetUserData == JOLT_TERRAIN_USER_DATA`,
-   i.e. the 16 chunk bodies; props use userData 0). This exclusion is load-bearing: without it,
-   the parked capsule (0.7 m embedded in terrain at the park spot) pops to the surface once and
-   then slides ~0.2 m/s down the slope (broken ground state, ground=3/StuckInFloor, no friction),
-   which both corrupted the saved player row and moved the parked player.
-2. **Step 2 — containment escape.** A capsule *fully* inside a closed mesh registers zero
-   contacts even with backface collide (no face intersection — measured in round 2), so step 1
-   alone does nothing for a center-of-rock embed. Six `CastShape` probes (±up, ±X, ±Z, 500 m,
-   backface mode on, terrain excluded): contained iff ALL six first hits are backface hits
-   (inside a closed solid ⇒ every ray exits a backface; standing in a cave/next to a wall gives
-   frontface first hits). Escape = teleport the capsule just past the **farthest** exit face
-   (travel = dist + capsule span along that axis + 0.05 m); the full-span push puts the whole
-   capsule clear of the face in one tick, and any remaining straddle with other solids is
-   resolved by step 1 next frame. "Farthest" (not "nearest") matters: with the nearest rule the
-   capsule bounces on the interior floor it is standing on and never leaves the rock.
+### Verified
 
-Measured results:
-- Embed (`ENGINE_TELEPORT=-424.8,510.0,1651.0` inside Cube.001 + auto-run): escape fires on the
-  2nd-3rd frame (dir=+up, dist 4.12, span 1.4 → feet end 515.2, above the rock top 514.5),
-  capsule then lands on top, walks off the ledge, and is blocked by the rock's front faces from
-  outside (x pinned exactly at face − radius). No wall tunneling in any run.
-- Parked spot (no teleport): **zero** depenetrate/escape events, x drift = 0, capsule stays in
-  its original terrain-embedded equilibrium (the pre-existing slow-sink is unchanged, no new
-  motion).
-- Pinned verification passes: `... ENGINE_SCREENSHOT=/tmp/verify.jpg ... timeout 12
-  ./scripts/run.sh` → exit=0, `/tmp/verify.jpg` written, scene frames as before (terrain hill,
-  player at park spot).
+- Build clean; default-off run exit 0 (pass skipped).
+- Temp flips (ssrEnabled=true, threshold 0.2→0.6) + RenderDoc frame-300 capture prove end-to-end:
+  `ssr` group present (eids 1209-1299), `ssrComposite` draw at eid 1319 with `cbSsrCompositeAttribs`
+  + g_Source/g_SSR/g_Normal bound. fp16 replay math: 14.5k px receive additive term, max delta 0.027
+  == radiance(≤0.112) * fresnel * conf(≤1) * strength(1.0); conf=0 pixels EXACT pass-through.
+  Zero validation errors, exit 0, 60 fps / 2.47 ms gpu in the enabled-run HUD.
+- IMPORTANT: the parked vantage DOES have SSR-eligible pixels (conf>0.9 on ~13.7k px at threshold
+  0.6) — round 2's "no glossy surface in frame" was wrong for threshold 0.6; something rough ≤ 0.6
+  IS in frame (small, ~0.3% of px). Traced radiance there is dim (≤ 0.112) because the reflected
+  content is distant terrain/sky, hence the barely-visible effect.
+- All temp flips reverted (ssrEnabled=false, threshold 0.2), rebuilt, re-smoked exit 0.
+  1.5 GB capture + dumps + /tmp shots removed.
 
-### IMPORTANT: parked DB rows were clobbered and have been restored
+### For later tasks
 
-Two non-automated runs (no `ENGINE_AUTO_RUN`, which is the only gate on the 1 Hz `playerDbSaveState`)
-saved the drifted capsule position before I realized saves were not suppressed. `db.db`
-(`build/c-game/data/db/db.db`) rows were restored from log-recovered values:
-- **player** pos = (-420.395721, 507.953308, 1628.768799) — exact f32 from the round-2
-  JOLT_DEBUG first-frame log (`/tmp/walk2.log`); modelYaw/camYaw/camPitch/camDist/moveYaw from the
-  pre-clobber row (angles are input-driven, unaffected by the drift).
-- **camera** pos = (-401.7, 515.9, 1626.8) + yaw 96°/pitch −20.1° — position only known to
-  0.1 m from the "flying camera: loaded saved state" log (exact f32 was lost); the eye is at
-  most ~5 cm off the original. **Ask the user to re-park / confirm the framing if the 5 cm
-  matters** — the player position itself is exact.
-- Clobbered copy kept at `/tmp/db.db.clobbered.bak`.
+- Task 5: `EnvFallback` float already in the CB if settings want it; `ssrStrength()` feeds Strength.
+- Task 6: threshold 0.6 makes the parked view eligible (small dim reflections); a glossier park or a
+  brighter env would show SSR better. The fresnel weight dims rough-0.5 pixels to ~0.28× radiance.
+- PNG-based A/B undercounts: the composite's additions are fp16-scale (≤1-2 8-bit levels) — verify
+  via GetTextureData fp16, not rdc.py PNG dumps (lesson applied above).
 
-Rule for all future rounds: any game run that may write the db (i.e. anything WITHOUT
-`ENGINE_AUTO_RUN=1` — note `ENGINE_SCREENSHOT` does NOT suppress the player-row save, it only
-skips the camera save via `p.active`) must be followed by a db check. The pinned verification
-command in plan.md re-saves the player row (sink drift ~0.1 m/12 s); that is the pre-existing
-behavior, but it means the pinned verification should be the last run before final db state is
-needed, or run with `ENGINE_AUTO_RUN=1` added.
+## round 4
+Task 5 done: SSR settings plumbing end-to-end, mirroring the SSAO idiom.
 
-### Remaining / for later
+- GraphicsSettings gained `bool ssr = true` + `float ssrStrength = 1.0f` (c-engine/renderer/Renderer.h); normalized 0..2 in graphicsNormalize; loaded in rendererGraphicsLoad from new keys `ssrDisabled` (inverted polarity, like ao/bloom/gi) + `ssrStrength` (Renderer.cpp).
+- New settings templates in c-utils/settings/Settings.cpp: `ssrDisabled` boolean 0, `ssrStrength` double 1.0. Settings templates are REQUIRED for any new key — missing keys are seeded in memory at settingsInit (file catches up on next settingsWrite), but un-templated keys would trip settingsGet* asserts.
+- DiligentRenderer applyGraphicsSettings now calls `ssrSettingsApply(s.ssr, s.ssrStrength)` after ssao — the round-1 statics (`ssrEnabled=false`) are now driven by real settings: SSR is ON with strength 1.0 by default at startup.
+- DebugGui: the previously inert `reflectionEnabled` stub + `debugToggleReflection` are now real (drive GraphicsSettings.ssr via rendererGraphicsApply, like toggleAo); added "Reflections" button to debug.html LIGHTING section (pak_0_engine — rebuilt by build.sh).
+- SettingsGraphicsGui: `ssrEnabled`/`ssrStrength` statics, `ssrLabel`, `toggleSsr` (persists ssrDisabled immediately), `ssrStrengthChange` slider with new `dirtySsr` in the deferred apply/persist path (persists ssrStrength), autotest `wire` now also flips SSR off (idempotent loop). graphics.html (pak_1) gained "Screen Space Reflections" toggle + "Reflections — Strength" slider (0..2, step 0.05) between AO-Intensity and GI.
+- Verified: build clean; headless run boots exit=0 (settings keys seeded, no assert); ENGINE_AUTOTEST=settings + ENGINE_SETTINGS_AUTOTEST=graphics renders the Graphics page with "Screen Space Reflections: On" / "Reflections — Strength (1.00)"; ENGINE_GRAPHICS_SETTINGS_AUTOTEST=close closes via real BACK path with no RML errors; /tmp/ssr_graphics_page2.jpg shows the page.
+- Task 6 (runtime visual check) can flip SSR via DebugGui "Reflections" button or the settings page; setting `ssrStrength` to 0 is a neutral A/B baseline.
 
-- Pre-existing ground-state defect (NOT fixed, out of scope): capsule at the park spot has
-  ground=3 (StuckInFloor) or ground=0 (InAir) instead of OnGround — it slowly sinks into the
-  terrain (~0.07 m over 12 s) and has no friction (would slide on slopes if lifted). A proper
-  controller fix (ground-state/predictive-contact tuning) is the follow-up; note that simply
-  lifting the capsule to the terrain surface exposes the slide, which is why terrain is
-  excluded from the new depenetrate.
-- Round-2 item (task 2) still open: stale prop blobs (Cube.005/012-015 mispositioned,
-  SM_HP_Tree* trunk-only) need a re-bake of `test2.jolt.zstd`.
+## round 5
+
+### Done (task 6 — final runtime check)
+
+- Temp-flipped `RoughnessThreshold` 0.2→0.6 in `SsrDiligent.cpp` (proven eligible value for the
+  parked view), rebuilt, and ran the full check. **All pass:**
+- **Plain ENGINE_SCREENSHOT run (SSR on, threshold 0.6):** exit=0, clean shutdown, zero validation
+  errors; HUD: 60.00 fps / 16.67 ms frame / 2.56 ms cpu / **2.36 ms gpu** — sane (vsync-bound,
+  matches round 3's 2.47 ms). Parked player/camera untouched.
+- **RenderDoc frame-300 capture + `scripts/rdc.py list`:** `ssr` group present (eids 1209-1299,
+  output RGBA16F 2880x1627) with the full DiligentFX sub-chain nested (ComputeHierarchicalDepthBuffer,
+  ComputeStencilMaskAndExtractRoughness, ComputeIntersection, SpatialReconstruction,
+  ComputeTemporalAccumulation, ComputeBilateralCleanup).
+- **fp16 replay of the final SSR radiance target (eid 1299, ResourceId::1297):** 20,913 px (0.446%)
+  conf>0; 17,897 px conf>0.5; **15,807 px conf>0.9**; conf range 0..0.9995. Radiance dim-but-real:
+  luminance @conf>0 max 0.0779 / mean 0.0337 / median 0.0376; rgb max 0.097/0.079/0.090 — consistent
+  with rounds 2-3 (reflected content = distant terrain/sky). Judged via fp16, not 8-bit eyeball, per
+  the task note. conf==0 & rgb>0.001 is only 67 px (bilateral edge halo, max rgb 0.08) — composite
+  multiplies by conf so those add exactly 0.
+- **Restored threshold to 0.2**, rebuilt, smoke run exit=0, no validation errors. Default shipped
+  state: SSR on, threshold 0.2, strength 1.0 — visually inert from this vantage (min roughness 0.50
+  > 0.2 ⇒ empty mask), conservative as designed. settings.json never modified (ssrDisabled=false,
+  ssrStrength=1.0 as round 4 shipped). 1.5 GB capture + /tmp artifacts removed.
+- Replay API gotchas hit (recurring): output targets only exist on real draw eids (pass-boundary eid
+  gives empty GetOutputTargets); Descriptor field is `.resource`, not `.resourceId`, in this SWIG build.
+
+### For later work
+
+- SSR is verified end-to-end and shipped default-on. To actually SEE reflections from a screenshot,
+  either park at a glossier surface or raise the default threshold — the fresnel weight (0.04 +
+  0.96*(1-rough)^2) also dims rough-0.5 pixels to ~0.28x of the already-dim radiance. Brighter env /
+  closer reflected geometry would make the effect visible at 8-bit.
+
+## sign-off
+Round 5 verifier PASS + task.md re-read: SSR from DiligentFX is implemented end-to-end (module, inputs, composite, settings, runtime proof). Signed off at round 5 of 10. Open question left for future tuning: visibility from the parked vantage at default threshold 0.2 is inert (park min roughness 0.50); raise threshold (~0.6 proven eligible), park at a glossier surface, or brighten env to see it at 8-bit.
+
+## user report (round 6)
+User: sky reflects on terrain water, but the player character's reflection is missing. Manager root-cause pass: splat_terrain_ps.hlsl:965 `Out.WorldNormal = float4(N, 1.0)` — terrain material buffer alpha constant 1.0, so SSR never traces from any terrain pixel; the visible sky sheen on water is the terrain PS's own IBL specular (`g_PrefilteredEnvMap` sample of reflect(-V,N) at line ~795), a cube probe that cannot contain the character. Real per-pixel roughness exists in the PS (`roughness`, line ~780, clamp 0.04..1.0, GGX-alpha convention via albedo.a bake + splat blending) but is not exported. Sign-off round 5 reopened; rounds continue at 6/10.
+
+## round 6
+
+### Done (task 7 — terrain roughness into WorldNormal.a)
+
+- `splat_terrain_ps.hlsl:965`: `Out.WorldNormal = float4(N, 1.0)` → `float4(N, roughness)`,
+  plus the stale outputs doc-comment updated. `roughness` is in scope at the write (both in
+  `PSOutput main()`, declared at line ~780 as `clamp(roughnessS, 0.04, 1.0)`).
+- **DEVIATION from the task text (important): NO sqrt applied — wrote `roughness` directly.**
+  The task said the PS roughness is "GGX-alpha convention" needing sqrt→perceptual. That is
+  wrong for this shader: its `roughness` behaves exactly like DiligentFX `PerceptualRoughness`
+  (proven line-by-line vs PBR_Shading.fxh): LUT coord `float2(NdotV, roughness)` = fxh:291,
+  Schlick `1.0 - roughness` = fxh:261, env mip `roughness * rCam.w` = fxh:322, and it is the
+  shader itself that squares it (`AlphaRoughness = roughness * roughness` = the canonical
+  fxh/PBR_PrecomputeCommon.fxh:29 chain). sqrt would have written sqrt(perceptual) and
+  understated gloss. The write matches the gltf footer (`PerceptualRoughness` direct) and
+  SSR's `LoadRoughness` contract (channel holds perceptual when IsRoughnessPerceptual=TRUE —
+  verified in SSR_ComputeStencilMaskAndExtractRoughness.fx: sqrt only fires when the flag is
+  false).
+
+### Verified
+
+- build.sh clean; pak_1 re-zipped (md5-stamped by data.sh); runtime-compiled shader loads, no
+  compile errors, run exit 0; 60 fps / 2.81 ms gpu (vs 2.36 ms round 5 — SSR now actually
+  traces). Screenshot clean, no artifacts. Parked player/camera untouched; settings.json never
+  modified (SSR on, threshold 0.2 as shipped).
+- RenderDoc frame-300 fp16 replay: world RT2 alpha now min 0.0400 (the clamp floor) / mean
+  0.7676 / 5.33% of valid px < 0.2 — real variation, no longer constant 1.0. SSR radiance:
+  **67,244 px conf>0** (61,488 > 0.5; 56,894 > 0.9) vs ~0 terrain-sourced pre-fix (terrain was
+  alpha 1.0; gltf min 0.50 could not pass threshold 0.2) — terrain pixels now trace.
+- SSAO unaffected: reads .xyz only (proven round 2 A/B); no other consumer of the normal
+  buffer alpha exists except the SSR composite fresnel weight (its intended input — water
+  pixels now get the full roughness-weighted weight instead of the constant-0.04 floor).
+- Capture (~1.5 GB) + dumps + /tmp shots cleaned.
+
+### For task 8 (runtime character-reflection check)
+
+- 182,893 px in the round-6 capture frame sit below threshold 0.2 already — eligibility exists
+  at the SHIPPED threshold from this vantage; no temp flip needed for a basic check. The water
+  vantage may still want the user's parked camera framing (do not move it).
+- Fresnel weight note: composite weight 0.04 + 0.96*(1-rough)^2 ≈ 0.83 at roughness 0.1 —
+  water reflections should now be clearly visible at 8-bit, unlike rounds 2-5's dim gltf-only
+  adds. Watch for over-bright water (additive on top of the existing IBL sheen) as the tuning
+  follow-up.
+
+## round 7
+
+### Done (task 8 — runtime character-reflection verification) — ALL PASS
+
+- **A/B proof (RenderDoc frame-300 pair, parked camera):** SSR ON vs OFF (`ssrDisabled` temp flip,
+  settings.json byte-restored, md5 b75625dad44a44cb702d086ef62f6060). Eve's mirrored silhouette IS
+  visible in the puddle below her feet in ON, absent in OFF. Evidence kept in /tmp:
+  `task8_ab_on_below_eve.png` / `task8_ab_off_below_eve.png` (leg reflections vs flat sheen).
+- **fp16 replay (ssr group eids 1209-1299, radiance ResourceId::1297, composite eid 1319
+  g_Source/1161 + g_SSR/1297 + g_Normal/1113):**
+  - Stencil is EXACTLY the water set: all 67,328 conf>0 px have WorldNormal.a roughness < 0.2
+    (0 px pass on rough>=0.2). Water (rough<0.2) = 182,944 px total (matches round 6 exactly).
+  - Radiance NEAR THE CHARACTER IS THE CHARACTER: normalized radiance crop of the below-eve
+    puddle shows her two legs/boot highlights as a silhouette (not sky/terrain colors); left-mid
+    puddle field reflects the sunlit hill (warm 0.31/0.24/0.15, conf mean 0.93), sky blue
+    (0.02/0.04/0.09) nowhere in the traced radiance.
+  - Over-brightening: bounded. Below-eve puddle in-lum 0.098 -> out 0.109 (x1.12); left field
+    x2.68 (reflected sunlit hill, out max 0.619 < 1.0); right-mid x1.03; bottom-right x1.29.
+    FRAME-WIDE mean lum +1.7% only; zero NEW clipped px (218 px >1.0 were already >1.0 sun
+    glints, max 14.72 unchanged — SSR never adds to them).
+- Both capture runs exit 0, zero validation errors; ON HUD 60fps / 2.34ms gpu (vsync-bound).
+- Parked player/camera untouched (db rows decoded pre/post: camera -957.27,514.42,1425.88
+  yaw -1.73 pitch 0.15; player -954.34,513.77,1426.34). 2x 1.5GB captures + all npy/png temp
+  artifacts deleted.
+
+### Operational discovery (important for future screenshot runs)
+
+- **ENGINE_SCREENSHOT runs do NOT use the parked camera.** FlyingCamera.cpp:169 automation gate
+  (ENGINE_SCREENSHOT/ENGINE_CAMERA/ENGINE_CAMERA_DOLLY/ENGINE_NO_PLAYER) skips the saved-view
+  restore — "the scripted camera owns the view" = Game.cpp default vantage framing the WORLD
+  SPAWN point (-500,513,164), eye = spawn+(180,75,180) = (-320,588,344). The db-parked camera
+  is restored only in NON-gated runs — ENGINE_RENDERDOC_CAPTURE is NOT in the gate, which is
+  why every round 2-6 RenderDoc capture showed the parked view. So: visual verification of the
+  parked vantage MUST go through RenderDoc captures (dump the final backbuffer), not
+  ENGINE_SCREENSHOT. Also ENGINE_SCREENSHOT_FRAME=100 (default) fires before db load anyway.
+- Player spawn/db load is NOT gated (player always at the park); ENGINE_CAMERA vantages
+  (topdown/close/ground/cast/shadow/character) all frame spawnPt, not the parked player.
+- RenderDoc replay gotchas (recurring): TextureDescription has no `.name`; UsedDescriptor has
+  no `.name` — pair `GetShaderReflection(stage).readOnlyResources[i].name` with
+  `GetReadOnlyResources(stage)[i].descriptor.resource` by index; output targets only exist on
+  draw eids; `.resource` not `.resourceId` on Descriptor.
+- sqlite probing trap: `sqlite3.connect(path)` CREATES the file — two stray 0-byte dbs were
+  accidentally created during this round and deleted. Real db is build/c-game/data/db/db.db
+  (tables `camera`, `player`, not `transform`; camera blob = pos3+yaw+pitch f32).
+
+### Task 8 verdict
+
+Character reflection in water: VERIFIED end-to-end (stencil on water, character content in
+radiance, visible in A/B, no over-brightening regression). SSR shipped state confirmed good:
+threshold 0.2, strength 1.0, on. No tuning change needed; the left-field hotspot (x2.68) is
+physically plausible (Fresnel-weighted mirror of a bright hill) and well under clipping.
+
+## sign-off (reopened run)
+Round 7 verification proves the user-reported gap is fixed at the shipped config (threshold 0.2, strength 1.0, on): SSR stencil == water pixels, character silhouette present in puddle radiance + A/B screenshots. 7 rounds of 10 used, all verifier verdicts PASS (6 build verifications; round 7 verification-only, no code change). Tuning knob if wet patches feel bright in motion: ssrStrength slider (Settings > Graphics) / ssrStrength setting. Operational note for future visual checks: ENGINE_SCREENSHOT runs bypass the parked camera (FlyingCamera.cpp:169 automation gate) — use ENGINE_RENDERDOC_CAPTURE for parked-view evidence.

@@ -16,13 +16,13 @@ namespace engine {
 // debug.html) is unchanged; the toggle callbacks that had old-engine Vulkan
 // passes (shadow/bloom/AO/GI/volumetric/LPM/IBL/...) are adapted to what the
 // Diligent backend actually exposes:
-//   - shadows / bloom / ssao / fog drive
+//   - shadows / bloom / ssao / ssr / fog drive
 //     renderer::GraphicsSettings (rendererGraphicsApply);
 //   - the IBL env-file prev/next callbacks drive iblDiligentCyclePrev/Next and
 //     the env file label mirrors iblDiligentEnvName;
 //   - the IBL intensity up/down drive iblDiligentSetIntensity (0.25 steps);
 //   - everything else without an equivalent here (IBL toggle,
-//     GI, POM, skybox, grid, reflection, LPM) is an inert stub: the state
+//     GI, POM, skybox, grid, LPM) is an inert stub: the state
 //     stays at its neutral value, the callback just resyncs + refreshes the doc.
 DebugGui debugGui;
 
@@ -35,12 +35,12 @@ static void* model    = nullptr;
 static char shadowsEnabled;
 static char bloomEnabled;
 static char aoEnabled;
+static char reflectionEnabled;
 static char volumetricFogEnabled;
 
 // Stub state — the feature doesn't exist in this engine; kept bound so the
 // document renders with its neutral (disabled/zero) values.
 static char giEnabled         = 0;
-static char reflectionEnabled = 0;
 static char skyboxEnabled     = 0;
 static char gridEnabled       = 0;
 static char pomEnabled        = 0;
@@ -64,6 +64,7 @@ static void syncFromPasses(void) {
     shadowsEnabled     = g.shadowMode != 0;
     bloomEnabled       = g.bloom;
     aoEnabled          = g.ssao;
+    reflectionEnabled  = g.ssr;
     volumetricFogEnabled = g.fog;
 
     tonemapLabel = (char*)"built-in";
@@ -127,7 +128,13 @@ static int iblIntensityUp(void* _) {
     return refresh(_);
 }
 static int toggleGi(void* _)           { return refresh(_); }
-static int toggleReflection(void* _)   { return refresh(_); }
+static int toggleReflection(void* _) {
+    (void) _;
+    auto g = renderer::rendererGraphicsSettings();
+    g.ssr = !g.ssr;
+    renderer::rendererGraphicsApply(g);
+    return refresh(_);
+}
 static int toggleSkybox(void* _)       { return refresh(_); }
 static int toggleGrid(void* _)         { return refresh(_); }
 static int togglePOM(void* _)          { return refresh(_); }

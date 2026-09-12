@@ -39,7 +39,7 @@
 // RGBA16F + RG16F motion + RGBA16F normal + D32) — write all three like the
 // PBR pass (GltfDiligent.cpp GetPSMainSource footer) or TAA/SSAO misbehave:
 // Color, CustomData = motion vectors (static terrain: zero), WorldNormal
-// = float4(world normal, 1.0).
+// = float4(world normal, roughness — perceptual, the SSR material alpha).
 
 struct PSSplatIn
 {
@@ -962,6 +962,6 @@ PSOutput main(PSSplatIn In)
     float2 ndcCurr = In.Position.xy / In.Position.w;
     float2 ndcPrev = In.PrevClip.xy / max(In.PrevClip.w, 1e-6);
     Out.MotionVector = (ndcCurr - cCamSensor.zw) - (ndcPrev - pCamSensor.zw);
-    Out.WorldNormal = float4(N, 1.0);
+    Out.WorldNormal = float4(N, roughness);
     return Out;
 }

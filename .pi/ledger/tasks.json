@@ -1,8 +1,50 @@
 [
-  {"id": 1, "desc": "Ground truth run: JOLT_DEBUG=1 run + visual AABB comparison.", "status": "done", "result": "All 61 props bodies match visual AABBs incl. scaled Cube.001 (scl 3.35); scale IS applied; geometry fine -> character path."},
-  {"id": 2, "desc": "Bake-side check / re-bake stale cube blobs (Cube.005/012/013/014/015 offsets).", "status": "pending", "result": null},
-  {"id": 3, "desc": "Runtime scale path check.", "status": "done", "result": "Covered by task 1: ScaledShape applied, world AABB matches visual for every scaled prop."},
-  {"id": 4, "desc": "Character controller path diagnosis.", "status": "done", "result": "Root cause: closed-box mesh + backface-ignoring character queries -> embedded capsule registers 0 contacts, cannot depenetrate."},
-  {"id": 5, "desc": "Implement fix: backface-aware character depenetration + containment escape in joltCharacterUpdate.", "status": "done", "result": "CollideShape(CollideWithBackFaces) push-out + 6-probe containment escape (farthest exit face); terrain excluded; embed test escapes in ~3 frames then blocks at rock faces; verifier PASS."},
-  {"id": 6, "desc": "Final verify with the pinned Verification command.", "status": "done", "result": "Verifier PASS: build+run exit=0, /tmp/verify.jpg written, player/camera db rows stable (sub-mm drift, camera byte-identical)."}
+ {
+  "id": 1,
+  "desc": "Survey integration surface: SSR hpp/cpp attribs + stages, HnPostProcessTask.cpp SSR wiring, SsaoDiligent/TaaDiligent hooks, world shader normal outputs, roughness location",
+  "status": "done",
+  "result": "Done by brainstorm round 0: all SSR inputs contract-matched (world normals OK, standard-Z depth OK w/ PostFXContext FEATURE_FLAG_NONE, motion RG16F OK); bind normalTex RGBA16F as material SRV with RoughnessChannel=3; roughness writable in gltf PS footer override (PerceptualRoughness in scope, needs UNSHADED guard); terrain const roughness 1.0; see notes.md"
+ },
+ {
+  "id": 2,
+  "desc": "Create SsrDiligent.{h,cpp} mirroring SsaoDiligent (attribs: RoughnessThreshold 0.2, RoughnessChannel 3, IsRoughnessPerceptual TRUE, FEATURE_FLAG_NONE) and wire Execute into taaWorldResolve in BOTH taaOn and !taaOn branches after postFXContext->Execute under ScopedDebugGroup \"ssr\"",
+  "status": "done",
+  "result": "Round 1 PASS: SsrDiligent module (material SRV = taaNormalSRV(), default off) wired in both resolve branches + ssrFrameBegin/ssrInit/ssrDestroy; !taaOn PostFXContext Execute now gated on ssao OR ssr; smoke-tested no crash, output identical while alpha=1.0; build verified"
+ },
+ {
+  "id": 3,
+  "desc": "Write perceptual roughness into normal buffer alpha in gltf PS footer (guard UNSHADED variants); terrain writes constant 1.0; verify SSAO output unchanged",
+  "status": "done",
+  "result": "Round 2 PASS: PS footer writes PerceptualRoughness to alpha (1.0 in UNSHADED/no-vertex-normal branches); SSAO A/B byte-identical; RenderDoc proves alpha carries real roughness. Caveat: parked view min roughness 0.50 > threshold 0.2, stencil empty from this vantage \u2014 raise threshold or re-park for visibility check (task 6)"
+ },
+ {
+  "id": 4,
+  "desc": "Composite pass ssrCompositeApply (mirror aoCompositeApply): color += ssr.rgb * fresnel * confidence * strength after TAA resolve, skip on debug-MV blit, env-color fallback where confidence ~ 0",
+  "status": "done",
+  "result": "Round 3 PASS: composite PSO on shared blit VS, RGBA16F target, shader lerp(c.rgb*EnvFallback, ssr.rgb, conf)*fresnel*conf*Strength; RenderDoc fp16 replay proves correct adds (max 0.027) + exact no-op at conf=0; radiance alpha = confidence (OUTPUT cleared to 0, drawn only in stencil); parked view HAS eligible pixels at threshold 0.6 (~13.7k px) but radiance dim (reflected content = distant terrain/sky)"
+ },
+ {
+  "id": 5,
+  "desc": "Settings plumbing: GraphicsSettings.ssr + strength, persistence key, DebugGui + SettingsGraphicsGui toggle, applyGraphicsSettings forwarding",
+  "status": "done",
+  "result": "Round 4 PASS: ssr=true/ssrStrength=1.0 defaults; ssrDisabled+ssrStrength settings templates; DebugGui Reflections button + SettingsGraphicsGui toggle/slider wired via rendererGraphicsApply\u2192ssrSettingsApply; autotest wire flips SSR; paks rebuilt; headless smoke clean"
+ },
+ {
+  "id": 6,
+  "desc": "Runtime check: ENGINE_SCREENSHOT run, SSR visible on glossy surfaces, no crash, frame time sane; scripts/rdc.py list shows \"ssr\". NOTE rounds 2-3: parked view needs RoughnessThreshold ~0.6 for eligible pixels (proven via RenderDoc); radiance dim there \u2014 judge presence via fp16 replay/confidence, not eyeballing 8-bit jpeg; restore any settings flipped",
+  "status": "done",
+  "result": "Round 5 PASS: default-on run exit 0, 60fps/2.36ms gpu, ssr group at eids 1209-1299, fp16 replay proves real traced pixels (20.9k conf>0, 15.8k conf>0.9, dim radiance = distant terrain/sky); threshold restored to 0.2; parked player untouched."
+ },
+ {
+  "id": 7,
+  "desc": "USER REPORT: sky reflects on terrain water (sheen is terrain IBL env specular, not SSR) but the player character does not. ROOT CAUSE (manager-verified in source): splat_terrain_ps.hlsl:965 writes Out.WorldNormal = float4(N, 1.0) - constant roughness 1.0 - so no terrain pixel ever passes RoughnessThreshold; fix: write the PS's real per-pixel roughness (line ~780, albedo.a + splat blend, GGX-alpha convention) into alpha, converted to PERCEPTUAL (sqrt) to match IsRoughnessPerceptual=TRUE used by the gltf path; confirm roughness is in scope at the write; SSAO reads .xyz only so it is unaffected",
+  "status": "done",
+  "result": "Round 6 PASS: Out.WorldNormal = float4(N, roughness) written DIRECTLY (PS roughness already perceptual - squares into GGX alpha like DiligentFX fxh; do NOT add sqrt); pak repacked; fp16 replay: 67,244 conf>0 terrain px (was ~0), 182,893 px < threshold 0.2; 60fps/2.81ms gpu"
+ },
+ {
+  "id": 8,
+  "desc": "Verify character reflection at runtime: RenderDoc capture + fp16 replay - water pixels must now pass the stencil (conf>0 on water), radiance near the character's screen region non-zero, screenshot A/B SSR on/off shows character reflection in water; do NOT move the parked player; restore any settings flipped",
+  "status": "done",
+  "result": "Round 7 PASS (verification-only): conf>0 exactly on water (67,328 px, roughness<0.2); fp16 radiance crop below eve shows her silhouette (legs+boot highlights); A/B screenshots ON show the mirrored figure, OFF absent (/tmp/task8_ab_*.png); over-bright bounded (frame mean +1.7%, no new clip); settings restored md5-identical; no code change so no verifier dispatch"
+ }
 ]

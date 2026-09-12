@@ -57,6 +57,8 @@ void settingsInit(void) {
     templates.push_back((Template{"ssaoRadius", "double", 1.0}));
     templates.push_back((Template{"ssaoAlgorithm", "int", 0.0}));
     templates.push_back((Template{"ssaoIntensity", "double", 1.0}));
+    templates.push_back((Template{"ssrDisabled", "boolean", 0.}));
+    templates.push_back((Template{"ssrStrength", "double", 1.0}));
     /* Screen-space GI (plans/ssgi.md, phases 1-4 validated): on by
      * default; the GUI toggle persists "giDisabled". */
     templates.push_back((Template{"giDisabled", "boolean", 0.}));
