@@ -69,9 +69,9 @@ namespace engine::renderer::diligent {
         };
 
         constexpr ShadowQualityTier kQualityTiers[3] = {
-            {1024, 2, 60.0f, 3},
-            {2048, 2, 80.0f, 3},
-            {2048, 3, 120.0f, 5},
+            {1024, 1, 60.0f, 3},
+            {2048, 1, 80.0f, 3},
+            {2048, 1, 120.0f, 5},
         };
 
         constexpr float kReceiverFadeScale[3] = {2.82f, 2.79f, 3.70f};
@@ -216,7 +216,7 @@ namespace engine::renderer::diligent {
             const Diligent::float4x4& proj = diligentBaseProj();
 
             static const float casterPad = [] {
-                float v = 1.0f;
+                float v = 2.8f;
                 if (const char* padEnv = getenv("ENGINE_SHADOW_CASTER_PAD")) {
                     const float parsed = (float)atof(padEnv);
                     if (parsed >= 1.0f && parsed <= 4.0f) v = parsed;

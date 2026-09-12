@@ -6,6 +6,8 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 ## 2026-09-12 — [entries](lessons/2026-09-12.md)
 
+- A baked env-tunable default lost in a refactor brings its artifact back: `casterPad` had regressed 2.8 → 1.0, big casters poked out of the cascade light cubes and their shadow showed straight-edged band cutouts when the receiver stood inside it (tall rock east of the parked player) — re-baked 2.8; A/B via `ENGINE_SHADOW_CASTER_PAD`, receiver-side debug UVs stay sane (it's a missing-caster, not a receiver, bug)
+- Sliced CSM casting erases tall-distant-caster shadows near the camera: ground inside cascade 0's slice samples an atlas the far-away tall caster never rendered into — its shadow is cut out in a disc around the camera (the focus band made the boundary sweep with orbit distance) — a receiving cascade must cast the full tier: quality tiers collapsed to 1 cascade; diagnose with `ENGINE_SPLAT_SHADOW_DEBUG=3` (unsampled/lit strip) + `ENGINE_SHADOW_ORACLE` (passes → caster absent, not a math bug)
 - RenderDoc per-event GPU durations on this setup can be misattributed wholesale (identical ~10.5 ms plateaus on unrelated draws, pass sums > any real frame) — A/B GPU cost with the engine's whole-frame `QUERY_TYPE_DURATION` HUD number or wall-clock frame counts, never rdc.py/`EventGPUDuration` absolutes
 - Measure fade-gated shader features by forcing them onto every pixel via env tuning (fade overrides) instead of moving the parked camera; incident: POM was ~9 of 10.9 ms/frame when fully active (5-tap blur × 9-texture chain × aniso-16 per march tap) — bilinear height sampler + single-tap march at widened gradients cut it to noise, `ENGINE_SPLAT_POM_BLUR=1` restores the legacy kernel
 
