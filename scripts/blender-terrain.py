@@ -383,6 +383,22 @@ def findNormalMap(albedoPath: Path) -> Path:
     return None
 
 
+def findRoughnessMap(albedoPath: Path) -> Path:
+    name = albedoPath.name
+    candidates = [
+        name.replace("BaseColor", "Roughness"),
+        name.replace("Albedo", "Roughness"),
+        name.replace("diff", "rough"),
+    ]
+    for cand in candidates:
+        if cand == name:
+            continue
+        candPath = albedoPath.parent / cand
+        if candPath.is_file():
+            return candPath
+    return None
+
+
 def findDisplacementMap(albedoPath: Path):
     # Height source for the POM alpha channel (old-engine convention: the
     # height lives in the normal map's alpha). The sets mix polyhaven-style
@@ -404,6 +420,21 @@ def findDisplacementMap(albedoPath: Path):
         if cand != name and candPath.is_file():
             return candPath
     return None
+
+
+def loadGrayscaleL8(path: Path) -> "Image.Image":
+    from PIL import Image
+    import numpy as np
+    img = Image.open(path)
+    if img.mode in ("I;16", "I;16L", "I;16B", "I"):
+        data = np.asarray(img).astype(np.uint32)
+        if img.mode == "I":
+            lo, hi = float(data.min()), float(data.max())
+            data = ((data - lo) * (255.0 / (hi - lo))).round() if hi > lo else data * 0.0
+        else:
+            data = data >> 8
+        return Image.fromarray(data.astype(np.uint8), "L")
+    return img.convert("L")
 
 
 def loadHeightMap(path: Path):
@@ -432,10 +463,11 @@ def loadHeightMap(path: Path):
             png = Path(t) / "disp.png"
             run("magick", str(path), "-auto-level", "-colorspace", "Gray", "-depth", "8", str(png))
             return Image.open(png).convert("L")
-    return Image.open(path).convert("L")
+    return loadGrayscaleL8(path)
 
 
-def convertDetailTexture(srcPath: Path, outDir: Path, kind: str, dispPath: Path = None):
+def convertDetailTexture(srcPath: Path, outDir: Path, kind: str, dispPath: Path = None,
+                         roughPath: Path = None):
     from PIL import Image
     oetf, primaries = ("srgb", "srgb") if kind == "albedo" else ("linear", "none")
     outDir.mkdir(parents=True, exist_ok=True)
@@ -448,6 +480,13 @@ def convertDetailTexture(srcPath: Path, outDir: Path, kind: str, dispPath: Path 
         if max(img.size) > DETAIL_MAX_SIZE:
             img = img.resize((DETAIL_MAX_SIZE, DETAIL_MAX_SIZE), Image.LANCZOS)
         img = img.convert("RGBA")
+        if kind == "albedo":
+            if roughPath is None:
+                raise RuntimeError(
+                    f"no roughness map for {srcPath} — albedo alpha (roughness) would be opaque"
+                )
+            rough = loadGrayscaleL8(roughPath).resize(img.size, Image.LANCZOS)
+            img.putalpha(rough)
         if kind == "normal":
             if dispPath is None:
                 raise RuntimeError(f"no displacement map for {srcPath} — POM height would be flat")
@@ -473,8 +512,12 @@ def convertDetailTextures(detailPathsJson: Path):
             continue
 
         outDir = IMAGES_DIR / detailName
-        albedo = convertDetailTexture(src, outDir, "albedo")
-        print(f"detail texture: {detailName} albedo -> {albedo} ({fileSizeHuman(albedo)})")
+        rough = findRoughnessMap(src)
+        if rough is None:
+            print(f"WARNING: no roughness map found for {detailName} ({src})")
+        albedo = convertDetailTexture(src, outDir, "albedo", roughPath=rough)
+        print(f"detail texture: {detailName} albedo (+rough {rough.name if rough else 'NONE'})"
+              f" -> {albedo} ({fileSizeHuman(albedo)})")
 
         normal = findNormalMap(src)
         if normal is None:

@@ -888,6 +888,23 @@ PSOutput main(PSSplatIn In)
             }
         }
     }
+    float3 specDbg   = float3(0.0, 0.0, 0.0);
+    float  specDbgN  = 0.0;
+    if (fShadowDebugMode > 99.5)
+    {
+        float3 L = -LightDir;
+        float NdotL = dotSat(N, L);
+        float3 H = normalize(L + V);
+        float  NdotH = max(dot(N, H), 0.0);
+        float  VdotH = max(dot(V, H), 0.0);
+        float  AlphaRoughness = roughness * roughness;
+        float  D   = ggxNormalDistribution(NdotH, AlphaRoughness);
+        float  Vis = ggxVisibilityCorrelated(NdotL, NdotV, AlphaRoughness);
+        float3 F   = schlickReflection(VdotH, R0, R90);
+        float3 SpecContrib    = F * Vis * D;
+        specDbg  = SpecContrib * NdotL * (LightIntensity * 0.25);
+        specDbgN = NdotH;
+    }
     if (Attenuation > 0.0)
     {
         float3 L = -LightDir;
@@ -909,7 +926,18 @@ PSOutput main(PSSplatIn In)
         IBL += Punctual;
     }
 
-    if (fShadowDebugMode > 0.5)
+    if (fShadowDebugMode > 99.5)
+    {
+        if (fShadowDebugMode < 100.5)
+            IBL = float3(roughness, roughness, roughness);
+        else if (fShadowDebugMode < 101.5)
+            IBL = specDbg;
+        else if (fShadowDebugMode < 102.5)
+            IBL = 0.5 + 0.5 * N;
+        else
+            IBL = float3(specDbgN, specDbgN, specDbgN);
+    }
+    else if (fShadowDebugMode > 0.5)
     {
         if (ShadowIndex < 0.0)
             IBL = float3(0.1, 0.1, 0.5);
