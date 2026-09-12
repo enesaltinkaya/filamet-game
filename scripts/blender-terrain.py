@@ -383,7 +383,59 @@ def findNormalMap(albedoPath: Path) -> Path:
     return None
 
 
-def convertDetailTexture(srcPath: Path, outDir: Path, kind: str):
+def findDisplacementMap(albedoPath: Path):
+    # Height source for the POM alpha channel (old-engine convention: the
+    # height lives in the normal map's alpha). The sets mix polyhaven-style
+    # *_disp/*.jpg names, polyhaven 4k jpgs (*_Displacement.jpg, *_Bump.jpg
+    # fallback) and mat-test exrs (*_Displacement.exr).
+    name = albedoPath.name
+    stem, _, ext = name.rpartition(".")
+    candidates = []
+    if "diff" in name:
+        candidates.append(name.replace("diff", "disp"))
+    if "BaseColor" in name:
+        candidates.append(name.replace("BaseColor", "Displacement"))
+        candidates.append(name.replace("BaseColor", "Bump"))
+    if "Albedo" in name:
+        candidates.append(stem.replace("Albedo", "Displacement") + ".exr")
+        candidates.append(name.replace("Albedo", "Displacement"))
+    for cand in candidates:
+        candPath = albedoPath.parent / cand
+        if cand != name and candPath.is_file():
+            return candPath
+    return None
+
+
+def loadHeightMap(path: Path):
+    # Returns an 8-bit grayscale PIL image. EXR (float, possibly linear
+    # meters-ish range) is min-max normalized to the full [0, 255] range —
+    # the height field is relative anyway, the shader's heightScale sets the
+    # absolute depth.
+    from PIL import Image
+    if path.suffix.lower() == ".exr":
+        import numpy as np
+        data = None
+        try:
+            import cv2
+            data = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        except ImportError:
+            pass
+        if data is not None:
+            if data.ndim == 3:
+                data = data[..., 0]
+            lo, hi = float(data.min()), float(data.max())
+            if hi <= lo:
+                raise RuntimeError(f"degenerate displacement: {path}")
+            data = (data - lo) / (hi - lo)
+            return Image.fromarray((data * 255.0).round().clip(0, 255).astype("uint8"), "L")
+        with tempfile.TemporaryDirectory() as t:
+            png = Path(t) / "disp.png"
+            run("magick", str(path), "-auto-level", "-colorspace", "Gray", "-depth", "8", str(png))
+            return Image.open(png).convert("L")
+    return Image.open(path).convert("L")
+
+
+def convertDetailTexture(srcPath: Path, outDir: Path, kind: str, dispPath: Path = None):
     from PIL import Image
     oetf, primaries = ("srgb", "srgb") if kind == "albedo" else ("linear", "none")
     outDir.mkdir(parents=True, exist_ok=True)
@@ -396,6 +448,11 @@ def convertDetailTexture(srcPath: Path, outDir: Path, kind: str):
         if max(img.size) > DETAIL_MAX_SIZE:
             img = img.resize((DETAIL_MAX_SIZE, DETAIL_MAX_SIZE), Image.LANCZOS)
         img = img.convert("RGBA")
+        if kind == "normal":
+            if dispPath is None:
+                raise RuntimeError(f"no displacement map for {srcPath} — POM height would be flat")
+            disp = loadHeightMap(dispPath).resize(img.size, Image.LANCZOS)
+            img.putalpha(disp)
         img.save(png)
         convertSplatTile(png, outDir, oetf, primaries)
 
@@ -426,8 +483,11 @@ def convertDetailTextures(detailPathsJson: Path):
             if stale.exists():
                 stale.unlink()
             continue
-        ktx2 = convertDetailTexture(normal, outDir, "normal")
-        print(f"detail texture: {detailName} normal -> {ktx2} ({fileSizeHuman(ktx2)})")
+        disp = findDisplacementMap(src)
+        if disp is None:
+            raise RuntimeError(f"no displacement map found for {detailName} ({src})")
+        ktx2 = convertDetailTexture(normal, outDir, "normal", disp)
+        print(f"detail texture: {detailName} normal (+disp {disp.name}) -> {ktx2} ({fileSizeHuman(ktx2)})")
 
 
 def convertBlendFile(blendFile: Path, scriptsTmp: Path, force: bool):
@@ -499,11 +559,15 @@ def convertBlendFile(blendFile: Path, scriptsTmp: Path, force: bool):
 def pipelineMain():
     args = sys.argv[1:]
     force = False
+    detailsOnly = False
     blendFiles = list(BLEND_FILES)
     i = 0
     while i < len(args):
         if args[i] == "--force":
             force = True
+            i += 1
+        elif args[i] == "--details-only":
+            detailsOnly = True
             i += 1
         elif args[i] == "--blend":
             blendFiles = []
@@ -520,6 +584,11 @@ def pipelineMain():
 
     scriptsTmp = ROOT / "scripts" / ".tmp"
     scriptsTmp.mkdir(parents=True, exist_ok=True)
+
+    if detailsOnly:
+        detailPathsJson = scriptsTmp / "oghuzlands.terrain-detailpaths.json"
+        convertDetailTextures(detailPathsJson)
+        return
 
     for blendFile in blendFiles:
         convertBlendFile(blendFile, scriptsTmp, force)

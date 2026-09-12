@@ -162,6 +162,7 @@ Texture2DArray g_ShadowMap;
 Texture2DArray g_ShadowMapLinear;
 SamplerState g_Sampler;
 SamplerState g_DetailSampler;
+SamplerState g_HeightSampler;
 SamplerState g_LinearClampSampler;
 SamplerComparisonState g_ShadowMap_sampler;
 SamplerState g_ShadowMapLinearSampler;
@@ -175,7 +176,11 @@ struct PSOutput
 };
 
 const float SPLAT_PI        = 3.14159265359;
-const float SPLAT_ROUGHNESS = 0.9;  // dielectric outdoor terrain
+
+// Old-engine terrain.frag parity: tangent-normal xy strength, and roughness
+// comes from the albedo alpha (bake: albedo.a = roughness), AO from the
+// normal blue (bake: normal.b = AO, .a = height).
+#define SPLAT_NORMAL_STRENGTH 2.0
 
 // Detail tiling, old-engine parity (terrain.frag): a fixed reference span,
 // NOT the terrain AABB, so the pattern stays anchored across world rebuilds
@@ -209,13 +214,52 @@ const float SPLAT_ROUGHNESS = 0.9;  // dielectric outdoor terrain
 #define SPLAT_SNOW_HI 1100.0
 #endif
 
+// ── Parallax occlusion mapping (ported from the old engine's pom.shader —
+// pak_0_engine/shaders/includes/pom.shader, exact parity) ── the heightfield
+// lives in the ALPHA channel of each detail's normal map (the bake puts the
+// 8-bit height there; grass/cliff/sand carry a real histogram, snow's normal
+// is 3-component flat so its band keeps the blended detail field — real
+// terrain under snow). SPLAT_POM_DEPTH is the relief depth in world meters
+// (old POM_DEPTH_SPLAT), converted to tiled-uv units at the call site
+// (× tile / span, matching old hScaleSplat). The march samples a 5-tap
+// cross-blurred height (old samplePOMHeightBlurred: 8-bit heights + TAA
+// jitter otherwise make the intersection jump between frames), and the
+// view ray is transformed by the surface-aligned TBN (old buildTerrainTBN),
+// so relief leans correctly on slopes instead of assuming a flat Y-up uv
+// frame. Fade ramp and step counts are the old engine's 20/30 m and 6–8.
+#ifndef SPLAT_POM
+#define SPLAT_POM 1
+#endif
+#ifndef SPLAT_POM_DEPTH
+#define SPLAT_POM_DEPTH 0.3
+#endif
+#ifndef SPLAT_POM_FADE_START
+#define SPLAT_POM_FADE_START 20.0
+#endif
+#ifndef SPLAT_POM_FADE_END
+#define SPLAT_POM_FADE_END 30.0
+#endif
+#ifndef SPLAT_POM_MIN_STEPS
+#define SPLAT_POM_MIN_STEPS 6
+#endif
+#ifndef SPLAT_POM_MAX_STEPS
+#define SPLAT_POM_MAX_STEPS 8
+#endif
+#ifndef SPLAT_POM_BINARY_STEPS
+#define SPLAT_POM_BINARY_STEPS 4
+#endif
+#ifndef SPLAT_POM_BLUR
+#define SPLAT_POM_BLUR 0
+#endif
+
 float dotSat(float3 x, float3 y) { return max(dot(x, y), 0.0); }
 
 // The SplatGroup chain for one group, written as a + (b - a) * t — this
 // glslang HLSL build does not resolve mix(float3, float3, float) (the rmlui
 // shaders avoid it), and the expanded form is the identical linear blend.
-// Albedo samples the sRGB textures raw (decode on sample); the base is the
-// lower group's output (black for the base group). The details sample
+// Albedo samples the sRGB textures raw (decode on sample) and carries the
+// ALPHA through as roughness (old layerRoughness = albedoSample.a) — one
+// fetch per detail serves both. The details sample
 // through the REPEAT/aniso g_DetailSampler at the world-tiled uv — the
 // WEIGHTS stay on g_Sampler at the tile-local uv (clamp keeps UDIM tiles
 // from bleeding into each other).
@@ -231,39 +275,187 @@ float dotSat(float3 x, float3 y) { return max(dot(x, y), 0.0); }
 // uv through sampleMaterialTextureGrad(dUVdx, dUVdy) for the same reason.
 // (Aniso filtering needs the hardware quad, so it may not engage on
 // explicit-grad samples — mips still filter; acceptable per the fallback.)
-float3 splatAlbedoMix(float3 base, float4 w,
+void splatAlbedoMix(inout float3 c, inout float rough, float4 w,
         Texture2D red, Texture2D green, Texture2D blue, Texture2D alpha,
         SamplerState detailSampler, float2 uv, float2 du, float2 dv)
 {
-    float3 c = base;
-    c = c + (red.SampleGrad(detailSampler, uv, du, dv).rgb - c) * w.r;
-    c = c + (green.SampleGrad(detailSampler, uv, du, dv).rgb - c) * w.g;
-    c = c + (blue.SampleGrad(detailSampler, uv, du, dv).rgb - c) * w.b;
-    c = c + (alpha.SampleGrad(detailSampler, uv, du, dv).rgb - c) * (1.0 - w.a);
-    return c;
+    float4 s = red.SampleGrad(detailSampler, uv, du, dv);
+    c = c + (s.rgb - c) * w.r;
+    rough = rough + (s.a - rough) * w.r;
+    s = green.SampleGrad(detailSampler, uv, du, dv);
+    c = c + (s.rgb - c) * w.g;
+    rough = rough + (s.a - rough) * w.g;
+    s = blue.SampleGrad(detailSampler, uv, du, dv);
+    c = c + (s.rgb - c) * w.b;
+    rough = rough + (s.a - rough) * w.b;
+    s = alpha.SampleGrad(detailSampler, uv, du, dv);
+    c = c + (s.rgb - c) * (1.0 - w.a);
+    rough = rough + (s.a - rough) * (1.0 - w.a);
 }
 
-// Same chain over the tangent-space normals (decode 2*s - 1 first; the
+// Packed-normal decode (old engine terrain.frag): RG = tangent xy at
+// SPLAT_NORMAL_STRENGTH, Z reconstructed from the constraint, B carries AO,
+// A height. The .xyz*2-1 decode this shader used before packed the AO byte
+// into normal-Z (verified against the files: B spans 0.44..1.0 with xy
+// within ±0.45 — impossible for a reconstructed z).
+float3 splatNormalDecode(float2 rg)
+{
+    float2 nxy = (rg * 2.0 - 1.0) * SPLAT_NORMAL_STRENGTH;
+    return float3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.0)));
+}
+
+// Same chain over the tangent-space normals (decode first; the
 // base-group base is the flat tangent normal (0, 0, 1) — the Noop weight
-// (0,0,0,1) keeps it untouched, matching the albedo chain's black base).
-float3 splatNormalMix(float3 base, float4 w,
+// (0,0,0,1) keeps it untouched, matching the albedo chain's black base),
+// carrying the normal map's BLUE through as AO (old layerAo = normalSample.b)
+// off the same fetch.
+void splatNormalMix(inout float3 c, inout float ao, float4 w,
         Texture2D red, Texture2D green, Texture2D blue, Texture2D alpha,
         SamplerState detailSampler, float2 uv, float2 du, float2 dv)
 {
-    float3 c = base;
-    c = c + (red.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * w.r;
-    c = c + (green.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * w.g;
-    c = c + (blue.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * w.b;
-    c = c + (alpha.SampleGrad(detailSampler, uv, du, dv).xyz * 2.0 - 1.0 - c) * (1.0 - w.a);
-    return c;
+    float4 s = red.SampleGrad(detailSampler, uv, du, dv);
+    float3 n = splatNormalDecode(s.rg);
+    c = c + (n - c) * w.r;
+    ao = ao + (s.b - ao) * w.r;
+    s = green.SampleGrad(detailSampler, uv, du, dv);
+    n = splatNormalDecode(s.rg);
+    c = c + (n - c) * w.g;
+    ao = ao + (s.b - ao) * w.g;
+    s = blue.SampleGrad(detailSampler, uv, du, dv);
+    n = splatNormalDecode(s.rg);
+    c = c + (n - c) * w.b;
+    ao = ao + (s.b - ao) * w.b;
+    s = alpha.SampleGrad(detailSampler, uv, du, dv);
+    n = splatNormalDecode(s.rg);
+    c = c + (n - c) * (1.0 - w.a);
+    ao = ao + (s.b - ao) * (1.0 - w.a);
 }
 
-float3 triplanarSample(Texture2D tex, SamplerState smp, float3 pos, float3 w)
+// ── POM height field ── the same chain as the albedo/normal mixes but over
+// the normal maps' ALPHA (the baked height): chain base is the 0.5 surface
+// level, the base material's own height folds back with the splat influence
+// exactly like baseAlbedo/baseN. One blended field serves ALL chains — a
+// dominant-material single-texture march would need dynamically selected
+// texture handles (unsupported on this runtime-glslang path), and
+// per-material offsets would tear the chains apart at weight boundaries.
+float splatHeightMix(float base, float4 w,
+        Texture2D red, Texture2D green, Texture2D blue, Texture2D alpha,
+        SamplerState detailSampler, float2 uv, float2 du, float2 dv)
 {
-    float3 c = float3(0.0, 0.0, 0.0);
-    c = c + tex.Sample(smp, pos.zy).rgb * w.x;
-    c = c + tex.Sample(smp, pos.xz).rgb * w.y;
-    c = c + tex.Sample(smp, pos.xy).rgb * w.z;
+    float h = base;
+    h = h + (red.SampleGrad(detailSampler, uv, du, dv).w - h) * w.r;
+    h = h + (green.SampleGrad(detailSampler, uv, du, dv).w - h) * w.g;
+    h = h + (blue.SampleGrad(detailSampler, uv, du, dv).w - h) * w.b;
+    h = h + (alpha.SampleGrad(detailSampler, uv, du, dv).w - h) * (1.0 - w.a);
+    return h;
+}
+
+float pomHeight(float2 uv, float2 du, float2 dv, float4 wBase, float4 wTop, float influence)
+{
+    float baseH = g_BaseNormal.SampleGrad(g_HeightSampler, uv, du, dv).w;
+    float h = splatHeightMix(0.5, wBase, g_DetailN4, g_DetailN5, g_DetailN6, g_DetailN7,
+            g_HeightSampler, uv, du, dv);
+    h = splatHeightMix(h, wTop, g_DetailN0, g_DetailN1, g_DetailN2, g_DetailN3,
+            g_HeightSampler, uv, du, dv);
+    return baseH + (h - baseH) * influence;
+}
+
+// samplePOMHeightBlurred (old engine): 5-tap cross blur (center ×2, ÷6) at
+// ±1 texel in the uv gradient frame. The 256 discrete height levels make a
+// sub-pixel uv shift (TAA jitter) jump the ray-march intersection between
+// frames; the blur smooths the field so the hit moves continuously.
+float pomHeightBlurred(float2 uv, float2 du, float2 dv, float4 wBase, float4 wTop, float influence)
+{
+#if SPLAT_POM_BLUR
+    float2 sx = float2(du.x, 0.0);
+    float2 sy = float2(0.0, dv.y);
+    float h = pomHeight(uv, du, dv, wBase, wTop, influence) * 2.0;
+    h += pomHeight(uv + sx, du, dv, wBase, wTop, influence);
+    h += pomHeight(uv - sx, du, dv, wBase, wTop, influence);
+    h += pomHeight(uv + sy, du, dv, wBase, wTop, influence);
+    h += pomHeight(uv - sy, du, dv, wBase, wTop, influence);
+    return h / 6.0;
+#else
+    return pomHeight(uv, du * 2.0, dv * 2.0, wBase, wTop, influence);
+#endif
+}
+
+// parallaxOcclusionMap (old engine): linear ray-march through the height
+// field until the view ray dives under it, then a binary refinement —
+// blurred samples during the march, center-biased first (uv += slope/2) so
+// height 0.5 is the geometric surface. Steps adapt with the view angle
+// (6 head-on, 8 grazing). Returns the offset uv; the caller's chains sample
+// at it while the original du/dv gradients stay valid (the offset is
+// sub-texel).
+float2 parallaxOcclusionUV(float2 uv, float3 vTS, float heightScale, float fadeFactor,
+        float2 du, float2 dv, float4 wBase, float4 wTop, float influence)
+{
+    if (fadeFactor < 0.001 || heightScale <= 0.0) {
+        return uv;
+    }
+    float3 V           = normalize(vTS);
+    float  angleFactor = 1.0 - abs(V.z);
+    int    numSteps    = (int)((float)SPLAT_POM_MIN_STEPS +
+            ((float)SPLAT_POM_MAX_STEPS - (float)SPLAT_POM_MIN_STEPS) * angleFactor);
+    float  stepH = 1.0 / (float)numSteps;
+    float2 slope = (V.xy / max(abs(V.z), 0.001)) * heightScale;
+
+    float2 currentUV      = uv + slope * 0.5;
+    float  currentHeight  = 1.0;
+    float  sampledHeight  = pomHeightBlurred(currentUV, du, dv, wBase, wTop, influence);
+    [loop]
+    for (int i = 0; i < numSteps; i++)
+    {
+        if (currentHeight <= sampledHeight) { break; }
+        currentUV     -= slope * stepH;
+        currentHeight -= stepH;
+        sampledHeight  = pomHeightBlurred(currentUV, du, dv, wBase, wTop, influence);
+    }
+    float2 prevUV     = currentUV + slope * stepH;
+    float  prevHeight = currentHeight + stepH;
+    [loop]
+    for (int i = 0; i < SPLAT_POM_BINARY_STEPS; i++)
+    {
+        float2 midUV      = 0.5 * (prevUV + currentUV);
+        float  midHeight  = 0.5 * (prevHeight + currentHeight);
+        float  midSampled = pomHeightBlurred(midUV, du, dv, wBase, wTop, influence);
+        if (midHeight > midSampled) {
+            prevUV = midUV;
+            prevHeight = midHeight;
+        } else {
+            currentUV = midUV;
+            currentHeight = midHeight;
+        }
+    }
+    return uv + (currentUV - uv) * fadeFactor;
+}
+
+float3 safeNormalize3(float3 v, float3 fallback)
+{
+    float len2 = dot(v, v);
+    return (len2 > 1e-8) ? (v * rsqrt(len2)) : fallback;
+}
+
+// buildTerrainTBN (old engine): X-tangent and Z-bitangent Gram-Schmidt'd
+// against the geometric normal — surface-aligned, so on slopes the parallax
+// ray leans with the geometry instead of assuming a flat Y-up uv frame.
+// float3x3(T, B, N) fills rows, so mul(M, V) = V.x*T + V.y*B + V.z*N, the
+// exact old transpose(mat3(T, B, N)) * V.
+float3 pomViewDirTS(float3 geomNormal, float3 V)
+{
+    float3 N = safeNormalize3(geomNormal, float3(0.0, 1.0, 0.0));
+    float3 T = safeNormalize3(float3(1.0, 0.0, 0.0) - N * N.x, float3(1.0, 0.0, 0.0));
+    float3 B = float3(0.0, 0.0, 1.0) - N * N.z - T * dot(T, float3(0.0, 0.0, 1.0));
+    B        = safeNormalize3(B, safeNormalize3(cross(T, N), float3(0.0, 0.0, 1.0)));
+    return normalize(mul(float3x3(T, B, N), V));
+}
+
+float4 triplanarSample(Texture2D tex, SamplerState smp, float3 pos, float3 w)
+{
+    float4 c = float4(0.0, 0.0, 0.0, 0.0);
+    c = c + tex.Sample(smp, pos.zy) * w.x;
+    c = c + tex.Sample(smp, pos.xz) * w.y;
+    c = c + tex.Sample(smp, pos.xy) * w.z;
     return c;
 }
 
@@ -499,23 +691,50 @@ PSOutput main(PSSplatIn In)
     float  wSum = (wBase.r + wBase.g + wBase.b + (1.0 - wBase.a)) +
                  (wTop.r + wTop.g + wTop.b + (1.0 - wTop.a));
     float  influence = clamp(wSum * 2.0, 0.0, 1.0);
-    float3 baseAlbedo = g_BaseAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
-    float3 baseN      = g_BaseNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
+
+    // POM: shift the tiled detail uv (only it — the triplanar cliff, the
+    // weight uv and the geometric depth/motion stay untouched). The view ray
+    // is transformed by the surface-aligned TBN (old buildTerrainTBN); the
+    // depth is world meters converted to tiled-uv units exactly like old
+    // hScaleSplat (POM_DEPTH_SPLAT * tile / reference span). The fade ramps
+    // the offset back to zero over the distance window.
+    float3 V = normalize(cCamPosition.xyz - In.AnchoredPos);
+#if SPLAT_POM
+    float  camDist    = length(cCamPosition.xyz - In.AnchoredPos);
+    float  pomFade    = 1.0 - smoothstep(SPLAT_POM_FADE_START, SPLAT_POM_FADE_END, camDist);
+    float  pomScaleUV = SPLAT_POM_DEPTH * SPLAT_DETAIL_TILE / SPLAT_DETAIL_METERS;
+    float3 pomViewTS  = pomViewDirTS(In.WorldNormal, V);
+    tiledUV = parallaxOcclusionUV(tiledUV, pomViewTS, pomScaleUV, pomFade,
+            du, dv, wBase, wTop, influence);
+#endif
+
+    float4 baseA4 = g_BaseAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv);
+    float4 baseN4 = g_BaseNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv);
+    float3 baseAlbedo = baseA4.rgb;
+    float  roughnessS = baseA4.a;
+    float  aoS        = baseN4.b;
+    float3 baseN      = splatNormalDecode(baseN4.rg);
 
     float3 albedo = baseAlbedo;
     float3 nT     = baseN;
     if (influence > 0.0)
     {
-        float3 splatAlbedo = splatAlbedoMix(float3(0.0, 0.0, 0.0), wBase,
+        float  splatRough = 0.5;
+        float  splatAo    = 1.0;
+        float3 splatAlbedo = float3(0.0, 0.0, 0.0);
+        splatAlbedoMix(splatAlbedo, splatRough, wBase,
                 g_Detail4, g_Detail5, g_Detail6, g_Detail7, g_DetailSampler, tiledUV, du, dv);
-        splatAlbedo = splatAlbedoMix(splatAlbedo, wTop, g_Detail0, g_Detail1, g_Detail2, g_Detail3,
+        splatAlbedoMix(splatAlbedo, splatRough, wTop, g_Detail0, g_Detail1, g_Detail2, g_Detail3,
                 g_DetailSampler, tiledUV, du, dv);
-        float3 splatN = splatNormalMix(float3(0.0, 0.0, 1.0), wBase,
+        float3 splatN = float3(0.0, 0.0, 1.0);
+        splatNormalMix(splatN, splatAo, wBase,
                 g_DetailN4, g_DetailN5, g_DetailN6, g_DetailN7, g_DetailSampler, tiledUV, du, dv);
-        splatN = splatNormalMix(splatN, wTop, g_DetailN0, g_DetailN1, g_DetailN2, g_DetailN3,
+        splatNormalMix(splatN, splatAo, wTop, g_DetailN0, g_DetailN1, g_DetailN2, g_DetailN3,
                 g_DetailSampler, tiledUV, du, dv);
-        albedo = baseAlbedo + (splatAlbedo - baseAlbedo) * influence;
-        nT     = baseN + (splatN - baseN) * influence;
+        albedo     = baseAlbedo + (splatAlbedo - baseAlbedo) * influence;
+        nT         = baseN + (splatN - baseN) * influence;
+        roughnessS = roughnessS + (splatRough - roughnessS) * influence;
+        aoS        = aoS + (splatAo - aoS) * influence;
     }
 
     float worldY = In.AnchoredPos.y + g_Anchor.y;
@@ -525,22 +744,28 @@ PSOutput main(PSSplatIn In)
     float wCliff = smoothstep(SPLAT_CLIFF_LO, SPLAT_CLIFF_HI, slope);
     float wSnow  = smoothstep(SPLAT_SNOW_LO, SPLAT_SNOW_HI, worldY);
 
-    float3 sandAlbedo = g_SandAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
-    albedo = albedo + (sandAlbedo - albedo) * wSand;
+    float4 sandA4 = g_SandAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv);
+    albedo = albedo + (sandA4.rgb - albedo) * wSand;
+    roughnessS = roughnessS + (sandA4.a - roughnessS) * wSand;
     float3 wTri   = pow(abs(normalize(In.WorldNormal)), 4.0);
     wTri         = wTri / (wTri.x + wTri.y + wTri.z + 1e-6);
     float3 cliffUV = (In.AnchoredPos + g_Anchor) * (1.0 / SPLAT_CLIFF_METERS);
-    float3 cliffAlbedo = triplanarSample(g_CliffAlbedo, g_DetailSampler, cliffUV, wTri);
-    albedo = albedo + (cliffAlbedo - albedo) * wCliff;
-    float3 snowAlbedo = g_SnowAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv).rgb;
-    albedo = albedo + (snowAlbedo - albedo) * wSnow;
+    float4 cliffA4 = triplanarSample(g_CliffAlbedo, g_DetailSampler, cliffUV, wTri);
+    albedo = albedo + (cliffA4.rgb - albedo) * wCliff;
+    roughnessS = roughnessS + (cliffA4.a - roughnessS) * wCliff;
+    float4 snowA4 = g_SnowAlbedo.SampleGrad(g_DetailSampler, tiledUV, du, dv);
+    albedo = albedo + (snowA4.rgb - albedo) * wSnow;
+    roughnessS = roughnessS + (snowA4.a - roughnessS) * wSnow;
 
-    float3 sandN = g_SandNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
-    nT = nT + (sandN - nT) * wSand;
-    float3 cliffN = triplanarSample(g_CliffNormal, g_DetailSampler, cliffUV, wTri) * 2.0 - 1.0;
-    nT = nT + (cliffN - nT) * wCliff;
-    float3 snowN = g_SnowNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv).xyz * 2.0 - 1.0;
-    nT = nT + (snowN - nT) * wSnow;
+    float4 sandN4 = g_SandNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv);
+    nT = nT + (splatNormalDecode(sandN4.rg) - nT) * wSand;
+    aoS = aoS + (sandN4.b - aoS) * wSand;
+    float4 cliffN4 = triplanarSample(g_CliffNormal, g_DetailSampler, cliffUV, wTri);
+    nT = nT + (splatNormalDecode(cliffN4.rg) - nT) * wCliff;
+    aoS = aoS + (cliffN4.b - aoS) * wCliff;
+    float4 snowN4 = g_SnowNormal.SampleGrad(g_DetailSampler, tiledUV, du, dv);
+    nT = nT + (splatNormalDecode(snowN4.rg) - nT) * wSnow;
+    aoS = aoS + (snowN4.b - aoS) * wSnow;
 
     // Tangent frame (the glTF TANGENT attribute: xyz + handedness), then the
     // perturbed world normal.
@@ -549,11 +774,10 @@ PSOutput main(PSSplatIn In)
     float3 B  = cross(N0, T) * In.Tangent.w;
     float3 N  = normalize(T * nT.x + B * nT.y + N0 * nT.z);
 
-    float3 V = normalize(cCamPosition.xyz - In.AnchoredPos);
     float  NdotV = dotSat(N, V);
 
     // ── IBL (ApplyIBL + GetLambertianIBL/GetSpecularIBL_GGX, PBR path) ──
-    float  roughness = SPLAT_ROUGHNESS;
+    float  roughness = clamp(roughnessS, 0.04, 1.0);
     float2 brdf = g_PreintegratedGGX.Sample(g_LinearClampSampler, float2(NdotV, roughness)).rg;
     float3 R0   = float3(0.04, 0.04, 0.04);
     float3 R90  = float3(1.0, 1.0, 1.0);  // clamp(MaxR0 * 50, 0, 1), dielectric
@@ -574,7 +798,9 @@ PSOutput main(PSSplatIn In)
     float3 SpecLight = g_PrefilteredEnvMap.SampleLevel(g_LinearClampSampler, rotateAroundY(Lrefl, rEnvRot.xy), lod).rgb;
     float3 SpecularIBL = SpecLight * FssEss;
 
-    float3 IBL = (DiffuseIBL + SpecularIBL) * rIBLScale.xyz;
+    // Material AO (normal-map blue) darkens the ambient terms only — old
+    // engine: color = (ambientDiffuse + ambientSpecular) * ao + Lo.
+    float3 IBL = (DiffuseIBL + SpecularIBL) * rIBLScale.xyz * aoS;
 
     // ── Direct sun (ApplyPunctualLight, PBR path — the frame's light 0) ──
     float3 LightDir    = lDir.xyz;       // travel direction

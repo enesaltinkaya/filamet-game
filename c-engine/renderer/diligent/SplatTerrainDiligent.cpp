@@ -1012,6 +1012,7 @@ static IPipelineResourceSignature* splatPRS = nullptr;
 static IShaderResourceBinding*     splatSrb = nullptr;
 static ISampler*                   splatSampler = nullptr;       // group weights (linear clamp trilinear)
 static ISampler*                   splatDetailSampler = nullptr; // tiled details (linear repeat, aniso 16)
+static ISampler*                   splatHeightSampler = nullptr; // POM height taps (linear repeat, no aniso)
 static ISampler*                   splatIblSampler = nullptr;    // env cubes + GGX LUT (linear clamp)
 static ISampler*                   splatShadowSampler = nullptr; // comparison linear clamp (PCF)
 static ISampler*                   splatShadowLinearSampler = nullptr; // linear clamp (VSM/EVSM filterable receive)
@@ -1080,6 +1081,34 @@ IShader* createSplatHlsl(const char* pakPath, const char* name, SHADER_TYPE type
                 snprintf(def, sizeof(def), "#define %s %.6f\n", bt[1], x);
                 source.insert(0, def);
                 utils::info("splatTerrain: band threshold override %s = %.3f", bt[0], x);
+            }
+        }
+    }
+    if (const char* pom = getenv("ENGINE_SPLAT_POM")) {
+        if (pom[0] == '0' && pom[1] == '\0') {
+            source.insert(0, "#define SPLAT_POM 0\n");
+            utils::info("splatTerrain: parallax occlusion mapping disabled");
+        }
+    }
+    if (const char* blur = getenv("ENGINE_SPLAT_POM_BLUR")) {
+        if (blur[0] == '1' && blur[1] == '\0') {
+            source.insert(0, "#define SPLAT_POM_BLUR 1\n");
+            utils::info("splatTerrain: POM legacy 5-tap cross blur enabled");
+        }
+    }
+    static const char* splatPomTuning[3][2] = {
+        {"ENGINE_SPLAT_POM_DEPTH",      "SPLAT_POM_DEPTH"},
+        {"ENGINE_SPLAT_POM_FADE_START", "SPLAT_POM_FADE_START"},
+        {"ENGINE_SPLAT_POM_FADE_END",   "SPLAT_POM_FADE_END"},
+    };
+    for (const auto& pt : splatPomTuning) {
+        if (const char* v = getenv(pt[0])) {
+            double x = atof(v);
+            if (std::isfinite(x)) {
+                char def[96];
+                snprintf(def, sizeof(def), "#define %s %.6f\n", pt[1], x);
+                source.insert(0, def);
+                utils::info("splatTerrain: POM override %s = %.4f", pt[0], x);
             }
         }
     }
@@ -1175,6 +1204,19 @@ void splatPassInit(const SplatTerrain* t) {
     sdDetail.MaxAnisotropy = 16;
     device->CreateSampler(sdDetail, &splatDetailSampler);
     if (!splatDetailSampler) {
+        splatPassRelease();
+        splatPassFailed = true;
+        return;
+    }
+    SamplerDesc sdHeight;
+    sdHeight.Name      = "splat height repeat linear";
+    sdHeight.MinFilter = FILTER_TYPE_LINEAR;
+    sdHeight.MagFilter = FILTER_TYPE_LINEAR;
+    sdHeight.MipFilter = FILTER_TYPE_LINEAR;
+    sdHeight.AddressU  = TEXTURE_ADDRESS_WRAP;
+    sdHeight.AddressV  = TEXTURE_ADDRESS_WRAP;
+    device->CreateSampler(sdHeight, &splatHeightSampler);
+    if (!splatHeightSampler) {
         splatPassRelease();
         splatPassFailed = true;
         return;
@@ -1328,6 +1370,8 @@ void splatPassInit(const SplatTerrain* t) {
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_DetailSampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_HeightSampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_LinearClampSampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_ShadowMap_sampler", 1, SHADER_RESOURCE_TYPE_SAMPLER,
@@ -1417,6 +1461,9 @@ void splatPassInit(const SplatTerrain* t) {
     }
     if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_DetailSampler")) {
         v->Set(splatDetailSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+    }
+    if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_HeightSampler")) {
+        v->Set(splatHeightSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
     }
     if (IShaderResourceVariable* v = splatPRS->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_LinearClampSampler")) {
         v->Set(splatIblSampler, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
@@ -2067,6 +2114,7 @@ void splatPassRelease(void) {
     splatPrefilteredDummySRV = nullptr;
     if (splatSampler) { splatSampler->Release(); splatSampler = nullptr; }
     if (splatDetailSampler) { splatDetailSampler->Release(); splatDetailSampler = nullptr; }
+    if (splatHeightSampler) { splatHeightSampler->Release(); splatHeightSampler = nullptr; }
     if (splatIblSampler) { splatIblSampler->Release(); splatIblSampler = nullptr; }
     if (splatShadowSampler) { splatShadowSampler->Release(); splatShadowSampler = nullptr; }
     if (splatShadowLinearSampler) { splatShadowLinearSampler->Release(); splatShadowLinearSampler = nullptr; }

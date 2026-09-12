@@ -4,6 +4,11 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-12 — [entries](lessons/2026-09-12.md)
+
+- RenderDoc per-event GPU durations on this setup can be misattributed wholesale (identical ~10.5 ms plateaus on unrelated draws, pass sums > any real frame) — A/B GPU cost with the engine's whole-frame `QUERY_TYPE_DURATION` HUD number or wall-clock frame counts, never rdc.py/`EventGPUDuration` absolutes
+- Measure fade-gated shader features by forcing them onto every pixel via env tuning (fade overrides) instead of moving the parked camera; incident: POM was ~9 of 10.9 ms/frame when fully active (5-tap blur × 9-texture chain × aniso-16 per march tap) — bilinear height sampler + single-tap march at widened gradients cut it to noise, `ENGINE_SPLAT_POM_BLUR=1` restores the legacy kernel
+
 ## 2026-09-11 — [entries](lessons/2026-09-11.md)
 
 - Diligent `float4x4` is ROW-VECTOR convention: decomposing its columns as if column-major yields the INVERSE rotation (pos/scale look right, AABB checks can't catch ±θ about one axis) — use `Matrix4x4::Decompose()`; fingerprint: body world-bounds print matches render but collision sits ~10 m in front of the visible surface, body quat axis component sign-flipped vs glTF
