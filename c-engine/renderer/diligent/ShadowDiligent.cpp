@@ -260,6 +260,15 @@ namespace engine::renderer::diligent {
                     focusBand = focusCamZ + focusMargin;
                     if (focusBand > tier.distanceM * 0.8f) focusBand = tier.distanceM * 0.8f;
                     if (focusBand < 0.0f) focusBand = 0.0f;
+                    static const float focusQuant = [] {
+                        float v = 2.0f;
+                        if (const char* env = getenv("ENGINE_SHADOW_FOCUS_QUANT")) {
+                            const float parsed = (float)atof(env);
+                            if (parsed >= 0.25f && parsed <= 10.0f) v = parsed;
+                        }
+                        return v;
+                    }();
+                    focusBand = floorf(focusBand / focusQuant) * focusQuant;
                 }
             }
             int bandActive = 0;
@@ -290,6 +299,12 @@ namespace engine::renderer::diligent {
                 float logZ       = focusBand * powf(tier.distanceM / focusBand, power);
                 float uniformZ   = focusBand + (tier.distanceM - focusBand) * power;
                 maxZ = dist.fPartitioningFactor * (logZ - uniformZ) + uniformZ;
+            };
+            dist.AdjustCascadeCenter = [&](int, const Diligent::float4x4& w2l, float tx, float ty, float& cx, float& cy) {
+                const double ox = -(an[0] * (double)w2l._11 + an[1] * (double)w2l._21 + an[2] * (double)w2l._31);
+                const double oy = -(an[0] * (double)w2l._12 + an[1] * (double)w2l._22 + an[2] * (double)w2l._32);
+                cx = (float)((double)std::round(((double)cx - ox) / (double)tx) * (double)tx + ox);
+                cy = (float)((double)std::round(((double)cy - oy) / (double)ty) * (double)ty + oy);
             };
             mgr.DistributeCascades(dist, lightAttribs.ShadowAttribs);
 
@@ -566,6 +581,13 @@ namespace engine::renderer::diligent {
                     w2lp._44);
             }
             if (shadowTraceOn && shadowTraceWanted(shadowTraceFrame)) {
+                const double prx = pposTrace[0] - anTrace[0];
+                const double pry = pposTrace[1] - anTrace[1];
+                const double prz = pposTrace[2] - anTrace[2];
+                const double plx = prx * (double)view._11 + pry * (double)view._21 + prz * (double)view._31;
+                const double ply = prx * (double)view._12 + pry * (double)view._22 + prz * (double)view._32;
+                const double pndcX = plx * (double)sa.Cascades[0].f4LightSpaceScale.x + (double)sa.Cascades[0].f4LightSpaceScaledBias.x;
+                const double pndcY = ply * (double)sa.Cascades[0].f4LightSpaceScale.y + (double)sa.Cascades[0].f4LightSpaceScaledBias.y;
                 char line[768];
                 int off = snprintf(line,
                                    sizeof(line),
@@ -587,11 +609,20 @@ namespace engine::renderer::diligent {
                                     (double)casterW2LP[c]._43);
                     if (c == 0)
                         off += snprintf(line + off, sizeof(line) - off,
-                                        " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f",
+                                        " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f"
+                                        " scx %.5f scy %.5f tx %.5f ty %.5f c0x %.4f c0y %.4f pndc %.4f %.4f",
                                         (double)focusCamZDebug,
                                         (double)view._13, (double)view._23, (double)view._33,
                                         pposTrace[0], pposTrace[1], pposTrace[2],
-                                        anTrace[0], anTrace[1], anTrace[2]);
+                                        anTrace[0], anTrace[1], anTrace[2],
+                                        (double)sa.Cascades[0].f4LightSpaceScale.x,
+                                        (double)sa.Cascades[0].f4LightSpaceScale.y,
+                                        (double)(sa.Cascades[0].f4LightSpaceScale.x > 0.0f ? 2.0f / sa.Cascades[0].f4LightSpaceScale.x / (f32)sa.f4ShadowMapDim.x : 0.0f),
+                                        (double)(sa.Cascades[0].f4LightSpaceScale.y > 0.0f ? 2.0f / sa.Cascades[0].f4LightSpaceScale.y / (f32)sa.f4ShadowMapDim.y : 0.0f),
+                                        (double)casterW2LP[0]._41,
+                                        (double)casterW2LP[0]._42,
+                                        pndcX,
+                                        pndcY);
                 }
                 utils::info("%s", line);
             }
