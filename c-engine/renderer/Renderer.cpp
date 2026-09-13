@@ -23,9 +23,14 @@ static u32 viewportHeight = 0;
 static u32 screenshotStartFrame = 3;
 
 // ── screenshot (ENGINE_SCREENSHOT=path: capture one frame, quit) ────────────
+// ENGINE_SCREENSHOT_BURST=n: capture n frames to <path>_<index><ext> instead.
 static const char* screenshotPath = nullptr;
 static bool screenshotDone = false;
 static u32 screenshotFrame = 0;
+static u32 screenshotBurstTotal = 0;
+static u32 screenshotBurstRemaining = 0;
+static u32 screenshotBurstStride = 1;
+static char screenshotDeliverPath[512];
 
 static void selectScreenshotStartFrame(void) {
     if (const char* env = getenv("ENGINE_SCREENSHOT_FRAME")) {
@@ -41,6 +46,17 @@ static void selectScreenshotStartFrame(void) {
 static u32 renderDocCaptureFrame = 0;
 static u32 renderDocExitFrames = 0;
 
+static void screenshotBuildBurstPath(u32 index) {
+    const char* dot = strrchr(screenshotPath, '.');
+    if (dot && dot != screenshotPath) {
+        snprintf(screenshotDeliverPath, sizeof(screenshotDeliverPath), "%.*s_%04u%s",
+                 (int)(dot - screenshotPath), screenshotPath, index, dot);
+    } else {
+        snprintf(screenshotDeliverPath, sizeof(screenshotDeliverPath), "%s_%04u",
+                 screenshotPath, index);
+    }
+}
+
 bool rendererScreenshotShouldCapture(void) {
     if (!screenshotPath) {
         return false;
@@ -51,13 +67,25 @@ bool rendererScreenshotShouldCapture(void) {
     if (screenshotFrame++ < screenshotStartFrame) {
         return false;  // let shaders/textures warm up first
     }
+    if (screenshotBurstRemaining) {
+        const u32 elapsed = screenshotFrame - screenshotStartFrame - 1;
+        if (elapsed % screenshotBurstStride == 0) {
+            screenshotBuildBurstPath(elapsed / screenshotBurstStride);
+            if (--screenshotBurstRemaining == 0) {
+                screenshotDone = true;
+            }
+            return true;
+        }
+        return false;
+    }
     screenshotDone = true;
+    snprintf(screenshotDeliverPath, sizeof(screenshotDeliverPath), "%s", screenshotPath);
     return true;
 }
 
 void rendererScreenshotDeliver(u8* buffer) {
     char path[512];
-    snprintf(path, sizeof(path), "%s", screenshotPath);
+    snprintf(path, sizeof(path), "%s", screenshotDeliverPath);
     // .png → lossless (debug MV-view captures need exact 8-bit values; JPEG
     // quantization flattens small deltas). Everything else stays JPEG.
     const size_t len = strlen(path);
@@ -71,7 +99,9 @@ void rendererScreenshotDeliver(u8* buffer) {
     }
     free(buffer);
 
-    engineStop();
+    if (!screenshotBurstTotal || screenshotDone) {
+        engineStop();
+    }
 }
 
 bool rendererInit(const char* title, u32 width, u32 height) {
@@ -96,6 +126,13 @@ bool rendererInit(const char* title, u32 width, u32 height) {
         screenshotPath = screenshotEnv;
     }
     selectScreenshotStartFrame();
+    if (const char* burstEnv = getenv("ENGINE_SCREENSHOT_BURST")) {
+        screenshotBurstTotal = screenshotBurstRemaining = (u32)strtoul(burstEnv, nullptr, 10);
+        if (const char* strideEnv = getenv("ENGINE_SCREENSHOT_BURST_STRIDE")) {
+            const u32 stride = (u32)strtoul(strideEnv, nullptr, 10);
+            screenshotBurstStride = stride ? stride : 1;
+        }
+    }
 
 #ifndef NDEBUG
     if (getenv("ENGINE_RENDERDOC_CAPTURE")) {

@@ -855,7 +855,7 @@ PSOutput main(PSSplatIn In)
         for (int cascade = 0; cascade < int(sNumCascades.y); ++cascade)
         {
             float zend = f4CascadeCamSpaceZEnd[cascade / 4][cascade % 4];
-            if (shadowMode > 1.5 && viewZ > zend)
+            if (viewZ > zend)
                 continue;
             float att = filterShadowCascade(cascade, shadowMode, lightViewPos, ddxLV, ddyLV);
             dbgZ = viewZ * 0.0025;
@@ -864,6 +864,7 @@ PSOutput main(PSSplatIn In)
             if (att < 0.0)
                 continue;
             Attenuation *= att;
+            break;
         }
         float tier = f4ShadowFade.x;
         if (tier > 0.0)
