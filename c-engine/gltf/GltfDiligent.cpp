@@ -67,15 +67,18 @@ static GLTF_PBR_Renderer::ModelResourceBindings modelBindings;
 static bool bindingsValid = false;
 static Uint32 sceneIndex = 0;
 
-// CSM receive for the player: on while the shadow pass is ready in PCF mode
-// (the filterable VSM/EVSM atlas stores variance, not depth — comparison
-// sampling on it is wrong, so the PBR pass only receives in mode 1).
+// CSM receive for the player: on while the shadow pass is ready in PCF (1)
+// or EVSM2 (3) mode — the two filtering techniques the PBR shader implements.
+// The filterable VSM/EVSM atlas stores variance, not depth — comparison
+// sampling on it is wrong, so PCF keeps the depth atlas and EVSM2 samples the
+// moments atlas through the filterable slot.
 static bool pbrShadowsOn(void) {
     using namespace engine::renderer::diligent;
     if (getenv("ENGINE_PBR_NO_RECEIVE")) {
         return false;
     }
-    return shadowDiligentActive() && shadowDiligentMode() == 1 &&
+    const int mode = shadowDiligentMode();
+    return shadowDiligentActive() && (mode == 1 || mode == 3) &&
            shadowDiligentShadowSRV() != nullptr;
 }
 
@@ -162,8 +165,9 @@ static void refreshModelBindings(const char* label, GLTF::Model* m,
             }
         }
     }
-    ITextureView* srv = shadowDiligentShadowSRV();
-    int foundVar = 0, setVar = 0;
+    ITextureView* srv     = shadowDiligentShadowSRV();
+    ITextureView* depthSrv = shadowDiligentShadowDepthSRV();
+    int foundVar = 0, setVar = 0, foundFilt = 0, setFilt = 0;
     for (auto& srb : bindings.MaterialSRB) {
         if (!srb) {
             continue;
@@ -171,9 +175,17 @@ static void refreshModelBindings(const char* label, GLTF::Model* m,
         if (Diligent::IShaderResourceVariable* var =
                 srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMap")) {
             foundVar++;
+            if (depthSrv) {
+                var->Set(depthSrv);
+                setVar++;
+            }
+        }
+        if (Diligent::IShaderResourceVariable* var =
+                srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMapFilterable")) {
+            foundFilt++;
             if (srv) {
                 var->Set(srv);
-                setVar++;
+                setFilt++;
             }
         }
     }
@@ -1411,8 +1423,8 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
             bias *= (float)atof(s);
         }
         sm.Padding0              = bias;
-        sm.Padding1              = 0.0f;
-        sm.Padding2              = 0.0f;
+        sm.ShadowMode            = (float)engine::renderer::diligent::shadowDiligentMode();
+        sm.FarPadS               = engine::renderer::diligent::shadowDiligentFarPadS();
     }
 }
 
@@ -1468,15 +1480,19 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
 
     GLTF_PBR_Renderer* pbr = worldPbrRenderer();
     // The PBR renderer commits its SRBs with TRANSITION_MODE_VERIFY, so the
-    // shadow atlas must already be a shader resource when this pass samples
-    // it (the shadow pass leaves the slices in the depth-attachment layout,
-    // like the terrain/props passes' TRANSITION-mode commits handle for
-    // their own SRBs).
+    // shadow atlases must already be shader-visible when this pass samples
+    // them (the shadow pass leaves the depth atlas in the depth-attachment
+    // state and the filterable atlas as a render target; the terrain/props
+    // passes' TRANSITION-mode commits handle their own SRBs).
     if (pbrShadowsOn()) {
+        const int shadowMode = engine::renderer::diligent::shadowDiligentMode();
         Diligent::ITextureView* srv = engine::renderer::diligent::shadowDiligentShadowSRV();
         if (srv) {
+            const Diligent::RESOURCE_STATE state = shadowMode == 1
+                    ? Diligent::RESOURCE_STATE_DEPTH_READ
+                    : Diligent::RESOURCE_STATE_SHADER_RESOURCE;
             Diligent::StateTransitionDesc barrier{srv->GetTexture(), Diligent::RESOURCE_STATE_UNKNOWN,
-                    Diligent::RESOURCE_STATE_DEPTH_READ, Diligent::STATE_TRANSITION_FLAG_UPDATE_STATE};
+                    state, Diligent::STATE_TRANSITION_FLAG_UPDATE_STATE};
             ctx->TransitionResourceStates(1, &barrier);
         }
     }

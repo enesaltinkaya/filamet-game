@@ -14,7 +14,7 @@ struct GraphicsSettings {
     float taaWeight = 0.9f;        // 0.5..0.95 history weight; higher = calmer but ghostier (old-engine taaWeight)
     float casStrength = 1.0f;      // 0..1.5 RCAS (Contrast Adaptive Sharpening) strength; 0 = off, 1.0 = AMD reference max, >1.0 amplified (old-engine casStrength)
     bool msaa = false;
-    int shadowMode = 1;            // 0 off, 1 PCF, 2 VSM, 3 EVSM2, 4 EVSM4 (DiligentFX SHADOW_MODE_*)
+    int shadowMode = 3;            // 0 off, 1 PCF, 2 VSM, 3 EVSM2, 4 EVSM4 (settings UI: on/off, On = EVSM2)
     int shadowQuality = 1;         // 0 low, 1 medium, 2 high (ignored while mode == off)
     bool ssao = true;
     float ssaoRadius    = 1.0f;   // 0.1..10 world-space AO radius (DiligentFX EffectRadius)

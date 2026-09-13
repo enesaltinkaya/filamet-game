@@ -40,8 +40,10 @@ void settingsInit(void) {
     templates.push_back((Template{"moreShadows", "boolean", 1.}));
     templates.push_back((Template{"shadowsDisabled", "boolean", 0.}));
     /* Shadow mode: 0=off 1=PCF 2=VSM 3=EVSM2 4=EVSM4 (the DiligentFX
-     * SHADOW_MODE_* filtering techniques). */
-    templates.push_back((Template{"shadowMode", "int", 1.}));
+     * SHADOW_MODE_* filtering techniques). The graphics settings page exposes
+     * only on/off; On = EVSM2 (3). PCF/VSM/EVSM4 stay implemented, reachable
+     * via hand-edited files or ENGINE_SHADOW_MODE. */
+    templates.push_back((Template{"shadowMode", "int", 3.}));
     /* Shadow quality: 0=low (1024/2 cascades/60m) 1=medium (2048/2/80m)
      * 2=high (2048/3/120m).
      * shadowsDisabled above is the legacy on/off key, kept in sync by the

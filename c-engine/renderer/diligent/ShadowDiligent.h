@@ -68,6 +68,9 @@ const void* shadowDiligentLightAttribs(void);
 // The SRV the lit passes bind (raw depth for PCF, filterable for VSM/EVSM —
 // mode-aware).
 Diligent::ITextureView* shadowDiligentShadowSRV(void);
+// The raw cascade depth atlas SRV regardless of mode (the PBR pass keeps it
+// bound in the comparison slot while the EVSM branch is compiled in).
+Diligent::ITextureView* shadowDiligentShadowDepthSRV(void);
 // The sampler matching shadowDiligentShadowSRV (comparison for PCF, linear
 // for the filterable modes) — bound into the passes' PRS as the
 // g_tex2DShadowMap_sampler / g_tex2DFilterableShadowMap_sampler static.

@@ -1369,6 +1369,11 @@ namespace engine::renderer::diligent {
         return curMode == 1 ? mgr.GetSRV() : mgr.GetFilterableSRV();
     }
 
+    Diligent::ITextureView* shadowDiligentShadowDepthSRV(void) {
+        if (!passReady) return nullptr;
+        return mgr.GetSRV();
+    }
+
     Diligent::ISampler* shadowDiligentShadowSampler(void) {
         return curMode == 1 ? cmpSampler : filterableSampler;
     }

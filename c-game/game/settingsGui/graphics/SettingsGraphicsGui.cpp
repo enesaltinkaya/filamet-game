@@ -25,7 +25,7 @@ static char  taaEnabled            = 0;
 static float taaWeightPercent      = 90.0f;  // TAA temporal blend weight, % (50..95)
 static float casStrengthPercent    = 100.0f; // RCAS sharpening, % (0..150; 100 = AMD max)
 static float renderScalePercent    = 100.0f;  // render resolution scale, % (50..200)
-static int   shadowsMode           = 1;       // PCF
+static int   shadowsMode           = 3;       // EVSM2 (UI is on/off: 0=off, 3=EVSM2; PCF/VSM/EVSM4 stay implemented, hidden)
 static int   shadowsQuality        = 2;       // Medium
 static char  shadowQualityDisabled = 0;
 static char  aoEnabled             = 1;
@@ -37,13 +37,6 @@ static float ssrStrength            = 1.0f;   // SSR composite strength 0..2
 static char  giEnabled             = 1;
 static char  bloomEnabled          = 1;
 
-static const char* shadowModeNames[] = {
-    "Off",
-    "PCF",
-    "VSM",
-    "EVSM2",
-    "EVSM4",
-};
 static const char* shadowQualityNames[] = {
     "Low",
     "Medium",
@@ -215,7 +208,7 @@ void SettingsGraphicsGui::added() {
     giEnabled            = (char)!utils::settingsGetBool("giDisabled");
     bloomEnabled         = (char)!utils::settingsGetBool("bloomDisabled");
     // clamp hand-edited files (the renderer re-clamps its own copy on apply)
-    if (shadowsMode < 0 || shadowsMode > 4) shadowsMode = 1;
+    if (shadowsMode < 0 || shadowsMode > 4) shadowsMode = 3;
     if (shadowsQuality < 0 || shadowsQuality > 2) shadowsQuality = 2;
     if (ssaoAlgorithm < 0 || ssaoAlgorithm > 2) ssaoAlgorithm = 0;
     if (ssrStrength < 0.0f) ssrStrength = 0.0f;
@@ -260,7 +253,7 @@ void SettingsGraphicsGui::added() {
             graphicsClose(nullptr);
         } else if (utils::strequals(at, "wire")) {
             while (taaEnabled) toggleTaa(nullptr);
-            while (shadowsMode != 1) toggleShadows(nullptr);
+            while (shadowsMode != 3) toggleShadows(nullptr);
             while (shadowsQuality != 1) toggleShadowQuality(nullptr);
             while (bloomEnabled) toggleBloom(nullptr);
             while (ssrEnabled) toggleSsr(nullptr);
@@ -313,7 +306,7 @@ static void syncLabels(void) {
     taaLabel = taaLabelText;
 
     snprintf(shadowsLabelText, sizeof(shadowsLabelText), "%s",
-             shadowModeNames[shadowsMode]);
+             shadowsMode == 0 ? "Off" : "On");
     shadowsLabel = shadowsLabelText;
     snprintf(shadowQualityLabelText, sizeof(shadowQualityLabelText), "%s",
              shadowQualityNames[shadowsQuality]);
@@ -355,17 +348,15 @@ static void shadowsModeApply(int mode) {
     rmlUpdateDirtyAll(model);
 }
 
-// Cycle the filtering mode: off -> PCF -> VSM -> EVSM2 -> EVSM4 -> off.
+// On/off: off -> EVSM2 (the mode the UI exposes as "On"), any other mode
+// (incl. hidden PCF/VSM/EVSM4) -> off.
 static int toggleShadows(void* _) {
-    int count = (int)(sizeof(shadowModeNames) / sizeof(shadowModeNames[0]));
-    shadowsModeApply((shadowsMode + 1) % count);
+    shadowsModeApply(shadowsMode == 0 ? 3 : 0);
     return 0;
 }
 
 static int toggleShadowsPrev(void* _) {
-    int count = (int)(sizeof(shadowModeNames) / sizeof(shadowModeNames[0]));
-    shadowsModeApply((shadowsMode + count - 1) % count);
-    return 0;
+    return toggleShadows(_);
 }
 
 static void shadowsQualityApply(int quality) {
