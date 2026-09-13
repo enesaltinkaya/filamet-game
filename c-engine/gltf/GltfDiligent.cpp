@@ -61,6 +61,23 @@ static std::unique_ptr<GLTF::ModelTransforms> transforms;
 // motion) inside the renderer.
 static std::unique_ptr<GLTF_PBR_Renderer> pbrRenderer;
 static RefCntAutoPtr<IBuffer> frameAttribsCB;
+
+// Props multi-cascade receive cbuffer — shader mirror cbPbrPropsShadow in
+// PBR_Shading.fxh. The matrix is ShadowMapAttribs::mWorldToLightView verbatim
+// (transposed by DistributeCascades); the shader declares it column_major so
+// the row-major-packed PBR PSOs read the same bytes the glslang splat terrain
+// mirror does. All fields 16-byte aligned — no cbuffer packing ambiguity.
+struct PbrPropsShadowAttribs {
+    Diligent::float4x4 worldToLightView;
+    Diligent::float4   cascades[32];  // [4i]=LightSpaceScale [4i+1]=ScaledBias [4i+2]=StartEndZ
+    int                numCascades;
+    float              mode;
+    float              pad[2];
+    Diligent::float4   biasParams;    // x=ReceiverPlaneDepthBiasClamp y=FixedDepthBias z=CascadeTransitionRegion
+};
+static_assert(sizeof(PbrPropsShadowAttribs) == 608, "cbPbrPropsShadow mirror drift");
+static RefCntAutoPtr<IBuffer> propsShadowCB;
+static RefCntAutoPtr<IBuffer> propsShadowGateCB;  // zeroed: numCascades 0 = single-slice path (the player)
 static RefCntAutoPtr<ITexture> iblIrradiance;
 static RefCntAutoPtr<ITexture> iblPrefiltered;
 static GLTF_PBR_Renderer::ModelResourceBindings modelBindings;
@@ -186,6 +203,16 @@ static void refreshModelBindings(const char* label, GLTF::Model* m,
             if (srv) {
                 var->Set(srv);
                 setFilt++;
+            }
+        }
+        // Props walk the shared CSM cascades per pixel; the player keeps the
+        // CPU-picked single cascade via the zeroed gate buffer.
+        IBuffer* propsCB = (std::strcmp(label, "player") == 0) ? propsShadowGateCB.RawPtr()
+                                                               : propsShadowCB.RawPtr();
+        if (Diligent::IShaderResourceVariable* var =
+                srb->GetVariableByName(SHADER_TYPE_PIXEL, "cbPbrPropsShadow")) {
+            if (propsCB) {
+                var->Set(propsCB);
             }
         }
     }
@@ -637,6 +664,18 @@ bool gltfInitDiligent(void) {
     if (!frameAttribsCB) {
         utils::warn("gltf: frame attribs buffer failed");
         return false;
+    }
+    CreateUniformBuffer(device, sizeof(PbrPropsShadowAttribs), "PBR props shadow attribs", &propsShadowCB);
+    CreateUniformBuffer(device, sizeof(PbrPropsShadowAttribs), "PBR props shadow gate", &propsShadowGateCB);
+    if (!propsShadowCB || !propsShadowGateCB) {
+        utils::warn("gltf: props shadow buffers failed");
+        return false;
+    }
+    {
+        // The player's gate: numCascades 0 keeps her on the single-slice CPU-
+        // picked cascade path (the props walk the shared CSM set instead).
+        MapHelper<PbrPropsShadowAttribs> gate(context, propsShadowGateCB, MAP_WRITE, MAP_FLAG_DISCARD);
+        memset(&*gate, 0, sizeof(PbrPropsShadowAttribs));
     }
 
     utils::info("gltf: initialized (diligent GLTF_PBR_Renderer)");
@@ -1425,6 +1464,26 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
         sm.Padding0              = bias;
         sm.ShadowMode            = (float)engine::renderer::diligent::shadowDiligentMode();
         sm.FarPadS               = engine::renderer::diligent::shadowDiligentFarPadS();
+    }
+
+    // Props multi-cascade receive data: the shared CSM cascade set the props
+    // walk per pixel (see cbPbrPropsShadow in PBR_Shading.fxh). The player's
+    // SRBs bind the zeroed gate buffer instead and keep the single-slice path.
+    if (propsShadowCB) {
+        const HLSL::LightAttribs* la = static_cast<const HLSL::LightAttribs*>(
+                engine::renderer::diligent::shadowDiligentLightAttribs());
+        MapHelper<PbrPropsShadowAttribs> props(ctx, propsShadowCB, MAP_WRITE, MAP_FLAG_DISCARD);
+        props->worldToLightView = la->ShadowAttribs.mWorldToLightView;
+        for (int c = 0; c < la->ShadowAttribs.iNumCascades && c < 8; ++c) {
+            props->cascades[c * 4 + 0] = la->ShadowAttribs.Cascades[c].f4LightSpaceScale;
+            props->cascades[c * 4 + 1] = la->ShadowAttribs.Cascades[c].f4LightSpaceScaledBias;
+            props->cascades[c * 4 + 2] = la->ShadowAttribs.Cascades[c].f4StartEndZ;
+        }
+        props->numCascades = la->ShadowAttribs.iNumCascades;
+        props->mode        = (float)engine::renderer::diligent::shadowDiligentMode();
+        props->biasParams  = Diligent::float4{la->ShadowAttribs.fReceiverPlaneDepthBiasClamp,
+                                              la->ShadowAttribs.fFixedDepthBias,
+                                              la->ShadowAttribs.fCascadeTransitionRegion, 0.0f};
     }
 }
 

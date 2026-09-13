@@ -4,6 +4,10 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-14 — [entries](lessons/2026-09-14.md)
+
+- Straight-edged bright/dark trapezoid on a tall vertical prop that slides with the camera and jumps/vanishes when the cascade focus band moves = the camera-anchored cascade slab boundary slicing the prop (band A/B via `ENGINE_SHADOW_FOCUS_MARGIN` decides in 3 runs) — zstart-gating the props union loop did NOT fix it; wall's own caster depth is absent from c1's atlas at its own UVs, caster side suspected, leads in the dated file
+
 ## 2026-09-13 — [entries](lessons/2026-09-13.md)
 
 - A "camera-distance" read from the TRANSPOSED runtime view is a different axis: focus-band/cascade-pick used `view._31.._33` (the true view's third COLUMN) → focusCamZ ≈ 0 always → cascade 0 stuck at the raw 0–4.7 m log split (pure sky at third-person vantages), the ground fell to the 80 m cascade and the player's ~3-texel shadow vanished under PCF (fingerprint: `shadow trace ... band 3.1` with the player 11 m out + DEBUG=3 all-magenta + oracle PASS) — fixed to the transposed z row (`view._13/_23/_33`)

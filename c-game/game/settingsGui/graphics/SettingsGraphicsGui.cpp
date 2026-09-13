@@ -25,7 +25,7 @@ static char  taaEnabled            = 0;
 static float taaWeightPercent      = 90.0f;  // TAA temporal blend weight, % (50..95)
 static float casStrengthPercent    = 100.0f; // RCAS sharpening, % (0..150; 100 = AMD max)
 static float renderScalePercent    = 100.0f;  // render resolution scale, % (50..200)
-static int   shadowsMode           = 3;       // EVSM2 (UI is on/off: 0=off, 3=EVSM2; PCF/VSM/EVSM4 stay implemented, hidden)
+static int   shadowsMode           = 1;       // PCF (UI is on/off: 0=off, 1=PCF; VSM/EVSM stay implemented, hidden)
 static int   shadowsQuality        = 2;       // Medium
 static char  shadowQualityDisabled = 0;
 static char  aoEnabled             = 1;
@@ -208,7 +208,7 @@ void SettingsGraphicsGui::added() {
     giEnabled            = (char)!utils::settingsGetBool("giDisabled");
     bloomEnabled         = (char)!utils::settingsGetBool("bloomDisabled");
     // clamp hand-edited files (the renderer re-clamps its own copy on apply)
-    if (shadowsMode < 0 || shadowsMode > 4) shadowsMode = 3;
+    if (shadowsMode < 0 || shadowsMode > 4) shadowsMode = 1;
     if (shadowsQuality < 0 || shadowsQuality > 2) shadowsQuality = 2;
     if (ssaoAlgorithm < 0 || ssaoAlgorithm > 2) ssaoAlgorithm = 0;
     if (ssrStrength < 0.0f) ssrStrength = 0.0f;
@@ -253,7 +253,7 @@ void SettingsGraphicsGui::added() {
             graphicsClose(nullptr);
         } else if (utils::strequals(at, "wire")) {
             while (taaEnabled) toggleTaa(nullptr);
-            while (shadowsMode != 3) toggleShadows(nullptr);
+            while (shadowsMode != 1) toggleShadows(nullptr);
             while (shadowsQuality != 1) toggleShadowQuality(nullptr);
             while (bloomEnabled) toggleBloom(nullptr);
             while (ssrEnabled) toggleSsr(nullptr);
@@ -348,10 +348,10 @@ static void shadowsModeApply(int mode) {
     rmlUpdateDirtyAll(model);
 }
 
-// On/off: off -> EVSM2 (the mode the UI exposes as "On"), any other mode
-// (incl. hidden PCF/VSM/EVSM4) -> off.
+// On/off: off -> PCF (the mode the UI exposes as "On"), any other mode
+// (incl. hidden VSM/EVSM2/EVSM4) -> off.
 static int toggleShadows(void* _) {
-    shadowsModeApply(shadowsMode == 0 ? 3 : 0);
+    shadowsModeApply(shadowsMode == 0 ? 1 : 0);
     return 0;
 }
 

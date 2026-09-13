@@ -863,6 +863,25 @@ PSOutput main(PSSplatIn In)
             dbgRaw = att;
             if (att < 0.0)
                 continue;
+            // Cascade blend (DiligentFX Shadows.fxh GetNextCascadeBlendAmount
+            // parity): within the last fCascadeTransitionRegion fraction of the
+            // cascade's z-range, lerp toward the next (coarser) cascade so the
+            // resolution/bias switch is a fade, not a pop. f4StartEndZ.x is
+            // this cascade's near edge (ShadowMapManager.cpp partitioning);
+            // the attNext >= 0 gate stands in for the FX margin guard — no
+            // sampling outside the next cascade's projected extent.
+            if (cascade + 1 < int(sNumCascades.y))
+            {
+                float zstart = cascadeAttribs[cascade * 4 + 2].x;
+                float dist   = (zend - viewZ) / max(zend - zstart, 1e-6);
+                float blend  = saturate(1.0 - dist / max(sBiasParams.z, 1e-6));
+                if (blend > 0.0)
+                {
+                    float attNext = filterShadowCascade(cascade + 1, shadowMode, lightViewPos, ddxLV, ddyLV);
+                    if (attNext >= 0.0)
+                        att = lerp(att, attNext, blend);
+                }
+            }
             Attenuation *= att;
         }
         float tier = f4ShadowFade.x;
@@ -948,7 +967,7 @@ PSOutput main(PSSplatIn In)
 
     PSOutput Out;
     Out.Color = float4(IBL, 1.0);
-    float2 ndcCurr = In.Position.xy / In.Position.w;
+    float2 ndcCurr = (In.Position.xy * cCamViewport.zw - 0.5) * float2(2.0, -2.0);
     float2 ndcPrev = In.PrevClip.xy / max(In.PrevClip.w, 1e-6);
     Out.MotionVector = (ndcCurr - cCamSensor.zw) - (ndcPrev - pCamSensor.zw);
     Out.WorldNormal = float4(N, roughness);
