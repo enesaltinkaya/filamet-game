@@ -864,7 +864,6 @@ PSOutput main(PSSplatIn In)
             if (att < 0.0)
                 continue;
             Attenuation *= att;
-            break;
         }
         float tier = f4ShadowFade.x;
         if (tier > 0.0)

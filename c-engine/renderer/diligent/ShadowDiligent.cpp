@@ -195,8 +195,8 @@ namespace engine::renderer::diligent {
             Diligent::ShadowMapAttribs& sa  = lightAttribs.ShadowAttribs;
             sa.iNumCascades                 = (int)tier.cascades;
             sa.fNumCascades                 = (float)tier.cascades;
-            sa.iFixedFilterSize             = farPadS < 1.0f ? 2 : tier.pcfFilterSize;
-            sa.fFilterWorldSize             = farPadS < 1.0f ? 0.0f : 0.1f;
+            sa.iFixedFilterSize             = tier.pcfFilterSize;
+            sa.fFilterWorldSize             = 0.0f;
             sa.fCascadeTransitionRegion     = 0.1f;
             sa.fReceiverPlaneDepthBiasClamp = 10.0f;
             sa.iMaxAnisotropy               = 4;
