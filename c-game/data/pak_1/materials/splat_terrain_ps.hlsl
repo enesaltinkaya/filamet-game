@@ -817,77 +817,60 @@ PSOutput main(PSSplatIn In)
     float  dbgM1      = -1.0;
     if (ShadowIndex >= 0.0)
     {
-        // Per-pixel cascade pick (Shadows.fxh FindCascade, non-best search):
-        // the camera view-space depth selects the cascade whose z range covers
-        // this pixel — the terrain spans the whole shadow distance, so the
-        // single-cascade CPU pick (the PBR player path) is wrong for far
-        // terrain. Unjittered view z (rotation-only view) keeps the pick
-        // TAA-stable. Unused slots hold +FLT_MAX, so counting all 2 float4s
-        // is exact for any cascade count up to 8.
-        float viewZ   = In.ViewZ;
-        int cascade   = 0;
-        for (int i = 0; i < 2; ++i)
+        float viewZ         = In.ViewZ;
+        float3 lightViewPos = mul(float4(In.AnchoredPos, 1.0), mWorldToLightView).xyz;
+        for (int cascade = 0; cascade < int(sNumCascades.y); ++cascade)
         {
-            float4 zEnd = f4CascadeCamSpaceZEnd[i];
-            cascade += int(zEnd.x < viewZ) + int(zEnd.y < viewZ) + int(zEnd.z < viewZ) + int(zEnd.w < viewZ);
-        }
-        cascade = min(cascade, int(sNumCascades.y) - 1);
-        if (cascade >= 0)
-        {
-            // Light view space (the caster's untransposed W2LView, stored
-            // transposed here), then the picked cascade's scale/bias to its
-            // normalized depth (the same affine the caster's
-            // GetCascadeTransform projection applies — no /w: the cascade
-            // projection is orthographic, w == 1).
-            float3 lightViewPos = mul(float4(In.AnchoredPos, 1.0), mWorldToLightView).xyz;
-            float3 cascadeNdc   = lightViewPos * cascadeAttribs[cascade * 4].xyz + cascadeAttribs[cascade * 4 + 1].xyz;
-            float2 cascadeUV    = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
-            float  LightDepth    = cascadeNdc.z - sBiasParams.y;  // fFixedDepthBias (cascade-z-normalized)
-            dbgCascade           = cascade;
-            dbgUV                = cascadeUV;
-            // The shadow sampler clamps, so a receiver outside the picked
-            // cascade's box would compare against unrelated atlas-edge depth
-            // and flicker fully shadowed. Out-of-box pixels stay lit instead
-            // of sampling — the tier fade covers the box/fade boundary.
+            float zend = f4CascadeCamSpaceZEnd[cascade / 4][cascade % 4];
+            if (viewZ > zend)
+                continue;
+            float3 cascadeNdc = lightViewPos * cascadeAttribs[cascade * 4].xyz + cascadeAttribs[cascade * 4 + 1].xyz;
+            float2 cascadeUV  = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
+            float  LightDepth = cascadeNdc.z - sBiasParams.y;
+            if (cascade == 0)
+            {
+                dbgCascade = cascade;
+                dbgUV      = cascadeUV;
+            }
             if (cascadeUV.x >= 0.0 && cascadeUV.x <= 1.0 &&
                 cascadeUV.y >= 0.0 && cascadeUV.y <= 1.0)
             {
                 if (shadowMode < 1.5)
                 {
-                    Attenuation = filterShadowPCF3(cascadeUV, float(cascade), LightDepth);
-                    dbgRaw      = g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(cascadeUV, float(cascade)), max(LightDepth, 1e-8));
+                    Attenuation *= filterShadowPCF3(cascadeUV, float(cascade), LightDepth);
+                    if (cascade == 0)
+                        dbgRaw = g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(cascadeUV, float(cascade)), max(LightDepth, 1e-8));
                 }
                 else if (shadowMode < 2.5)
                 {
-                    // Raw cascade z (no fFixedDepthBias — the variance floor is
-                    // this branch's bias; LightDepth carries the PCF bias).
-                    Attenuation = filterShadowVSM(cascadeUV, float(cascade), cascadeNdc.z);
+                    Attenuation *= filterShadowVSM(cascadeUV, float(cascade), cascadeNdc.z);
                 }
                 else if (shadowMode < 3.5)
                 {
                     float2 dbgTapUV2;
-                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, false, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
-                    dbgZ = cascadeNdc.z;
+                    Attenuation *= filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, false, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
+                    if (cascade == 0)
+                        dbgZ = cascadeNdc.z;
                 }
                 else
                 {
                     float2 dbgTapUV2;
-                    Attenuation = filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, true, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
-                    dbgZ = cascadeNdc.z;
+                    Attenuation *= filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, true, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
+                    if (cascade == 0)
+                        dbgZ = cascadeNdc.z;
                 }
             }
-            // Receiver-side tier-distance fade (lessons.md 2026-09-07): the
-            // padded light cube still samples past the tier distance, so fade
-            // the shadow to lit over the last 25 % of it — the effective
-            // cutoff.
-            float tier = f4ShadowFade.x;
-            if (tier > 0.0)
-            {
-                float fade = clamp((tier - viewZ) / (0.25 * tier), 0.0, 1.0);
-                Attenuation += (1.0 - Attenuation) * (1.0 - fade);
-            }
+        }
+        float tier = f4ShadowFade.x;
+        if (tier > 0.0)
+        {
+            float fade = clamp((tier - viewZ) / (0.25 * tier), 0.0, 1.0);
+            Attenuation += (1.0 - Attenuation) * (1.0 - fade);
         }
     }
+
+    IBL *= lerp(1.0, Attenuation, f4ShadowFade.w);
+
     float3 specDbg   = float3(0.0, 0.0, 0.0);
     float  specDbgN  = 0.0;
     if (fShadowDebugMode > 99.5)

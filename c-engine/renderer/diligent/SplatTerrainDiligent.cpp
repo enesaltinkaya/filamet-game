@@ -989,7 +989,11 @@ static void splatFrameFill(void) {
                       "debug-mode slot must hold a raw f32");
         std::memcpy(&splatFrameStaging.shadowAttribs.fDummy, &mode, sizeof(mode));
     }
-    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), (f32)shadowDiligentMode(), shadowDiligentFarPadS(), 0.0f};
+    static const f32 ambientDarken = [] {
+        const char* v = getenv("ENGINE_SHADOW_AMBIENT_DARKEN");
+        return v ? (f32)atof(v) : 0.5f;
+    }();
+    splatFrameStaging.shadowFade    = float4{shadowDiligentTierDistance(), (f32)shadowDiligentMode(), shadowDiligentFarPadS(), ambientDarken};
     {
         static const bool traceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
         if (traceOn) {
@@ -1685,6 +1689,18 @@ bool splatTerrainDrawDiligent(Diligent::IDeviceContext* ctx) {
                             (double)splatFrameStaging.shadowFade.y,
                             (double)splatFrameStaging.shadowFade.z,
                             (double)splatFrameStaging.shadowFade.w);
+                utils::info("splat cb biasParams: recvClamp %.9g fixedDepthBias %.9g transitionRegion %.9g maxAniso %d | c0 zscale %.9g",
+                            (double)sa.fReceiverPlaneDepthBiasClamp,
+                            (double)sa.fFixedDepthBias,
+                            (double)sa.fCascadeTransitionRegion,
+                            (int)sa.iMaxAnisotropy,
+                            (double)sa.Cascades[0].f4LightSpaceScale.z);
+                utils::info("splat cb zEnd: c0 %.3f c1 %.3f c2 %.3f c3 %.3f | numCascades %d",
+                            (double)sa.fCascadeCamSpaceZEnd[0],
+                            (double)sa.fCascadeCamSpaceZEnd[1],
+                            (double)sa.fCascadeCamSpaceZEnd[2],
+                            (double)sa.fCascadeCamSpaceZEnd[3],
+                            sa.iNumCascades);
                 const float* b = (const float*)&sa;
                 char hex[161] = {0};
                 for (int i = 0; i < 40; i++)

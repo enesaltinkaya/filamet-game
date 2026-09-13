@@ -166,9 +166,9 @@ void FlyingCameraSystem::added() {
     // DB row is a leftover from an interactive session (the same gate as the
     // player takeover suppression in Player.cpp).
     const char automated =
-            (getenv("ENGINE_SCREENSHOT") != nullptr) || (getenv("ENGINE_CAMERA") != nullptr) ||
-            (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
-            (getenv("ENGINE_NO_PLAYER") != nullptr);
+            ((getenv("ENGINE_SCREENSHOT") != nullptr) || (getenv("ENGINE_CAMERA") != nullptr) ||
+             (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
+             (getenv("ENGINE_NO_PLAYER") != nullptr)) && (getenv("ENGINE_CAMERA_DB") == nullptr);
     cameraDbInit();
     CameraDb saved = {};
     if (!automated && cameraDbLoad("camera", &saved)) {

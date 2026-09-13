@@ -69,9 +69,9 @@ namespace engine::renderer::diligent {
         };
 
         constexpr ShadowQualityTier kQualityTiers[3] = {
-            {1024, 1, 60.0f, 3},
-            {2048, 1, 80.0f, 3},
-            {2048, 1, 120.0f, 5},
+            {1024, 2, 60.0f, 3},
+            {2048, 2, 80.0f, 3},
+            {2048, 3, 120.0f, 5},
         };
 
         constexpr float kReceiverFadeScale[3] = {2.82f, 2.79f, 3.70f};
@@ -239,11 +239,15 @@ namespace engine::renderer::diligent {
             const bool hasPlayer = engine::playerGetFootPos(ppos);
             if (hasPlayer) diligentWorldAnchor(an);
             float focusBand = 0.0f;
+            float focusCamZDebug = 0.0f;
+            double pposTrace[3] = {ppos[0], ppos[1], ppos[2]};
+            double anTrace[3] = {an[0], an[1], an[2]};
             if (hasPlayer) {
                 const float rx = (f32)(ppos[0] - an[0]);
                 const float ry = (f32)(ppos[1] - an[1]);
                 const float rz = (f32)(ppos[2] - an[2]);
-                const float focusCamZ = view._31 * rx + view._32 * ry + view._33 * rz;
+                const float focusCamZ = view._13 * rx + view._23 * ry + view._33 * rz;
+                focusCamZDebug = focusCamZ;
                 static const float focusMargin = [] {
                     float v = 3.0f;
                     if (const char* env = getenv("ENGINE_SHADOW_FOCUS_MARGIN")) {
@@ -472,7 +476,7 @@ namespace engine::renderer::diligent {
             // caster draws with (GetCascadeTransform), so receiver and caster agree.
             if (hasPlayer) ppos[1] += 1.0;  // torso
             const Diligent::float3 pPos{(f32)(ppos[0] - an[0]), (f32)(ppos[1] - an[1]), (f32)(ppos[2] - an[2])};
-            const float camZ = view._31 * pPos.x + view._32 * pPos.y + view._33 * pPos.z;
+            const float camZ = view._13 * pPos.x + view._23 * pPos.y + view._33 * pPos.z;
             int cascade      = 0;
             for (int c = 0; c < sa.iNumCascades; c++) {
                 if (sa.fCascadeCamSpaceZEnd[c] < camZ) cascade = c + 1;
@@ -581,6 +585,13 @@ namespace engine::renderer::diligent {
                                     (double)sa.fCascadeCamSpaceZEnd[c],
                                     (double)casterW2LP[c]._33,
                                     (double)casterW2LP[c]._43);
+                    if (c == 0)
+                        off += snprintf(line + off, sizeof(line) - off,
+                                        " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f",
+                                        (double)focusCamZDebug,
+                                        (double)view._13, (double)view._23, (double)view._33,
+                                        pposTrace[0], pposTrace[1], pposTrace[2],
+                                        anTrace[0], anTrace[1], anTrace[2]);
                 }
                 utils::info("%s", line);
             }

@@ -779,8 +779,9 @@ void PlayerSystem::postUpdate() {
 
     // The old engine suppressed these periodic saves while ENGINE_AUTO_RUN
     // was running (the test character runs around and must not clobber the
-    // parked state).
-    if (p.autoRun) return;
+    // parked state). Automated runs too: the menu-enter takeover makes the
+    // orbit live there, so both rows would be overwritten by the run.
+    if (p.autoRun || automatedRun()) return;
 
     if (now > lastSave + 1000.0) {
         lastSave = now;
