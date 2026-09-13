@@ -240,22 +240,23 @@ namespace engine::renderer::diligent {
             if (hasPlayer) diligentWorldAnchor(an);
             float focusBand = 0.0f;
             float focusCamZDebug = 0.0f;
+            float focusBoxDebug = 0.0f;
             double pposTrace[3] = {ppos[0], ppos[1], ppos[2]};
             double anTrace[3] = {an[0], an[1], an[2]};
+            static const float focusMargin = [] {
+                float v = 3.0f;
+                if (const char* env = getenv("ENGINE_SHADOW_FOCUS_MARGIN")) {
+                    const float parsed = (float)atof(env);
+                    if (parsed >= 1.0f && parsed <= 20.0f) v = parsed;
+                }
+                return v;
+            }();
             if (hasPlayer) {
                 const float rx = (f32)(ppos[0] - an[0]);
                 const float ry = (f32)(ppos[1] - an[1]);
                 const float rz = (f32)(ppos[2] - an[2]);
                 const float focusCamZ = view._13 * rx + view._23 * ry + view._33 * rz;
                 focusCamZDebug = focusCamZ;
-                static const float focusMargin = [] {
-                    float v = 3.0f;
-                    if (const char* env = getenv("ENGINE_SHADOW_FOCUS_MARGIN")) {
-                        const float parsed = (float)atof(env);
-                        if (parsed >= 1.0f && parsed <= 20.0f) v = parsed;
-                    }
-                    return v;
-                }();
                 if (focusCamZ <= tier.distanceM) {
                     focusBand = focusCamZ + focusMargin;
                     if (focusBand > tier.distanceM * 0.8f) focusBand = tier.distanceM * 0.8f;
@@ -325,6 +326,58 @@ namespace engine::renderer::diligent {
             for (int c = 0; c < sa.iNumCascades; c++) {
                 sa.Cascades[c].f4LightSpaceScale.z *= farPadS;
                 sa.Cascades[c].f4LightSpaceScaledBias.z *= farPadS;
+            }
+
+            static const bool focusBoxOff = [] {
+                const char* env = getenv("ENGINE_SHADOW_FOCUS_BOX");
+                return env && env[0] == '0';
+            }();
+            static const float focusHalfEnv = [] {
+                float v = 0.0f;
+                if (const char* env = getenv("ENGINE_SHADOW_FOCUS_HALF")) {
+                    const float parsed = (float)atof(env);
+                    if (parsed >= 4.0f && parsed <= 40.0f) v = parsed;
+                }
+                return v;
+            }();
+            if (hasPlayer && !focusBoxOff && focusCamZDebug > 0.0f &&
+                focusCamZDebug <= sa.fCascadeCamSpaceZEnd[0]) {
+                float half = focusHalfEnv;
+                if (half <= 0.0f) {
+                    const float up   = dir.y < 0.0f ? -dir.y : 0.0f;
+                    const float elev = asinf(up < 1.0f ? up : 1.0f);
+                    const float tanE = tanf(elev < 0.1745f ? 0.1745f : elev);
+                    half = 2.0f / tanE + focusMargin;
+                }
+                if (half < 6.0f) half = 6.0f;
+                if (half > 32.0f) half = 32.0f;
+                const float texel = 2.0f * half / (f32)sa.f4ShadowMapDim.x;
+                const double prx = ppos[0] - an[0];
+                const double pry = ppos[1] - an[1];
+                const double prz = ppos[2] - an[2];
+                const Diligent::float4x4& w2l = sa.mWorldToLightView;
+                const double plx = prx * (double)w2l._11 + pry * (double)w2l._12 + prz * (double)w2l._13 + (double)w2l._14;
+                const double ply = prx * (double)w2l._21 + pry * (double)w2l._22 + prz * (double)w2l._23 + (double)w2l._24;
+                const float clx = (float)(std::round(plx / (double)texel) * (double)texel);
+                const float cly = (float)(std::round(ply / (double)texel) * (double)texel);
+                const float sx = 1.0f / half;
+                const float bx = -clx * sx;
+                const float by = -cly * sx;
+                auto& c0                    = sa.Cascades[0];
+                c0.f4LightSpaceScale.x      = sx;
+                c0.f4LightSpaceScale.y      = sx;
+                c0.f4LightSpaceScaledBias.x = bx;
+                c0.f4LightSpaceScaledBias.y = by;
+                Diligent::float4x4& m = casterW2LP[0];
+                m._11 = sx * w2l._11;
+                m._21 = sx * w2l._12;
+                m._31 = sx * w2l._13;
+                m._41 = bx;
+                m._12 = sx * w2l._21;
+                m._22 = sx * w2l._22;
+                m._32 = sx * w2l._23;
+                m._42 = by;
+                focusBoxDebug = half;
             }
 
             // ENGINE_SHADOW_ORACLE=frameN: one-shot CPU check that the caster
@@ -591,12 +644,13 @@ namespace engine::renderer::diligent {
                 char line[768];
                 int off = snprintf(line,
                                    sizeof(line),
-                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f",
+                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f fbox %.1f",
                                    (unsigned long long)shadowTraceFrame,
                                    passReady ? 1 : 0,
                                    curMode,
                                    (double)farPadS,
-                                   (double)focusBand);
+                                   (double)focusBand,
+                                   (double)focusBoxDebug);
                 for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
                     off += snprintf(line + off,
                                     sizeof(line) - off,

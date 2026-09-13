@@ -199,10 +199,10 @@ const float SPLAT_PI        = 3.14159265359;
 #define SPLAT_SAND_HI 4.0
 #endif
 #ifndef SPLAT_CLIFF_LO
-#define SPLAT_CLIFF_LO 0.1
+#define SPLAT_CLIFF_LO 0.2
 #endif
 #ifndef SPLAT_CLIFF_HI
-#define SPLAT_CLIFF_HI 0.4
+#define SPLAT_CLIFF_HI 0.32
 #endif
 #ifndef SPLAT_CLIFF_METERS
 #define SPLAT_CLIFF_METERS 128.0
@@ -484,8 +484,12 @@ float3 schlickReflection(float VdotH, float3 Reflectance0, float3 Reflectance90)
 }
 
 // The Witness 3x3 fixed PCF (PCF.fxh FilterShadowMapFixedPCF,
-// PCF_FILTER_SIZE 3) over the cascade depth array.
-float filterShadowPCF3(float2 uv, float slice, float lightDepth)
+// PCF_FILTER_SIZE 3) over the cascade depth array. rcvBias is the
+// receiver-plane depth slope (dDepth per texel, u and v) — per tap the
+// depth is offset by dot(tapOffset, rcvBias) so a grazing receiver plane
+// stays lit without any caster rasterizer bias (the Shadows sample's
+// FractionalSamplingError + receiver-plane bias policy).
+float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias)
 {
     float4 dims;
     g_ShadowMap.GetDimensions(dims.x, dims.y, dims.z);
@@ -494,6 +498,7 @@ float filterShadowPCF3(float2 uv, float slice, float lightDepth)
     float  s      = (px.x + 0.5) - (baseUV.x + 0.5);
     float  t      = (px.y + 0.5) - (baseUV.y + 0.5);
     float2 texel  = 1.0 / dims.xy;
+    rcvBias *= texel;
     baseUV *= texel;
 
     float uw0 = (3.0 - 2.0 * s);
@@ -507,10 +512,10 @@ float filterShadowPCF3(float2 uv, float slice, float lightDepth)
 
     const float DepthClamp = 1e-8;
     float sum = 0.0;
-    sum += uw0 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u0, v0) * texel, slice), max(lightDepth, DepthClamp));
-    sum += uw1 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u1, v0) * texel, slice), max(lightDepth, DepthClamp));
-    sum += uw0 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u0, v1) * texel, slice), max(lightDepth, DepthClamp));
-    sum += uw1 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u1, v1) * texel, slice), max(lightDepth, DepthClamp));
+    sum += uw0 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u0, v0) * texel, slice), max(lightDepth + dot(float2(u0, v0), rcvBias), DepthClamp));
+    sum += uw1 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u1, v0) * texel, slice), max(lightDepth + dot(float2(u1, v0), rcvBias), DepthClamp));
+    sum += uw0 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u0, v1) * texel, slice), max(lightDepth + dot(float2(u0, v1), rcvBias), DepthClamp));
+    sum += uw1 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u1, v1) * texel, slice), max(lightDepth + dot(float2(u1, v1), rcvBias), DepthClamp));
     return sum / 16.0;
 }
 
@@ -660,6 +665,32 @@ float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4, out
 float3 rotateAroundY(float3 d, float2 rot)
 {
     return float3(rot.x * d.x + rot.y * d.z, d.y, -rot.y * d.x + rot.x * d.z);
+}
+
+float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, float3 ddxLV, float3 ddyLV)
+{
+    float3 sc = cascadeAttribs[cascade * 4].xyz;
+    float3 cascadeNdc = lightViewPos * sc + cascadeAttribs[cascade * 4 + 1].xyz;
+    float2 cascadeUV  = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
+    if (cascadeUV.x < 0.0 || cascadeUV.x > 1.0 || cascadeUV.y < 0.0 || cascadeUV.y > 1.0)
+        return -1.0;
+    float3 ddxUVZ = float3(ddxLV.x * sc.x, ddxLV.y * sc.y, ddxLV.z * sc.z) * float3(0.5, -0.5, 1.0);
+    float3 ddyUVZ = float3(ddyLV.x * sc.x, ddyLV.y * sc.y, ddyLV.z * sc.z) * float3(0.5, -0.5, 1.0);
+    float2 rcvBiasUV;
+    rcvBiasUV.x = ddyUVZ.y * ddxUVZ.z - ddxUVZ.y * ddyUVZ.z;
+    rcvBiasUV.y = -ddyUVZ.x * ddxUVZ.z + ddxUVZ.x * ddyUVZ.z;
+    float det = (ddxUVZ.x * ddyUVZ.y) - (ddxUVZ.y * ddyUVZ.x);
+    rcvBiasUV /= sign(det) * max(abs(det), 1e-10);
+    float2 biasClampUV = abs(float2(sc.z / (sc.x * 0.5), sc.z / (sc.y * -0.5))) * sBiasParams.x;
+    rcvBiasUV = clamp(rcvBiasUV, -biasClampUV, biasClampUV);
+    float lightDepth = cascadeNdc.z - sBiasParams.y;
+    if (shadowMode < 1.5)
+        return filterShadowPCF3(cascadeUV, float(cascade), lightDepth, rcvBiasUV);
+    if (shadowMode < 2.5)
+        return filterShadowVSM(cascadeUV, float(cascade), cascadeNdc.z);
+    float2 dbgTapUV2;
+    float pPos, pNeg, dbgM1v;
+    return filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, shadowMode > 3.5, pPos, pNeg, dbgM1v, dbgTapUV2);
 }
 
 PSOutput main(PSSplatIn In)
@@ -819,47 +850,20 @@ PSOutput main(PSSplatIn In)
     {
         float viewZ         = In.ViewZ;
         float3 lightViewPos = mul(float4(In.AnchoredPos, 1.0), mWorldToLightView).xyz;
+        float3 ddxLV = ddx(lightViewPos);
+        float3 ddyLV = ddy(lightViewPos);
         for (int cascade = 0; cascade < int(sNumCascades.y); ++cascade)
         {
             float zend = f4CascadeCamSpaceZEnd[cascade / 4][cascade % 4];
-            if (viewZ > zend)
+            if (shadowMode > 1.5 && viewZ > zend)
                 continue;
-            float3 cascadeNdc = lightViewPos * cascadeAttribs[cascade * 4].xyz + cascadeAttribs[cascade * 4 + 1].xyz;
-            float2 cascadeUV  = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
-            float  LightDepth = cascadeNdc.z - sBiasParams.y;
-            if (cascade == 0)
-            {
-                dbgCascade = cascade;
-                dbgUV      = cascadeUV;
-            }
-            if (cascadeUV.x >= 0.0 && cascadeUV.x <= 1.0 &&
-                cascadeUV.y >= 0.0 && cascadeUV.y <= 1.0)
-            {
-                if (shadowMode < 1.5)
-                {
-                    Attenuation *= filterShadowPCF3(cascadeUV, float(cascade), LightDepth);
-                    if (cascade == 0)
-                        dbgRaw = g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(cascadeUV, float(cascade)), max(LightDepth, 1e-8));
-                }
-                else if (shadowMode < 2.5)
-                {
-                    Attenuation *= filterShadowVSM(cascadeUV, float(cascade), cascadeNdc.z);
-                }
-                else if (shadowMode < 3.5)
-                {
-                    float2 dbgTapUV2;
-                    Attenuation *= filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, false, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
-                    if (cascade == 0)
-                        dbgZ = cascadeNdc.z;
-                }
-                else
-                {
-                    float2 dbgTapUV2;
-                    Attenuation *= filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, true, dbgPos, dbgNeg, dbgM1, dbgTapUV2);
-                    if (cascade == 0)
-                        dbgZ = cascadeNdc.z;
-                }
-            }
+            float att = filterShadowCascade(cascade, shadowMode, lightViewPos, ddxLV, ddyLV);
+            dbgZ = viewZ * 0.0025;
+            dbgCascade = cascade;
+            dbgRaw = att;
+            if (att < 0.0)
+                continue;
+            Attenuation *= att;
         }
         float tier = f4ShadowFade.x;
         if (tier > 0.0)
@@ -936,6 +940,8 @@ PSOutput main(PSSplatIn In)
             IBL = float3(dbgPos, dbgNeg, 0.0);
         else if (fShadowDebugMode < 6.5)
             IBL = float3(dbgZ * 2.5, dbgM1 > 0.0 ? min(log10(1.0 + dbgM1) * 0.1, 1.0) : 0.0, dbgUV.y);
+        else if (fShadowDebugMode < 7.5)
+            IBL = float3(slope, wCliff, wSand);
         else
             IBL = float3(frac(dbgUV), 0.0);
     }

@@ -1224,10 +1224,16 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
     // Prepare the accumulators even while disabled so the frame-index
     // continuity check inside TAA resets the history on re-enable, and so
     // GetJitterOffset is live on the first enabled frame.
+    static const bool adaptiveClamp = [] {
+        if (const char* env = getenv("ENGINE_TAA_ADAPTIVE_CLAMP")) return atoi(env) != 0;
+        return true;
+    }();
     const TemporalAntiAliasing::FEATURE_FLAGS taaFlags =
             TemporalAntiAliasing::FEATURE_FLAG_GAUSSIAN_WEIGHTING |
             TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER |
-            TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE;
+            TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE |
+            (adaptiveClamp ? TemporalAntiAliasing::FEATURE_FLAG_ADAPTIVE_CLAMP
+                           : TemporalAntiAliasing::FEATURE_FLAG_NONE);
     taa->PrepareResources(device, ctx, postFXContext.get(), taaFlags);
     ssaoFrameBegin(ctx);
     ssrFrameBegin(ctx);
