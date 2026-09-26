@@ -6,6 +6,7 @@
 #include "logger/Logger.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/RenderBackend.h"
+#include "renderer/texture/TextureManager.h"
 
 #include "crmlui.h"
 
@@ -327,31 +328,39 @@ uintptr_t rmlPassLoadTexture(int* outX, int* outY, const char* path) {
         return it->second;
     }
 
-    // pak ktx2 → libktx decode → compressed blocks: basis sources transcode
-    // to BC7 (BC5/BC4 for 2/1-channel DFDs) and libktx picks the SRGB block
-    // variants from the DFD, so UI art decodes on sample — the old engine's
-    // rmlLoadTexture path (BC7 upload) minus the RGBA8 intermediate.
+    // pak ktx2 → prewarmed by the texture manager at startup (parallel decode
+    // + upload, the old engine's behavior); basis sources transcode to BC7
+    // (BC5/BC4 for 2/1-channel DFDs) and libktx picks the SRGB block variants
+    // from the DFD, so UI art decodes on sample.
     // pak PNG/JPG → stb → RGBA8, uploaded as RGBA8_UNORM_SRGB. Both paths
     // decode-on-sample to match the sRGB swapchain (createRgba8's srgb note).
-    utils::Image image = utils::imageLoad(path);
-    if (!image.data || image.width <= 0 || image.height <= 0) {
-        utils::warn("rmlui: texture load failed: %s", path);
-        if (image.data) {
-            utils::imageDestory(&image);
-        }
-        return 0;
-    }
-    const int imgW = image.width, imgH = image.height;  // captured before destroy
     ITexture* tex = nullptr;
-    if (image.isKtx) {
-        tex = diligentCreateImageTexture(image, path, /*srgbForUncompressed=*/true);
+    u32 imgW = 0, imgH = 0;
+    const size_t len = std::strlen(path);
+    if (len >= 5 && std::strcmp(path + len - 5, ".ktx2") == 0) {
+        tex = textureManagerGetTexture(path, /*srgbForUncompressed=*/true);
+        if (tex) {
+            const TextureDesc& d = tex->GetDesc();
+            imgW = d.Width;
+            imgH = d.Height;
+        }
     } else {
+        utils::Image image = utils::imageLoad(path);
+        if (!image.data || image.width <= 0 || image.height <= 0) {
+            utils::warn("rmlui: texture load failed: %s", path);
+            if (image.data) {
+                utils::imageDestory(&image);
+            }
+            return 0;
+        }
+        imgW = (u32)image.width;
+        imgH = (u32)image.height;
         // srgb=true: see createRgba8 — decode-on-sample to match the sRGB swapchain
-        tex = createRgba8((const u8*)image.data, (u32)imgW, (u32)imgH, path, /*srgb=*/true);
+        tex = createRgba8((const u8*)image.data, imgW, imgH, path, /*srgb=*/true);
+        utils::imageDestory(&image);
     }
-    utils::imageDestory(&image);
     if (!tex) {
-        utils::warn("rmlui: texture upload failed: %s", path);
+        utils::warn("rmlui: texture load failed: %s", path);
         return 0;
     }
     const u32 handle = textureAcquire(tex, imgW, imgH, path);

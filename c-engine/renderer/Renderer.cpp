@@ -6,6 +6,7 @@
 #include "Utils.h"
 #include "logger/Logger.h"
 #include "renderer/Window.h"
+#include "renderer/texture/TextureManager.h"
 #include "settings/Settings.h"
 
 #include <cstdio>
@@ -118,6 +119,8 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     }
     utils::info("renderer: initialized (diligent backend)");
 
+    textureManagerInit();
+
     // apply the persisted graphics settings (scale/TAA/shadows/effects)
     rendererGraphicsLoad();
 
@@ -170,6 +173,9 @@ void rendererDraw(void) {
 
 void rendererDestroy(void) {
     utils::info("renderer: destroying");
+    // the manager's refs outlive the passes' — release them before the
+    // device goes away
+    textureManagerDestroy();
     if (activeBackend) {
         activeBackend->destroy();
         delete activeBackend;

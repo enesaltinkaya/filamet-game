@@ -10,6 +10,7 @@
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
+#include "renderer/texture/TextureManager.h"
 #include "ecs/system/player/Player.h"
 
 #include <Common/interface/RefCntAutoPtr.hpp>
@@ -104,10 +105,10 @@ struct RawChunk {
     f32 aabbMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
 };
 
-// A decoded weight tile, kept alive until its group's CreateTexture has
-// copied the data driver-side (TextureData pContext).
+// A decoded weight tile: a pointer into the texture manager's cache (the
+// manager owns the decode and outlives the terrain).
 struct WeightTile {
-    utils::Image image;
+    const utils::Image* image = nullptr;
     bool valid = false;
 };
 
@@ -261,8 +262,8 @@ bool createWeightArray(const std::string& name, const WeightTile* tiles, int mip
         for (size_t L = 0; L < WEIGHT_LAYERS; L++) {
             u8* dst = staging.data() + levelOff[m] + L * layerBytes;
             const WeightTile& t = tiles[L];
-            if (t.valid && t.image.mipSizes.size() > (size_t)m) {
-                std::memcpy(dst, (const u8*)t.image.data + t.image.mipSizes[m], layerBytes);
+            if (t.valid && t.image->mipSizes.size() > (size_t)m) {
+                std::memcpy(dst, (const u8*)t.image->data + t.image->mipSizes[m], layerBytes);
             } else {
                 // Noop weight (0,0,0,255): the alpha detail mixes in with
                 // (1 - wA), so an all-255 tile leaves the base untouched.
@@ -635,30 +636,25 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
                     const long udim = std::strtol(after, &end, 10);
                     if (end && *end == '.' && udim >= 1001 && udim <= 1100) {
                         const size_t layer = (size_t)udim - 1001;
-                        utils::Image image = utils::imageLoad(f.data);
-                        if (!image.isKtx || !image.data || image.width <= 0 || image.height <= 0 ||
-                            image.mips <= 0) {
+                        const utils::Image* image = textureManagerGetImage(f.data);
+                        if (!image || !image->isKtx || !image->data || image->width <= 0 ||
+                            image->height <= 0 || image->mips <= 0) {
                             utils::warn("splatTerrain: bad weight tile %s", f.data);
-                            if (image.data) {
-                                utils::imageDestory(&image);
-                            }
                             continue;
                         }
-                        const size_t tight = rgba8MipBytes((u32)image.width, image.mips);
-                        if (image.width != (int)WEIGHT_SIZE || image.height != (int)WEIGHT_SIZE ||
-                            image.size != tight) {
+                        const size_t tight = rgba8MipBytes((u32)image->width, image->mips);
+                        if (image->width != (int)WEIGHT_SIZE || image->height != (int)WEIGHT_SIZE ||
+                            image->size != tight) {
                             utils::warn("splatTerrain: weight tile %s unexpected payload (%dx%d %d mips %llu B, expected %dx%d tight %zu B) — using Noop",
-                                    f.data, image.width, image.height, image.mips,
-                                    (unsigned long long)image.size, WEIGHT_SIZE, WEIGHT_SIZE, tight);
-                            utils::imageDestory(&image);
+                                    f.data, image->width, image->height, image->mips,
+                                    (unsigned long long)image->size, WEIGHT_SIZE, WEIGHT_SIZE, tight);
                             continue;
                         }
                         if (tiles[layer].valid) {
                             utils::warn("splatTerrain: duplicate weight tile for layer %zu — using Noop", layer);
-                            utils::imageDestory(&image);
                             continue;
                         }
-                        tiles[layer].image = std::move(image);
+                        tiles[layer].image = image;
                         tiles[layer].valid = true;
                     }
                 }
@@ -670,12 +666,11 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
         for (size_t L = 0; L < WEIGHT_LAYERS; L++) {
             if (tiles[L].valid) {
                 if (mips == 0) {
-                    mips = tiles[L].image.mips;
+                    mips = tiles[L].image->mips;
                 }
-                if (tiles[L].image.mips != mips) {
+                if (tiles[L].image->mips != mips) {
                     utils::warn("splatTerrain: %s layer %zu has %d mips (first tile %d) — using Noop",
-                            group.name.c_str(), L, tiles[L].image.mips, mips);
-                    utils::imageDestory(&tiles[L].image);
+                            group.name.c_str(), L, tiles[L].image->mips, mips);
                     tiles[L].valid = false;
                 } else {
                     tilesLoaded++;
@@ -684,18 +679,8 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
         }
         if (mips == 0 || !createWeightArray("splat weights " + group.name, tiles.data(), mips,
                     &group.weights, &group.weightsView, &guard)) {
-            for (auto& t : tiles) {
-                if (t.valid) {
-                    utils::imageDestory(&t.image);
-                }
-            }
             utils::warn("splatTerrain: no usable weight tiles for group '%s'", group.name.c_str());
             return fail();
-        }
-        for (auto& t : tiles) {
-            if (t.valid) {
-                utils::imageDestory(&t.image);
-            }
         }
         utils::info("splatTerrain: group '%s' — %zu/%zu weight tiles, %d mips", group.name.c_str(),
                 tilesLoaded, WEIGHT_LAYERS, mips);
@@ -708,31 +693,14 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
                 DetailTex dt;
                 const std::string albedoPath = "images/terrain/" + detail.name + "/albedo.ktx2";
                 const std::string normalPath = "images/terrain/" + detail.name + "/normal.ktx2";
-                utils::Image albedo = utils::imageLoad(albedoPath.c_str());
-                if (!albedo.isKtx || !albedo.data) {
-                    utils::warn("splatTerrain: detail albedo load failed: %s", albedoPath.c_str());
-                    if (albedo.data) {
-                        utils::imageDestory(&albedo);
-                    }
-                    return fail();
-                }
-                dt.albedo = diligentCreateImageTexture(albedo, albedoPath.c_str(), true);
-                utils::imageDestory(&albedo);
+                dt.albedo = textureManagerGetTexture(albedoPath.c_str(), true);
                 if (!dt.albedo) {
-                    utils::warn("splatTerrain: detail albedo upload failed: %s", albedoPath.c_str());
+                    utils::warn("splatTerrain: detail albedo load failed: %s", albedoPath.c_str());
                     return fail();
                 }
-                utils::Image normal = utils::imageLoad(normalPath.c_str());
-                if (!normal.isKtx || !normal.data) {
-                    utils::warn("splatTerrain: detail normal load failed: %s", normalPath.c_str());
-                    utils::imageDestory(&normal);
-                    dt.albedo->Release();
-                    return fail();
-                }
-                dt.normal = diligentCreateImageTexture(normal, normalPath.c_str(), false);
-                utils::imageDestory(&normal);
+                dt.normal = textureManagerGetTexture(normalPath.c_str(), false);
                 if (!dt.normal) {
-                    utils::warn("splatTerrain: detail normal upload failed: %s", normalPath.c_str());
+                    utils::warn("splatTerrain: detail normal load failed: %s", normalPath.c_str());
                     dt.albedo->Release();
                     return fail();
                 }
@@ -756,32 +724,15 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
         SplatDetail& band = bands[b];
         band.name = bandDirs[b];
         const std::string albedoPath = std::string("images/terrain/") + bandDirs[b] + "/albedo.ktx2";
-        utils::Image albedo = utils::imageLoad(albedoPath.c_str());
-        if (!albedo.isKtx || !albedo.data) {
-            utils::warn("splatTerrain: band albedo load failed: %s", albedoPath.c_str());
-            if (albedo.data) {
-                utils::imageDestory(&albedo);
-            }
-            return fail();
-        }
-        band.albedo = diligentCreateImageTexture(albedo, albedoPath.c_str(), true);
-        utils::imageDestory(&albedo);
+        band.albedo = textureManagerGetTexture(albedoPath.c_str(), true);
         if (!band.albedo) {
-            utils::warn("splatTerrain: band albedo upload failed: %s", albedoPath.c_str());
+            utils::warn("splatTerrain: band albedo load failed: %s", albedoPath.c_str());
             return fail();
         }
         const std::string normalPath = std::string("images/terrain/") + bandDirs[b] + "/normal.ktx2";
-        utils::Image normal = utils::imageLoad(normalPath.c_str());
-        if (!normal.isKtx || !normal.data) {
-            utils::warn("splatTerrain: band normal load failed: %s", normalPath.c_str());
-            utils::imageDestory(&normal);
-            band.albedo->Release();
-            return fail();
-        }
-        band.normal = diligentCreateImageTexture(normal, normalPath.c_str(), false);
-        utils::imageDestory(&normal);
+        band.normal = textureManagerGetTexture(normalPath.c_str(), false);
         if (!band.normal) {
-            utils::warn("splatTerrain: band normal upload failed: %s", normalPath.c_str());
+            utils::warn("splatTerrain: band normal load failed: %s", normalPath.c_str());
             band.albedo->Release();
             return fail();
         }
