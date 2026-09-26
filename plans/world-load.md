@@ -171,6 +171,27 @@ that long may still be acceptable. If not:
   "loading" frame before it starts (enterWorld currently runs inside the
   RML click handler, MainMenuGui.cpp:59-87).
 
+DONE (partial) 2026-09-26. The safe half landed: the model pak I/O + zstd
+(the pure-CPU half of each Model load) now runs on the thread pool in
+parallel (`gltfModelBytesPrewarmLaunch`/`Wait` → `glbByteCache`), and the
+one-time texture-cache fill (the 39 ms GPU ktx2 ITexture creates) is done
+on the render thread in the gap while the pool runs the zstd, so the two
+overlap. The Model loads that follow hit the byte cache + texture cache and
+are parse + buffer-create only. Measured (ENGINE_LOAD_TIMING, warm):
+loadWorld total 349.7 → 255–264 ms (−~90 ms), first-drawn frame 623.7 →
+~578 ms (−~45 ms); prewarm+fill phase ~116 ms (props zstd dominates, the
+smaller models' zstd overlap with it), terrain 72→6 ms, props 185→70 ms.
+
+The big remaining half (parallelizing the tinygltf _parse_ — ~63 ms for
+props) needs a two-stage Diligent AssetLoader split (CPU parse on a worker
+thread, `FinishGPUResources` for the buffer creates on the render thread).
+That patch was built and reverted: it introduced a subtle heap corruption
+(latent out-of-bounds in the defer load/finish, manifesting on a later
+malloc in `animSourceSetup`) that ASan could not isolate (the ASan build
+crashes in radv Vulkan init). The Diligent AssetLoader is back to stock;
+re-attempting the parse parallelization is the follow-up, ideally with a
+working ASan/heap-checker path for the Diligent loader.
+
 ## Budget after phases 1–4
 
     loadWorld   ~1000 ms → ~250 ms   (weights ~300→30, props ~170→~40,

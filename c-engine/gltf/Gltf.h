@@ -69,6 +69,17 @@ bool gltfBoundingBox(f32 min[3], f32 max[3]);
 // used instead.
 bool gltfLoadAnimations(const char* pakPath);
 
+// Startup prewarm: create the GPU ITextures for the external model ktx2 so
+// the one-time upload is off the world-load critical path. Render thread.
+void gltfTextureCachePrewarm(void);
+
+// Reads + zstd-decompresses the given model pak bytes on the thread pool so
+// the subsequent Model loads skip the I/O + zstd. Launch starts the pool work;
+// the render thread can do GPU work (the texture cache fill) in between; wait
+// blocks until the reads finish. Render thread.
+void gltfModelBytesPrewarmLaunch(const char** paths, int count);
+void gltfModelBytesPrewarmWait(void);
+
 u32 gltfAnimationCount(void);
 const char* gltfAnimationName(u32 index);  // "" if unnamed; valid until gltfDestroy
 f32 gltfAnimationDuration(u32 index);      // seconds

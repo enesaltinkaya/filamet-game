@@ -12,6 +12,7 @@
 #include "gameState/GameState.h"
 #include "mainMenu/MainMenuGui.h"
 #include "pauseMenu/PauseMenuGui.h"
+#include "loading/LoadingGui.h"
 #include "cameraGui/CameraGui.h"
 #include "playerGui/PlayerGui.h"
 #include "playerActionsGui/PlayerActionsGui.h"
@@ -109,34 +110,9 @@ namespace game {
             utils::info("game: world loaded");
         }
 
-        // Oghuzland terrain world (scripts/blender-terrain.py export): the
-        // chunked terrain model through the standard PBR path (untextured
-        // until the splat UDIM pass lands — plans/blender-terrain.md phase 2)
-        // plus its pre-baked Jolt sidecar. The sidecar is only REGISTERED
-        // here — the physics system is (re)added deferred a frame later and
-        // restores the static terrain bodies in added() once the Jolt world
-        // is up.
-        bool terrainUp = engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
-        if (terrainUp) {
-            engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
-            ltLog("gltfSceneLoad");
-            // Splat resources (phase 2): the same packed GLB re-parsed
-            // CPU-side — per-chunk buffers + AABBs, weight UDIM arrays, detail
-            // sets. No draw until the splat pass lands (tasks 2/3).
-            engine::gltf::splatTerrainLoad("models/terrain/oghuzlands.zstd");
-        }
-        ltLog("splatTerrainLoad");
-
-        if (engine::gltf::gltfPropsLoad("models/test2.zstd")) {
-            engine::physicsPropsSidecarSet("models/test2.jolt.zstd");
-        }
-        ltLog("gltfPropsLoad");
-
-        // Player character (eve): a zstd-compressed glb exported by
-        // scripts/export-models.sh. Static spawn — a saved player row
-        // (playerDbLoad) or ENGINE_TELEPORT overrides it on world load.
+        // Player character (eve) spawn: a saved player row (playerDbLoad) or
+        // ENGINE_TELEPORT overrides the static default on world load.
         f32 spawnPt[3] = {-500.0f, 513.0f, 164.0f};
-        // Override the spawn with an explicit position (ENGINE_TELEPORT="x,y,z").
         if (const char* tpos = getenv("ENGINE_TELEPORT")) {
             float tx = 0.0f, ty = 0.0f, tz = 0.0f;
             if (sscanf(tpos, "%g,%g,%g", &tx, &ty, &tz) == 3) {
@@ -145,30 +121,63 @@ namespace game {
                 spawnPt[2] = tz;
             }
         }
-        // gltfInit is idempotent — this re-creates the loader after the
-        // menu-return gltfDestroy on re-entry. The model is PLACED after the
-        // camera framing below (placement re-expresses the feet relative to
-        // the world anchor, which the framing's cameraLookAt establishes).
-        // ENGINE_GLTF_MODEL loads a different pak model through the same PBR
-        // path (asset validation: chunked terrain exports, props, ...).
+
+        // World assets (phase 5): the Oghuzland terrain (scripts/blender-
+        // terrain.py export, the standard PBR path), the props model, the
+        // character (eve), and the animation source are CPU-parsed in parallel
+        // on the thread pool, then their GPU resources are created serially on
+        // the render thread. gltfInit is idempotent — it re-creates the loader
+        // after the menu-return gltfDestroy on re-entry. ENGINE_GLTF_MODEL
+        // swaps the character pak model (asset validation); ENGINE_NO_ANIM
+        // skips the animation source.
         const char* gltfModelPath = "models/eve.zstd";
         const char* gltfModelEnv = getenv("ENGINE_GLTF_MODEL");
         if (gltfModelEnv && gltfModelEnv[0]) {
             gltfModelPath = gltfModelEnv;
         }
-        if (engine::gltf::gltfInit() && engine::gltf::gltfLoad(gltfModelPath)) {
+        const char* animPath = getenv("ENGINE_NO_ANIM") ? nullptr : "models/animations.zstd";
+        const char* prewarmPaths[4] = {
+                "models/terrain/oghuzlands.zstd", "models/test2.zstd", gltfModelPath,
+                animPath ? animPath : "models/terrain/oghuzlands.zstd"};
+        engine::gltf::gltfModelBytesPrewarmLaunch(prewarmPaths, 4);
+        engine::gltf::gltfTextureCachePrewarm();
+        engine::gltf::gltfModelBytesPrewarmWait();
+        ltLog("bytes prewarm + texture fill");
+        const bool terrainUp =
+                engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
+        ltLog("terrain");
+        const bool propsUp = terrainUp &&
+                engine::gltf::gltfPropsLoad("models/test2.zstd");
+        ltLog("props");
+        const bool charUp = propsUp &&
+                engine::gltf::gltfLoad(gltfModelPath);
+        ltLog("character");
+        const bool animUp = charUp &&
+                (animPath == nullptr ||
+                 engine::gltf::gltfLoadAnimations(animPath));
+        ltLog("animations");
+        engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
+        engine::physicsPropsSidecarSet("models/test2.jolt.zstd");
+        ltLog("physics sidecars");
+        const bool worldUp = terrainUp && propsUp && charUp && animUp;
+        if (worldUp) {
+            // The Jolt sidecars are only REGISTERED here — the physics system
+            // is (re)added deferred a frame later and restores the static
+            // terrain/props bodies in added() once the Jolt world is up.
+            engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
+            engine::physicsPropsSidecarSet("models/test2.jolt.zstd");
+            // Splat resources (phase 2): the same packed GLB re-parsed
+            // CPU-side — per-chunk buffers + AABBs, weight UDIM arrays, detail
+            // sets. No draw until the splat pass lands (tasks 2/3).
+            engine::gltf::splatTerrainLoad("models/terrain/oghuzlands.zstd");
+            // Animation source: gltfUpdate plays the selected clip on it and
+            // syncs the joint transforms onto the visible model; the player
+            // system drives clip selection from here on (Player.cpp).
+            if (animPath) {
+                engine::gltf::gltfPlayAnimation("eve_idle1", 1.0f, true);
+            }
         }
-        ltLog("gltfLoad");
-        // Animation source (the old engine's models/animations.dat): a second
-        // glb carrying eve's skeleton + all clips (no textures). Not added to
-        // the scene — gltfUpdate plays the selected clip on it and syncs the
-        // joint transforms onto the visible model. The player system drives
-        // clip selection from here on (Player.cpp state machine).
-        if (!getenv("ENGINE_NO_ANIM") &&
-            engine::gltf::gltfLoadAnimations("models/animations.zstd")) {
-            engine::gltf::gltfPlayAnimation("eve_idle1", 1.0f, true);
-        }
-        ltLog("gltfLoadAnimations");
+        ltLog("splatTerrainLoad");
         ltPrev = ltStart;
         ltLog("loadWorld total");
         utils::info("game: player spawn at (%.0f, %.0f, %.0f)", spawnPt[0], spawnPt[1], spawnPt[2]);
@@ -276,6 +285,23 @@ namespace game {
         if (const char* fd = getenv("ENGINE_FOG_DENSITY")) fogDensity = (f32)atof(fd);
         engine::renderer::rendererSetFog(fogColor, fogDensity);
         engine::engineMarkWorldLoaded();
+    }
+
+    void GameSystem::finishWorldLoad() {
+        gameStateSet(STATE_PLAYING);
+        // Jolt world first: the terrain's heightfield sync and the player's
+        // character controller both need it alive before they run.
+        engine::ecsSystemAddDeferred(100, &engine::physicsSystem);
+        engine::ecsSystemAddDeferred(100, &engine::flyingCameraSystem);
+        // Third-person player: spawns at the point set by loadWorld (the gltf
+        // model is already placed there) and takes the camera in player mode.
+        engine::ecsSystemAddDeferred(100, &engine::playerSystem);
+        // The loading screen (if any) goes; the in-world readouts + actions
+        // panel come up. Both are no-ops for the gui that isn't showing.
+        engine::guiManagerRemoveGuiNextFrame(&loadingGui);
+        engine::guiManagerAddGuiNextFrame(&cameraGui);
+        engine::guiManagerAddGuiNextFrame(&playerGui);
+        engine::guiManagerAddGuiNextFrame(&playerActionsGui);
     }
 
     void GameSystem::preUpdate() {

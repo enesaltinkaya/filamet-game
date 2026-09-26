@@ -6,6 +6,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 ## 2026-09-26 — [entries](lessons/2026-09-26.md)
 
+- Two-stage Diligent AssetLoader split (CPU parse on a worker thread via `DeferGPUResources`, `FinishGPUResources` on the render thread) caused a latent heap corruption — don't ship it until isolated; the safe phase-5 win is parallelizing only the pak I/O + zstd (byte-cache prewarm) and overlapping the GPU texture-cache fill with it. Fingerprint: a *non-defer* Model read a correct `Nodes.size()` right before `animSourceSetup`, then SIGSEGV'd inside it at `Nodes.size()` triggered by a `make_unique` malloc a couple lines earlier (heap-metadata corruption from the defer load/finish, not a UAF); survived moving the retained data to a heap `unique_ptr` struct (not a `sizeof`/layout issue); ASan couldn't isolate it (ASan build dies in radv Vulkan init)
 - `RefCntAutoPtr::operator&()` attaches its out-param in a *temporary's* destructor (end of full-expression): `if (Create(name, &ptr) && ptr)` is always false — split the call and the null-check into separate statements
 - URI-referenced KTX2 can't use Diligent's GLTF file path (KTXLoader rejects ktx2): serve via `ModelCreateInfo::pTextureCache` pre-filled from the TextureManager
 - Attribute load phases to the SHIPPED asset payload, not pipeline intent — a pak can silently ship placeholders (rebuild suspect paks before profiling)

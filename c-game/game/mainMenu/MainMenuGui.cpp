@@ -11,6 +11,7 @@
 #include "gui/rmlui/GuiManagerRmlUi.h"
 #include "gameState/GameState.h"
 #include "credits/CreditsGui.h"
+#include "loading/LoadingGui.h"
 #include "ecs/system/lua/LuaSystem.h"
 #include "ecs/system/flyingCamera/FlyingCamera.h"
 #include "ecs/system/player/Player.h"
@@ -56,7 +57,15 @@ namespace game {
         }
     }
 
+    // Set while an enter-world is in flight (loading screen up, world load
+    // running). Guards against a second ENTER WORLD click landing before the
+    // loading screen takes over (the menu document is only removed next frame).
+    // Cleared in added() when the menu is shown again.
+    static char worldLoadPending = 0;
+
     static void enterWorld(void) {
+        if (worldLoadPending) return;
+        worldLoadPending = 1;
         utils::info("mainMenu: ENTER WORLD");
         // A settings page left open over the menu must not ride along into the
         // world (the old engine hid it on the state transition). The sub-pages
@@ -65,22 +74,24 @@ namespace game {
         if (settingsGuiIsShowing()) engine::guiManagerRemoveGuiNextFrame(&settingsGui);
         if (settingsAudioGuiIsShowing()) engine::guiManagerRemoveGuiNextFrame(&settingsAudioGui);
         if (settingsVideoGuiIsShowing()) engine::guiManagerRemoveGuiNextFrame(&settingsVideoGui);
-        gameSystem.loadWorld();  // blocks a moment on first entry only
-        gameStateSet(STATE_PLAYING);
-        // Jolt world first: the terrain's heightfield sync and the player's
-        // character controller both need it alive before they run.
-        engine::ecsSystemAddDeferred(100, &engine::physicsSystem);
-        engine::ecsSystemAddDeferred(100, &engine::flyingCameraSystem);
-        // Third-person player: spawns at the point set by loadWorld (the gltf
-        // model is already placed there) and takes the camera in player mode.
-        engine::ecsSystemAddDeferred(100, &engine::playerSystem);
         settingsOpenFromMenu = 0;  // the menu goes away; update() must not re-show it
+        if (engine::rmluiDisabled()) {
+            // No RMLUI: no loading screen to show — load + transition directly.
+            gameSystem.loadWorld();
+            gameSystem.finishWorldLoad();
+            return;
+        }
+        // Show the loading screen IMMEDIATELY (synchronously): the click
+        // frame's render already shows it, so there is no menu-lag frame and
+        // no gap before the screen. The menu document is hidden in the same
+        // frame (no blank frame) and both systems are swapped next frame
+        // (deferred, lifecycle bookkeeping). The loading screen runs the
+        // (synchronous) world load after it has rendered and swaps in the
+        // world once the minimum display time has passed.
+        loadingGuiShowNow();
+        if (document) rmlHideDocument(document);
+        engine::guiManagerAddGuiNextFrame(&loadingGui);
         engine::guiManagerRemoveGuiNextFrame(&mainMenuGui);
-        // the old engine showed the camera + player debug readouts + player
-        // actions panel while in the world
-        engine::guiManagerAddGuiNextFrame(&cameraGui);
-        engine::guiManagerAddGuiNextFrame(&playerGui);
-        engine::guiManagerAddGuiNextFrame(&playerActionsGui);
     }
 
     static void exitGame(void) {
@@ -109,16 +120,17 @@ namespace game {
 
     static int luaPlayGame(void* _) {
         (void)_;
-        // Hide the document synchronously so it can't take a second click while
-        // the state tears down; the actual document unload happens on the next
-        // frame via removed() (safe to call mid-RML-event).
-        rmlHideDocument(document);
+        // No synchronous hide: the menu document is removed next frame (deferred
+        // in enterWorld), so this frame still renders the menu — hiding it now
+        // would leave a blank frame before the loading screen shows. A second
+        // click is guarded by worldLoadPending.
         enterWorld();
         return 0;
     }
 
     void MainMenuGui::added() {
         settingsOpenFromMenu = 0;
+        worldLoadPending     = 0;
         engine::luaRegisterFunction("settingsOpen", luaSettingsOpen);
         engine::luaRegisterFunction("creditsOpen", luaCreditsOpen);
         engine::luaRegisterFunction("playGame", luaPlayGame);

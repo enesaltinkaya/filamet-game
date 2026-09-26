@@ -70,6 +70,18 @@ bool gltfLoadAnimations(const char* pakPath) {
     return gltfLoadAnimationsDiligent(pakPath);
 }
 
+void gltfTextureCachePrewarm(void) {
+    gltfTextureCachePrewarmDiligent();
+}
+
+void gltfModelBytesPrewarmLaunch(const char** paths, int count) {
+    gltfModelBytesPrewarmLaunchDiligent(paths, count);
+}
+
+void gltfModelBytesPrewarmWait(void) {
+    gltfModelBytesPrewarmWaitDiligent();
+}
+
 u32 gltfAnimationCount(void) {
     return gltfAnimationCountDiligent();
 }

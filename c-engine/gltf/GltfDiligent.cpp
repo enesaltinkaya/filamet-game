@@ -10,6 +10,7 @@
 #include "renderer/diligent/TaaDiligent.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/texture/TextureManager.h"
+#include "thread/Thread.h"
 
 #include <Graphics/GraphicsEngine/interface/Buffer.h>
 #include <Graphics/GraphicsEngine/interface/DeviceContext.h>
@@ -53,6 +54,14 @@ using namespace Diligent;
 using engine::renderer::diligent::device;
 using engine::renderer::diligent::context;
 using engine::renderer::diligent::swapChain;
+
+static bool loadTimingOn(void) {
+    static const bool on = [] {
+        const char* e = getenv("ENGINE_LOAD_TIMING");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
 
 static std::unique_ptr<GLTF::Model> model;
 static std::unique_ptr<GLTF::ModelTransforms> transforms;
@@ -687,9 +696,14 @@ bool gltfInitDiligent(void) {
 // pak assets may be plain glb or zstd-compressed glb (sniffed by magic).
 // tinygltf picks its GLB-vs-JSON parser from the FileName EXTENSION, so the
 // loader stages a "<path>.glb" name while the callback serves the real pak
-// entry (g_currentModelPakPath) — models ship as <name>.zstd (compressed glb).
-static const char* g_currentModelPakPath = nullptr;
+// entry — models ship as <name>.zstd (compressed glb). The callback captures
+// the path per load (the parallel world load runs several of these at once).
+//
+// The byte cache is shared across the load worker threads: the mutex guards
+// the map. Each path is loaded by exactly one thread, so the emplace is
+// race-free in practice; the lock protects the map structure itself.
 static std::map<std::string, std::vector<unsigned char>> glbByteCache;
+static pthread_mutex_t glbByteCacheMtx = PTHREAD_MUTEX_INITIALIZER;
 
 // External model textures (images/models/<model>/<name>_<semantic>.ktx2, the
 // export pipeline's toktx output). Diligent's own KTX loader rejects KTX2
@@ -748,11 +762,66 @@ static void gltfTextureCacheFill(void) {
     utils::info("gltf: texture cache filled with %zu external ktx2", added);
 }
 
+// Startup prewarm: create the GPU ITextures for the external model ktx2 (the
+// decode already happened in textureManagerInit). Called on the render thread
+// during renderer init so the one-time GPU upload is off the world-load
+// critical path. Idempotent — gltfTextureCacheFill fills once.
+void gltfTextureCachePrewarmDiligent(void) {
+    gltfTextureCacheFill();
+}
+
+struct GltfBytesPrewarmJob {
+    const char* path;
+    std::string error;
+};
+
+static void gltfBytesPrewarmWork(void* arg) {
+    GltfBytesPrewarmJob* job = static_cast<GltfBytesPrewarmJob*>(arg);
+    std::vector<unsigned char> data;
+    gltfReadModelBytesDiligent(job->path, data, job->error);
+}
+
+// Reads + zstd-decompresses the model pak bytes on the thread pool (parallel),
+// filling the byte cache so the subsequent Model loads skip the I/O + zstd and
+// go straight to the tinygltf parse. The zstd of the smaller models overlaps
+// with the largest model's zstd on the pool. Launch + wait are split so the
+// render thread can do GPU work (the texture cache fill) while the pool runs
+// the CPU reads. The jobs vector lives in the static below for the wait.
+static std::vector<GltfBytesPrewarmJob> gltfBytesPrewarmJobs;
+
+void gltfModelBytesPrewarmLaunchDiligent(const char** paths, int count) {
+    gltfBytesPrewarmJobs.clear();
+    if (count <= 0) {
+        return;
+    }
+    gltfBytesPrewarmJobs.resize(count);
+    for (int i = 0; i < count; i++) {
+        gltfBytesPrewarmJobs[i].path = paths[i];
+        utils::threadPoolAddWork(nullptr, gltfBytesPrewarmWork, &gltfBytesPrewarmJobs[i]);
+    }
+}
+
+void gltfModelBytesPrewarmWaitDiligent(void) {
+    utils::threadPoolWait(nullptr);
+    for (const GltfBytesPrewarmJob& job : gltfBytesPrewarmJobs) {
+        if (!job.error.empty()) {
+            utils::warn("gltf: bytes prewarm failed for %s: %s",
+                    job.path, job.error.c_str());
+        }
+    }
+    gltfBytesPrewarmJobs.clear();
+}
+
 bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& data, std::string& error) {
-    const auto cached = glbByteCache.find(path);
-    if (cached != glbByteCache.end()) {
-        data = cached->second;
-        return true;
+    {
+        pthread_mutex_lock(&glbByteCacheMtx);
+        const auto cached = glbByteCache.find(path);
+        if (cached != glbByteCache.end()) {
+            data = cached->second;
+            pthread_mutex_unlock(&glbByteCacheMtx);
+            return true;
+        }
+        pthread_mutex_unlock(&glbByteCacheMtx);
     }
     utils::String bytes = utils::dataManagerRead(path);
     if (!bytes.data) {
@@ -760,9 +829,11 @@ bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& da
         return false;
     }
     static const unsigned char kZstdMagic[4] = {0x28, 0xB5, 0x2F, 0xFD};
+    std::vector<unsigned char> result;
     if (bytes.size >= 4 && std::memcmp(bytes.data, kZstdMagic, 4) == 0) {
         const unsigned long long raw = ZSTD_getFrameContentSize(bytes.data, bytes.size);
         if (raw == ZSTD_CONTENTSIZE_ERROR || raw == ZSTD_CONTENTSIZE_UNKNOWN) {
+            utils::stringDestroy(&bytes);
             error = std::string("bad zstd frame in ") + path;
             return false;
         }
@@ -775,62 +846,54 @@ bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& da
             return false;
         }
         decompressed.resize(written);
-        data = std::move(decompressed);
-        glbByteCache.emplace(path, data);
-        return true;
+        result = std::move(decompressed);
+    } else {
+        result.assign(reinterpret_cast<const unsigned char*>(bytes.data),
+                reinterpret_cast<const unsigned char*>(bytes.data) + bytes.size);
+        utils::stringDestroy(&bytes);
     }
-    data.assign(reinterpret_cast<const unsigned char*>(bytes.data),
-            reinterpret_cast<const unsigned char*>(bytes.data) + bytes.size);
-    utils::stringDestroy(&bytes);
-    glbByteCache.emplace(path, data);
+    pthread_mutex_lock(&glbByteCacheMtx);
+    glbByteCache.emplace(path, result);
+    pthread_mutex_unlock(&glbByteCacheMtx);
+    data = std::move(result);
     return true;
 }
 
+// Thread-safe: the read callback captures the pak path per load and the byte
+// cache is mutex-guarded, so several of these may run on worker threads at
+// once.
 static std::unique_ptr<GLTF::Model> loadModelBytes(const char* pakPath, std::string& error,
         IRenderDevice* loadDevice = nullptr, IDeviceContext* loadContext = nullptr) {
     GLTF::ModelCreateInfo modelCI;
     modelCI.ComputeBoundingBoxes = true;
     const std::string stagedName = std::string(pakPath) + ".glb";
     modelCI.FileName = stagedName.c_str();
-    gltfTextureCacheFill();
     modelCI.pTextureCache = &gltfTextureCache;
-    g_currentModelPakPath = pakPath;
+    const std::string pakPathStr = pakPath;
     modelCI.ReadWholeFileCallback =
-            [](const char* /*path*/, std::vector<unsigned char>& data, std::string& cbError) -> bool {
-        return gltfReadModelBytesDiligent(g_currentModelPakPath, data, cbError);
+            [pakPathStr](const char* /*path*/, std::vector<unsigned char>& data, std::string& cbError) -> bool {
+        return gltfReadModelBytesDiligent(pakPathStr.c_str(), data, cbError);
     };
     try {
         std::unique_ptr<GLTF::Model> loaded;
-        if (loadDevice) {
-            loaded = std::make_unique<GLTF::Model>(loadDevice, loadContext, modelCI);
-        } else {
-            // CPU-only parse: the plain Model(CI) ctor never reads the file;
-            // null device/context runs the full load but skips GPU resources
-            // (textures, vertex/index buffers) — right for the animation source
+        if (!loadDevice) {
             loaded = std::make_unique<GLTF::Model>(nullptr, nullptr, modelCI);
+        } else {
+            loaded = std::make_unique<GLTF::Model>(loadDevice, loadContext, modelCI);
         }
-        g_currentModelPakPath = nullptr;
         return loaded;
     } catch (const std::exception& e) {
-        g_currentModelPakPath = nullptr;
         error = e.what();
         return nullptr;
     }
 }
 
-bool gltfLoadDiligent(const char* pakPath) {
-    if (!pbrRenderer) {
-        utils::warn("gltf: not initialized");
-        return false;
-    }
-
-    std::string error;
-    model = loadModelBytes(pakPath, error, device, context);
-    if (!model) {
-        utils::warn("gltf: GLTF::Model failed for %s (%s)", pakPath, error.c_str());
-        return false;
-    }
-
+// Post-load setup for the character model: transforms, bounds, and PBR
+// bindings. Stores the model in the global model/transforms/sceneIndex/
+// localBounds/modelBindings slots. The model's GPU resources must be ready.
+// Shared by the synchronous gltfLoad and the parallel world load.
+static bool characterModelSetup(std::unique_ptr<GLTF::Model> m, const char* pakPath) {
+    model = std::move(m);
     sceneIndex = std::min<Uint32>(model->DefaultSceneId, (Uint32)model->Scenes.size() - 1);
     transforms = std::make_unique<GLTF::ModelTransforms>();
     model->ComputeTransforms(sceneIndex, *transforms, float4x4::Identity());
@@ -876,13 +939,27 @@ bool gltfLoadDiligent(const char* pakPath) {
     return true;
 }
 
-static bool sceneModelLoad(StaticSceneModel& entry, const char* pakPath) {
-    std::string error;
-    entry.model = loadModelBytes(pakPath, error, device, context);
-    if (!entry.model) {
-        utils::warn("gltf: scene model GLTF::Model failed for %s (%s)", pakPath, error.c_str());
+bool gltfLoadDiligent(const char* pakPath) {
+    if (!pbrRenderer) {
+        utils::warn("gltf: not initialized");
         return false;
     }
+    gltfTextureCacheFill();
+    std::string error;
+    auto m = loadModelBytes(pakPath, error, device, context);
+    if (!m) {
+        utils::warn("gltf: GLTF::Model failed for %s (%s)", pakPath, error.c_str());
+        return false;
+    }
+    return characterModelSetup(std::move(m), pakPath);
+}
+
+// Post-load setup for a scene model (terrain/props): transforms, bounds, and
+// PBR resource bindings. The model's GPU resources must already be ready.
+// Shared by the synchronous sceneModelLoad and the parallel world load.
+static bool sceneModelSetup(StaticSceneModel& entry, std::unique_ptr<GLTF::Model> model,
+        const char* pakPath) {
+    entry.model = std::move(model);
     entry.pakPath = pakPath;
     entry.sceneIndex = std::min<Uint32>(entry.model->DefaultSceneId, (Uint32)entry.model->Scenes.size() - 1);
     entry.transforms = std::make_unique<GLTF::ModelTransforms>();
@@ -897,6 +974,17 @@ static bool sceneModelLoad(StaticSceneModel& entry, const char* pakPath) {
             entry.localBounds.Min.z, entry.localBounds.Max.x, entry.localBounds.Max.y,
             entry.localBounds.Max.z);
     return true;
+}
+
+static bool sceneModelLoad(StaticSceneModel& entry, const char* pakPath) {
+    gltfTextureCacheFill();
+    std::string error;
+    auto m = loadModelBytes(pakPath, error, device, context);
+    if (!m) {
+        utils::warn("gltf: scene model GLTF::Model failed for %s (%s)", pakPath, error.c_str());
+        return false;
+    }
+    return sceneModelSetup(entry, std::move(m), pakPath);
 }
 
 bool gltfSceneLoadDiligent(const char* pakPath) {
@@ -1820,18 +1908,12 @@ void gltfDestroyDiligent(void) {
 // carrying the same skeleton + all clips but no GPU resources (CPU-only
 // Model load). Node indices must line up with the visible model's — both are
 // exported from the same blend by scripts/export-models.sh. ──
-bool gltfLoadAnimationsDiligent(const char* pakPath) {
-    if (!model) {
-        utils::warn("gltf: load the character model before the animation source (%s)", pakPath);
-        return false;
-    }
-
-    std::string error;
-    animSource = loadModelBytes(pakPath, error);
-    if (!animSource) {
-        utils::warn("gltf: animation source failed for %s (%s)", pakPath, error.c_str());
-        return false;
-    }
+// Post-load setup for the animation source: scene index, pose buffers, and
+// the skeleton match check against the character model. The character model
+// (model) must already be set up. Shared by gltfLoadAnimations and the
+// parallel world load.
+static bool animSourceSetup(std::unique_ptr<GLTF::Model> m, const char* pakPath) {
+    animSource = std::move(m);
     animSourceSceneIndex =
             std::min<Uint32>(animSource->DefaultSceneId, (Uint32)animSource->Scenes.size() - 1);
     animPoseA = std::make_unique<GLTF::ModelTransforms>();
@@ -1845,9 +1927,23 @@ bool gltfLoadAnimationsDiligent(const char* pakPath) {
         animPoseB.reset();
         return false;
     }
-
     utils::info("gltf: animation source %s — %zu clips", pakPath, animSource->Animations.size());
     return true;
+}
+
+bool gltfLoadAnimationsDiligent(const char* pakPath) {
+    if (!model) {
+        utils::warn("gltf: load the character model before the animation source (%s)", pakPath);
+        return false;
+    }
+    gltfTextureCacheFill();
+    std::string error;
+    auto m = loadModelBytes(pakPath, error);
+    if (!m) {
+        utils::warn("gltf: animation source failed for %s (%s)", pakPath, error.c_str());
+        return false;
+    }
+    return animSourceSetup(std::move(m), pakPath);
 }
 
 static GLTF::Model* animationModel(void) {

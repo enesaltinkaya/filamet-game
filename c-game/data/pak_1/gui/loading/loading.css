@@ -1,0 +1,32 @@
+/* Port of the old engine's loading.css: a full-black screen with the stage
+ * text centred. The world load is synchronous in this engine, so the stage
+ * text is static (the document is up for the ~0.3 s load, then the world). */
+body {
+  background-color: #000000;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.main {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: #fff;
+  font-size: 2rem;
+  font-family: "Montserrat";
+  font-weight: 300;
+  letter-spacing: 0.05em;
+}
+
+.stage {
+  margin-bottom: 2rem;
+}
