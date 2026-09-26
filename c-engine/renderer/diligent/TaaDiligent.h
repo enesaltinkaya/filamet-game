@@ -37,6 +37,12 @@ namespace engine::renderer::diligent {
 void taaInit(void);
 void taaDestroy(void);
 
+// Allocate the offscreen chain + post-FX targets at renderer init (menu
+// time) so the first world frame skips the device allocations. No render
+// happens — the TAA history stays pristine (frame-index continuity resets
+// it on the first real frame).
+void taaWarmup(void);
+
 // applyGraphicsSettings mapping: taaEnabled/taaWeight/renderScale from the
 // graphics settings. Safe to call any time (also mid-run from the settings
 // page). renderScale sizes the offscreen world chain (the post-world blit

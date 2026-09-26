@@ -1,6 +1,9 @@
 #include "renderer/diligent/ShaderCache.h"
 
+#include "renderer/diligent/DiligentRenderer.h"
+
 #include "Common/interface/RefCntAutoPtr.hpp"
+#include "Graphics/GraphicsEngine/interface/PipelineState.h"
 #include "Graphics/GraphicsEngine/interface/RenderDevice.h"
 #include "Graphics/GraphicsEngine/interface/Shader.h"
 #include "FileStream.h"
@@ -59,10 +62,15 @@ bool writeWhole(const char* path, const void* data, size_t size) {
     return rename(tmp, path) == 0;
 }
 
-std::string cachePath(u64 hash) {
+std::string cachePath(Diligent::IRenderDevice* dev, u64 hash) {
     char file[32];
     snprintf(file, sizeof(file), "%016llx.spv", (unsigned long long)hash);
-    std::string dir = std::string(utils::platform.dataDirectory) + "shadercache";
+    std::string slug = dev ? dev->GetAdapterInfo().Description : "unknown";
+    for (char& c : slug)
+        if (!isalnum((unsigned char)c))
+            c = '_';
+    std::string dir = std::string(utils::platform.dataDirectory) + "shadercache" +
+                      utils::platform.seperator + slug;
     utils::createDirectory((dir + utils::platform.seperator).c_str());
     return dir + utils::platform.seperator + file;
 }
@@ -117,7 +125,7 @@ Diligent::IShader* shaderCacheCreate(Diligent::IRenderDevice* dev,
     }
     hash = fnv1a(key.data(), key.size(), hash);
 
-    const std::string path = cachePath(hash);
+    const std::string path = cachePath(dev, hash);
     const bool cacheEnabled = keyValid && getenv("ENGINE_NO_SHADER_CACHE") == nullptr;
 
     if (cacheEnabled) {
@@ -163,6 +171,26 @@ Diligent::IShader* shaderCacheCreate(Diligent::IRenderDevice* dev,
     }
     shader->AddRef();
     return shader;
+}
+
+extern "C" Diligent::RefCntAutoPtr<Diligent::IShader> fxShaderCacheCreate(Diligent::IRenderDevice* dev,
+                                                                          Diligent::ShaderCreateInfo& ci) {
+    return Diligent::RefCntAutoPtr<Diligent::IShader>(shaderCacheCreate(dev, ci, nullptr));
+}
+
+extern "C" Diligent::RefCntAutoPtr<Diligent::IPipelineState> fxPipelineStateCreate(
+        Diligent::IRenderDevice* dev, Diligent::GraphicsPipelineStateCreateInfo& ci) {
+    ci.pPSOCache = psoCache();
+    Diligent::RefCntAutoPtr<Diligent::IPipelineState> pso;
+    dev->CreateGraphicsPipelineState(ci, &pso);
+    return pso;
+}
+
+extern "C" void fxPipelineStateCreateEx(Diligent::IRenderDevice* dev,
+                                        Diligent::GraphicsPipelineStateCreateInfo& ci,
+                                        Diligent::IPipelineState** ppPSO) {
+    ci.pPSOCache = psoCache();
+    dev->CreateGraphicsPipelineState(ci, ppPSO);
 }
 
 }

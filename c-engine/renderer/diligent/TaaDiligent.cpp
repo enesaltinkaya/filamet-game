@@ -1197,13 +1197,23 @@ void taaOnResized(void) {
     destroyTargets();
 }
 
-void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
-    if (!postFXContext || !taa || !cameraCB) {
-        return;
-    }
+static TemporalAntiAliasing::FEATURE_FLAGS taaFrameFlags(void) {
+    static const bool adaptiveClamp = [] {
+        if (const char* env = getenv("ENGINE_TAA_ADAPTIVE_CLAMP")) return atoi(env) != 0;
+        return true;
+    }();
+    return TemporalAntiAliasing::FEATURE_FLAG_GAUSSIAN_WEIGHTING |
+           TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER |
+           TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE |
+           (adaptiveClamp ? TemporalAntiAliasing::FEATURE_FLAG_ADAPTIVE_CLAMP
+                          : TemporalAntiAliasing::FEATURE_FLAG_NONE);
+}
 
-    frameIdx++;
-
+// One-time resource allocation (offscreen chain + post-FX shared/TAA/SSAO/
+// SSR/Bloom targets). Idempotent per size and free of camera/scene inputs,
+// so taaWarmup runs it at renderer init: the first world frame then skips
+// the device allocations (the 64 MB pages it used to take mid-entry).
+static void taaEnsureFrameResources(IDeviceContext* ctx) {
     // Resolution scale: the world renders into the offscreen chain at
     // scSize * renderScale; the post-world blit (or CAS) upsamples it to the
     // backbuffer. The UI passes keep drawing at full swapchain resolution.
@@ -1230,20 +1240,30 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
     // Prepare the accumulators even while disabled so the frame-index
     // continuity check inside TAA resets the history on re-enable, and so
     // GetJitterOffset is live on the first enabled frame.
-    static const bool adaptiveClamp = [] {
-        if (const char* env = getenv("ENGINE_TAA_ADAPTIVE_CLAMP")) return atoi(env) != 0;
-        return true;
-    }();
-    const TemporalAntiAliasing::FEATURE_FLAGS taaFlags =
-            TemporalAntiAliasing::FEATURE_FLAG_GAUSSIAN_WEIGHTING |
-            TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER |
-            TemporalAntiAliasing::FEATURE_FLAG_YCOCG_COLOR_SPACE |
-            (adaptiveClamp ? TemporalAntiAliasing::FEATURE_FLAG_ADAPTIVE_CLAMP
-                           : TemporalAntiAliasing::FEATURE_FLAG_NONE);
-    taa->PrepareResources(device, ctx, postFXContext.get(), taaFlags);
+    taa->PrepareResources(device, ctx, postFXContext.get(), taaFrameFlags());
     ssaoFrameBegin(ctx);
     ssrFrameBegin(ctx);
     bloomFrameBegin(ctx);
+}
+
+void taaWarmup(void) {
+    if (!postFXContext || !taa || !cameraCB || !context) {
+        return;
+    }
+    taaEnsureFrameResources(context);
+}
+
+void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
+    if (!postFXContext || !taa || !cameraCB) {
+        return;
+    }
+
+    frameIdx++;
+
+    taaEnsureFrameResources(ctx);
+    if (!sceneColorTex) {
+        return;
+    }
 
     // Jitter this frame's projection (TAA picks the Halton phase for the
     // CURRENT frame — PrepareResources above stamped the frame index).

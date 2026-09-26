@@ -1,9 +1,11 @@
 #!/bin/bash
 # Model exporter (port of the old engine's 1-blender-scene.sh, minus jolt):
 #   .blend -> glb (blender, scripts/blender-scene.py) -> packed glb (gltfpack)
-#          -> zstd -10 -> c-game/data/pak_1/models/<name>.zstd
-# The game reads models/<name>.zstd from pak_1.pak; the loader sniffs the
-# zstd magic, so .zstd is purely a naming choice (no more misleading .dat).
+#          -> zstd -10 (or raw, convertModel <blend> 1) -> c-game/data/pak_1/models/
+# The loader sniffs the zstd magic, so raw .glb and .zstd both load. Raw is
+# for the big mesh models: the zstd -10 decode is ~90 ms single core on the
+# load critical path and the paks are zip-stored anyway (plans/world-load-2.md
+# phase B) — eve/animations stay zstd (their decode is < 5 ms).
 # Repack after running: ./scripts/build.sh (data.sh rebuilds pak_1.pak when
 # its content md5 changed).
 set -e
@@ -30,6 +32,9 @@ GLTFPACK_FLAGS=(-noq -ke -kn -kv -km -af 30)
 
 convertModel() {
     local blendFile="$1"
+    local raw="${2:-0}"
+    local ext="zstd"
+    [ "$raw" = "1" ] && ext="glb"
     local name
     name="$(basename "${blendFile}")"
     name="${name%.blend}"
@@ -37,8 +42,8 @@ convertModel() {
     local mtime
     mtime="$(date -r "$blendFile" "+%Y%m%d%H%M%S")"
 
-    if [ -f "$OUT_DIR/${name}.zstd" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$mtime" ]; then
-        echo "up to date: ${name}.zstd"
+    if [ -f "$OUT_DIR/${name}.${ext}" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$mtime" ]; then
+        echo "up to date: ${name}.${ext}"
         return
     fi
 
@@ -122,10 +127,17 @@ convertModel() {
         echo "none"
     fi
 
-    echo -n "zstd... "
-    zstd -q -10 --rm -f "$glb"
-    mv "${glb}.zst" "$OUT_DIR/${name}.zstd"
-    echo "$(du -sh "$OUT_DIR/${name}.zstd" | cut -f1)"
+    if [ "$raw" = "1" ]; then
+        echo -n "raw glb... "
+        rm -f "$OUT_DIR/${name}.zstd"
+        cp "$glb" "$OUT_DIR/${name}.glb"
+        echo "$(du -sh "$OUT_DIR/${name}.glb" | cut -f1)"
+    else
+        echo -n "zstd... "
+        zstd -q -10 --rm -f "$glb"
+        mv "${glb}.zst" "$OUT_DIR/${name}.zstd"
+        echo "$(du -sh "$OUT_DIR/${name}.zstd" | cut -f1)"
+    fi
 
     echo "$mtime" > "$stamp"
 }
@@ -134,4 +146,4 @@ mkdir -p "$SCRIPTS_TMP"
 
 convertModel "$ASSETS_DIR/Scenes/Characters/eve.blend"
 convertModel "$ASSETS_DIR/Scenes/Characters/animations.blend"
-convertModel "$ASSETS_DIR/Scenes/test2.blend"
+convertModel "$ASSETS_DIR/Scenes/test2.blend" 1

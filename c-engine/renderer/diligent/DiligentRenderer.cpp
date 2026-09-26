@@ -421,6 +421,7 @@ namespace engine::renderer::diligent {
             ssaoInit();
             ssrInit();
             bloomInit();
+            taaWarmup();
             iblDiligentInit();
             return true;
         }

@@ -36,7 +36,17 @@ CreateGraphicsPipelineState(PsoCI, ppPSO)` (2435). GLTF_PBR_Renderer.cpp
   cpp-thirdparty/diligent/build.sh already sed-strips the wayland define
   idempotently after every update.
 
-## Phase A — Cache the PBR lib's shaders + PSOs (−~240 ms first frame) ✦ biggest
+## Phase A — Cache the PBR lib's shaders + PSOs (−~240 ms first frame) ✦ biggest — DONE
+
+Result (2026-09-26): warm `world loaded → first drawn frame` 534–601 →
+294.8 ms. PSO file 37 KB → 118 KB (PBR entries). Screenshot A/B identical
+(the only >128 diff pixels are the HUD ms readout). One design note: the
+fallback definitions must NOT be inline in the header — an inline body is
+inlined into the FX translation unit and the game's strong symbols are
+never referenced (silent no-op, first-frame timing gives it away). They
+live in fxpbr_cache_fallback.cpp as a separate archive member the linker
+pulls only when unresolved (samples); the game links libc-engine.a before
+libDiligentFX.a, so its strong definitions win.
 
 Completes old-plan phase 3. The world pass (player + 41 props material
 SRBs) runs through DiligentFX `PBR_Renderer`, which compiles RenderPBR
@@ -78,7 +88,12 @@ of PBR_Renderer.cpp can break the seds; keep them anchored on the exact
 call strings and let a failed no-op sed show up as a regression in the
 first-frame timing.
 
-## Phase B — Ship props raw in the pak (−~80 ms loadWorld)
+## Phase B — Ship props raw in the pak (−~80 ms loadWorld) — DONE
+
+Result (2026-09-26): `bytes prewarm + texture fill` 116–125 → 62.3 ms,
+loadWorld total 273 → 216.6 ms. Pak 281 → 360 MB. test2 exports as raw
+`models/test2.glb` (convertModel <blend> 1); loader's zstd-magic sniff takes
+the raw path untouched. Screenshot A/B identical.
 
 `zstd -10` on props buys 84 MB of disk at the cost of 88 ms of decode on
 the load critical path (measured; -3 is no faster). The pak is zip-stored
@@ -97,7 +112,22 @@ Steps:
 Validation: `bytes prewarm + texture fill` 120 → ~30–40 ms; loadWorld
 total −~80 ms; screenshot A/B control pair.
 
-## Phase C — Warm the TAA chain + world RTs during the menu (−~50–150 ms first frame)
+## Phase C — Warm the TAA chain + world RTs during the menu (−~50–150 ms first frame) — DONE
+
+Result (2026-09-26): the offscreen chain + post-FX targets (the 64 MB
+device-local pages) now allocate at renderer init (menu time); the first
+world frame's wall time did NOT drop (290–298 ms, noise) — the allocation
+wasn't the dominant first-frame cost. What remains there is ~42 cached-PSO
+deserializations + pass inits + the first GPU frame (all 28 PBR shaders are
+disk hits). Kept: no mid-entry allocation, and taaDestroy only runs at
+renderer teardown, so the chain already survives menu returns (no destroy-
+path change needed). Screenshot A/B identical.
+
+Structure: taaFrameBegin's allocation prologue extracted into
+`taaEnsureFrameResources` (idempotent per size, no camera/scene inputs);
+`taaWarmup()` runs it from DiligentRenderer init after taa/ssao/ssr/bloom
+Init. The TAA history stays pristine — PrepareResources alone never touches
+it, and the frame-index continuity check resets it on the first real frame.
 
 `taaInit()` runs at renderer init, but the TAA offscreen history chain
 (2880×1627 RGBA16F set) and the world RTs (taa color/motion/normal +
