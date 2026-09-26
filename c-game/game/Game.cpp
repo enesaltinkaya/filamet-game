@@ -137,7 +137,7 @@ namespace game {
         }
         const char* animPath = getenv("ENGINE_NO_ANIM") ? nullptr : "models/animations.zstd";
         const char* prewarmPaths[4] = {
-                "models/terrain/oghuzlands.zstd", "models/test2.glb", gltfModelPath,
+                "models/terrain/oghuzlands.zstd", "models/test2.zstd", gltfModelPath,
                 animPath ? animPath : "models/terrain/oghuzlands.zstd"};
         engine::gltf::gltfModelBytesPrewarmLaunch(prewarmPaths, 4);
         engine::gltf::gltfTextureCachePrewarm();
@@ -150,7 +150,7 @@ namespace game {
                 engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
         ltLog("terrain");
         const bool propsUp = terrainUp &&
-                engine::gltf::gltfPropsLoad("models/test2.glb");
+                engine::gltf::gltfPropsLoad("models/test2.zstd");
         ltLog("props");
         const bool charUp = propsUp &&
                 engine::gltf::gltfLoad(gltfModelPath);

@@ -3,9 +3,9 @@
 #   .blend -> glb (blender, scripts/blender-scene.py) -> packed glb (gltfpack)
 #          -> zstd -10 (or raw, convertModel <blend> 1) -> c-game/data/pak_1/models/
 # The loader sniffs the zstd magic, so raw .glb and .zstd both load. Raw is
-# for the big mesh models: the zstd -10 decode is ~90 ms single core on the
-# load critical path and the paks are zip-stored anyway (plans/world-load-2.md
-# phase B) — eve/animations stay zstd (their decode is < 5 ms).
+# opt-in: for test2 it trades ~60 ms of load-critical-path decode for +84 MB
+# of pak size — we kept the compression (plans/world-load-2.md phase B,
+# reverted on user preference).
 # Repack after running: ./scripts/build.sh (data.sh rebuilds pak_1.pak when
 # its content md5 changed).
 set -e
@@ -134,6 +134,7 @@ convertModel() {
         echo "$(du -sh "$OUT_DIR/${name}.glb" | cut -f1)"
     else
         echo -n "zstd... "
+        rm -f "$OUT_DIR/${name}.glb"
         zstd -q -10 --rm -f "$glb"
         mv "${glb}.zst" "$OUT_DIR/${name}.zstd"
         echo "$(du -sh "$OUT_DIR/${name}.zstd" | cut -f1)"
@@ -146,4 +147,4 @@ mkdir -p "$SCRIPTS_TMP"
 
 convertModel "$ASSETS_DIR/Scenes/Characters/eve.blend"
 convertModel "$ASSETS_DIR/Scenes/Characters/animations.blend"
-convertModel "$ASSETS_DIR/Scenes/test2.blend" 1
+convertModel "$ASSETS_DIR/Scenes/test2.blend"

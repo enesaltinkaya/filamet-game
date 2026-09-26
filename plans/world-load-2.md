@@ -88,12 +88,15 @@ of PBR_Renderer.cpp can break the seds; keep them anchored on the exact
 call strings and let a failed no-op sed show up as a regression in the
 first-frame timing.
 
-## Phase B — Ship props raw in the pak (−~80 ms loadWorld) — DONE
+## Phase B — Ship props raw in the pak (−~80 ms loadWorld) — REVERTED (user preference)
 
-Result (2026-09-26): `bytes prewarm + texture fill` 116–125 → 62.3 ms,
-loadWorld total 273 → 216.6 ms. Pak 281 → 360 MB. test2 exports as raw
-`models/test2.glb` (convertModel <blend> 1); loader's zstd-magic sniff takes
-the raw path untouched. Screenshot A/B identical.
+Landed and measured 2026-09-26 (`bytes prewarm + texture fill` 116–125 →
+62.3 ms, loadWorld 273 → 216.6 ms, pak 281 → 360 MB), then reverted: the
+user prefers the compressed pak over the ~60 ms. test2 ships as zstd again;
+the raw mode (`convertModel <blend> 1`) stays in export-models.sh as an
+opt-in. Both export branches now remove the other variant's stale file
+(the first revert shipped a 421 MB pak containing both test2.glb AND
+test2.zstd until the stray .glb was deleted).
 
 `zstd -10` on props buys 84 MB of disk at the cost of 88 ms of decode on
 the load critical path (measured; -3 is no faster). The pak is zip-stored
@@ -198,10 +201,9 @@ worth it while phases A–D are open. Reassess last.
 
 ## Budget (measured end state, 2026-09-26)
 
-    loadWorld   280–304 ms → 228–252 ms  (B −~60, D −~10)
-    first frame 534–601 ms → 298–306 ms  (A −~240; C moved the allocation
+    loadWorld   280–304 ms → ~285 ms    (D −~10; B reverted)
+    first frame 534–601 ms → 293–306 ms (A −~240; C moved the allocation
                                           to boot, no wall-time change)
-    disk        +84 MB pak (B)
     VRAM        +~150 MB held during menu (C)
 
 Remaining first-frame floor: ~42 cached-PSO deserializations + IBL 42 SRBs
