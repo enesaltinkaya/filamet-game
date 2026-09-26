@@ -148,6 +148,16 @@ bytes, `splatTerrainLoadDiligent` consumes them; free after splat load (or
 keep until `gltfDestroy`). Keep the jansson parse (it extracts different
 data than the Diligent loader) — only the read+decompress is deduped.
 
+DONE 2026-09-26. `glbByteCache` (map<path, decompressed bytes>) lives in
+gltfReadModelBytesDiligent itself — the single read+decompress choke point —
+so the Diligent loader callback fills it and splatTerrainLoadDiligent (plus
+the runtime surface probe) hit it; cleared on gltfDestroyDiligent. Measured
+(ENGINE_LOAD_TIMING, warm): splatTerrainLoad 78.2→62–69 ms (−~13 ms — the
+5.5 MB zstd decompress+pak read was cheaper than the 30–50 ms projected),
+loadWorld total 333→322–334 ms (props parse noise dominates). Screenshot
+control pair at the parked vantage 0.0127 % px Δ>30 (= control floor) —
+render path untouched (same bytes to both parsers).
+
 ## Phase 5 — Defer/parallelize the sync load (reassess after 1–4)
 
 If phases 1–4 land, projected sync load ≈ 250–300 ms; a frozen menu for

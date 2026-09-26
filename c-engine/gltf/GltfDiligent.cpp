@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -688,6 +689,7 @@ bool gltfInitDiligent(void) {
 // loader stages a "<path>.glb" name while the callback serves the real pak
 // entry (g_currentModelPakPath) — models ship as <name>.zstd (compressed glb).
 static const char* g_currentModelPakPath = nullptr;
+static std::map<std::string, std::vector<unsigned char>> glbByteCache;
 
 // External model textures (images/models/<model>/<name>_<semantic>.ktx2, the
 // export pipeline's toktx output). Diligent's own KTX loader rejects KTX2
@@ -747,6 +749,11 @@ static void gltfTextureCacheFill(void) {
 }
 
 bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& data, std::string& error) {
+    const auto cached = glbByteCache.find(path);
+    if (cached != glbByteCache.end()) {
+        data = cached->second;
+        return true;
+    }
     utils::String bytes = utils::dataManagerRead(path);
     if (!bytes.data) {
         error = std::string("cannot read ") + path;
@@ -769,11 +776,13 @@ bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& da
         }
         decompressed.resize(written);
         data = std::move(decompressed);
+        glbByteCache.emplace(path, data);
         return true;
     }
     data.assign(reinterpret_cast<const unsigned char*>(bytes.data),
             reinterpret_cast<const unsigned char*>(bytes.data) + bytes.size);
     utils::stringDestroy(&bytes);
+    glbByteCache.emplace(path, data);
     return true;
 }
 
@@ -1772,6 +1781,7 @@ void gltfDiligentShadowDraw(Diligent::IDeviceContext* ctx,
 namespace engine::gltf {
 
 void gltfDestroyDiligent(void) {
+    glbByteCache.clear();
     modelBindings.Clear();
     bindingsValid = false;
     transforms.reset();
