@@ -10,6 +10,11 @@ volatile char engineRunning = 1;
 
 static System* gameSystem;
 static double engineStopAtNanos = 0;  // ENGINE_LOG_TIMEOUT: auto-quit for automated runs
+static double engineWorldLoadedAtNanos = 0;
+
+void engineMarkWorldLoaded(void) {
+    engineWorldLoadedAtNanos = utils::nanos();
+}
 
 void engineSetGameSystem(System* system) {
     gameSystem = system;
@@ -40,6 +45,12 @@ void engineStart(void) {
         ecsPostUpdate();
 
         renderer::rendererDraw();
+
+        if (engineWorldLoadedAtNanos) {
+            utils::info("load timing: world loaded -> first drawn frame %.1f ms",
+                    (utils::nanos() - engineWorldLoadedAtNanos) / MILLION);
+            engineWorldLoadedAtNanos = 0;
+        }
 
         utils::timerEnd();
 

@@ -28,6 +28,14 @@ namespace game {
 
     static bool worldLoaded     = false;
 
+    static bool loadTimingOn() {
+        static const bool on = [] {
+            const char* e = getenv("ENGINE_LOAD_TIMING");
+            return e && e[0] && e[0] != '0';
+        }();
+        return on;
+    }
+
     // Automated validation hook: ENGINE_CAMERA_DOLLY="vx,vy,vz" pans the camera
     // at that velocity (m/s) while the world is up. Combined with
     // ENGINE_SCREENSHOT_FRAME it screenshots a camera that has actually moved,
@@ -86,6 +94,15 @@ namespace game {
     }
 
     void GameSystem::loadWorld() {
+        const bool lt = loadTimingOn();
+        const double ltStart = lt ? utils::nanos() : 0.0;
+        double ltPrev = ltStart;
+        auto ltLog = [&](const char* phase) {
+            if (!lt) return;
+            const double now = utils::nanos();
+            utils::info("load timing: %s %.1f ms", phase, (now - ltPrev) / MILLION);
+            ltPrev = now;
+        };
         if (!worldLoaded) {
             engine::gltf::gltfInit();
             worldLoaded = true;
@@ -102,15 +119,18 @@ namespace game {
         bool terrainUp = engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
         if (terrainUp) {
             engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
+            ltLog("gltfSceneLoad");
             // Splat resources (phase 2): the same packed GLB re-parsed
             // CPU-side — per-chunk buffers + AABBs, weight UDIM arrays, detail
             // sets. No draw until the splat pass lands (tasks 2/3).
             engine::gltf::splatTerrainLoad("models/terrain/oghuzlands.zstd");
         }
+        ltLog("splatTerrainLoad");
 
         if (engine::gltf::gltfPropsLoad("models/test2.zstd")) {
             engine::physicsPropsSidecarSet("models/test2.jolt.zstd");
         }
+        ltLog("gltfPropsLoad");
 
         // Player character (eve): a zstd-compressed glb exported by
         // scripts/export-models.sh. Static spawn — a saved player row
@@ -138,6 +158,7 @@ namespace game {
         }
         if (engine::gltf::gltfInit() && engine::gltf::gltfLoad(gltfModelPath)) {
         }
+        ltLog("gltfLoad");
         // Animation source (the old engine's models/animations.dat): a second
         // glb carrying eve's skeleton + all clips (no textures). Not added to
         // the scene — gltfUpdate plays the selected clip on it and syncs the
@@ -147,6 +168,9 @@ namespace game {
             engine::gltf::gltfLoadAnimations("models/animations.zstd")) {
             engine::gltf::gltfPlayAnimation("eve_idle1", 1.0f, true);
         }
+        ltLog("gltfLoadAnimations");
+        ltPrev = ltStart;
+        ltLog("loadWorld total");
         utils::info("game: player spawn at (%.0f, %.0f, %.0f)", spawnPt[0], spawnPt[1], spawnPt[2]);
 
         // The playerSystem (added deferred by the menu) takes over the model
@@ -251,6 +275,7 @@ namespace game {
         f32 fogDensity  = 0.00035f;
         if (const char* fd = getenv("ENGINE_FOG_DENSITY")) fogDensity = (f32)atof(fd);
         engine::renderer::rendererSetFog(fogColor, fogDensity);
+        engine::engineMarkWorldLoaded();
     }
 
     void GameSystem::preUpdate() {

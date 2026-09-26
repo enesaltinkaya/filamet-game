@@ -56,6 +56,14 @@ Validation: identical screenshot A/B at the parked vantage (TAA noise floor
 ~1.8 % px, run a control pair — lessons 2026-09-09); MemoryManager log shows
 the 1 GB pages gone; createWeightArray timing drops to ≤ 30 ms.
 
+DONE 2026-09-26. Measured (ENGINE_LOAD_TIMING): createWeightArray 16.2 +
+15.1 ms (was ~310–550 ms for the phase), splatTerrainLoad 75–77 ms,
+loadWorld total ~461 ms; 14 packed layers (11 grass1 + 6 roads1 tiles, 3
+udims shared); largest MemoryManager page for the arrays now 128 MB (was
+1 GB); screenshot A/B at the parked vantage 0.01 % px Δ>30 vs 0.01–0.04 %
+same-build control floor — visually identical. The shadow PS is empty
+(no g_Weights consumer) — step 4 was a no-op.
+
 ## Phase 2 — Props + player textures as KTX2 (−~200 ms, smaller pak)
 
 `test2.zstd` (63 MB) and `eve.zstd` embed PNG textures; tinygltf →

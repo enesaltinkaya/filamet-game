@@ -7,8 +7,10 @@
 // over the group's 4 detail sets at the world-tiled detail uv (weights stay
 // at the tile-local uv — see SPLAT_DETAIL_* below). The group weights are
 // the UDIM layer (row * 10 + col, standard UDIM: file 1001 is the bottom-left
-// tile, row 0 = the smallest-v band) of a 1024^2 x 100 TEXTURE2DARRAY;
-// unshipped layers are the Noop weight (0,0,0,1) so the alpha detail
+// tile, row 0 = the smallest-v band) of a packed 1024^2 TEXTURE2DARRAY
+// (only the used udims + one trailing Noop layer); g_LayerRemap (100x1
+// R32_UINT) maps the absolute UDIM layer to the packed array layer, and
+// unshipped layers map to the Noop weight (0,0,0,1) so the alpha detail
 // (1 - w.a) leaves the base untouched there. The two groups chain over a
 // black base (base normal: flat (0,0,1) in tangent space) in REVERSE
 // splatInfo order: roads1 is the base group, grass1 the top — the loader
@@ -131,6 +133,7 @@ cbuffer cbSplatFrame
 
 Texture2DArray g_Weights0;   // splatInfo group 0 (grass1 — the top group)
 Texture2DArray g_Weights1;   // splatInfo group 1 (roads1 — the base group)
+Texture2D<uint> g_LayerRemap;  // 100x1 R32_UINT: absolute UDIM layer -> packed array layer
 Texture2D g_BaseAlbedo;       // base material albedo (tiled uv, under the splat chain)
 Texture2D g_BaseNormal;       // base material normal  (tiled uv, under the splat chain)
 Texture2D g_Detail0;         // group 0 red albedo
@@ -703,7 +706,8 @@ PSOutput main(PSSplatIn In)
     float2 tile  = clamp(floor(In.UdimUv), 0.0, 9.0);
     float2 local = clamp(In.UdimUv - tile, 0.0, 1.0);
     tile.y       = 9.0 - tile.y;
-    float layer  = tile.y * 10.0 + tile.x;
+    uint  udim   = (uint)(tile.y * 10.0 + tile.x);
+    float layer  = (float)g_LayerRemap.Load(int3(udim, 0, 0)).r;
 
     // World-space detail uv: AnchoredPos is world - g_Anchor (the VS), so the
     // absolute xz needs only the anchor add-back. Fixed reference-span tiling

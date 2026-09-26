@@ -7,4 +7,5 @@ class System;
 void engineSetGameSystem(System* system);
 void engineStart(void);
 void engineStop(void);
+void engineMarkWorldLoaded(void);
 }

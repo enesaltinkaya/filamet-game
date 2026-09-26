@@ -63,6 +63,14 @@ namespace {
 constexpr size_t WEIGHT_LAYERS = 100;  // the full UDIM grid (files 1001..1100)
 constexpr u32 WEIGHT_SIZE = 1024;
 
+bool loadTimingOn(void) {
+    static const bool on = [] {
+        const char* e = getenv("ENGINE_LOAD_TIMING");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+
 // glTF componentType values.
 constexpr int CT_BYTE = 5120;  // i8
 constexpr int CT_UBYTE = 5121;  // u8
@@ -235,44 +243,61 @@ size_t rgba8MipBytes(u32 base, int mips) {
     return total;
 }
 
-// Uploads the group's 100-layer weight array from the decoded tiles (missing
-// layers filled with the Noop weight). Subresources are mip-major
+// Uploads the group's PACKED-layer weight array: packed layer i is udim
+// packedUdims[i] (Noop content when this group does not ship that udim),
+// plus one trailing Noop layer that every unused udim remaps to via
+// g_LayerRemap. Subresources are mip-major
 // (level * ArraySize + slice), rows tight (the c-utils ktx2 decode packs
 // rgba8 levels at w*4 pitch, same assumption as diligentCreateImageTexture).
-bool createWeightArray(const std::string& name, const WeightTile* tiles, int mips,
+bool createWeightArray(const std::string& name, const WeightTile* tiles,
+        const std::vector<size_t>& packedUdims, int mips,
         ITexture** outTex, ITextureView** outView, LoadGuard* guard) {
     *outTex = nullptr;
     *outView = nullptr;
-    if (mips <= 0 || mips > 16) {
+    if (mips <= 0 || mips > 16 || packedUdims.empty()) {
         return false;
     }
+    const double t0 = loadTimingOn() ? utils::nanos() : 0.0;
+    const size_t usedLayers = packedUdims.size();
+    const size_t arrayLayers = usedLayers + 1;
     size_t levelOff[17] = {0};
     size_t layerBytesPer[16] = {0};
+    size_t noopOff[16] = {0};
     size_t total = 0;
+    size_t noopTotal = 0;
     for (int m = 0; m < mips; m++) {
         const u32 w = std::max(1u, WEIGHT_SIZE >> m);
         const u32 h = std::max(1u, WEIGHT_SIZE >> m);
         layerBytesPer[m] = u64(w) * h * 4;
         levelOff[m] = total;
-        total += layerBytesPer[m] * WEIGHT_LAYERS;
+        noopOff[m] = noopTotal;
+        total += layerBytesPer[m] * arrayLayers;
+        noopTotal += layerBytesPer[m];
+    }
+    // Noop weight (0,0,0,255) built once per mip: the alpha detail mixes in
+    // with (1 - wA), so an all-255 tile leaves the base untouched.
+    std::vector<u8> noop(noopTotal);
+    for (int m = 0; m < mips; m++) {
+        u32* dst = reinterpret_cast<u32*>(noop.data() + noopOff[m]);
+        std::fill(dst, dst + layerBytesPer[m] / 4, 0xFF000000u);
     }
     std::vector<u8> staging(total);
-    for (int m = 0; m < mips; m++) {
-        const size_t layerBytes = layerBytesPer[m];
-        for (size_t L = 0; L < WEIGHT_LAYERS; L++) {
-            u8* dst = staging.data() + levelOff[m] + L * layerBytes;
-            const WeightTile& t = tiles[L];
+    for (size_t i = 0; i < usedLayers; i++) {
+        const WeightTile& t = tiles[packedUdims[i]];
+        for (int m = 0; m < mips; m++) {
+            const size_t layerBytes = layerBytesPer[m];
+            u8* dst = staging.data() + levelOff[m] + i * layerBytes;
             if (t.valid && t.image->mipSizes.size() > (size_t)m) {
                 std::memcpy(dst, (const u8*)t.image->data + t.image->mipSizes[m], layerBytes);
             } else {
-                // Noop weight (0,0,0,255): the alpha detail mixes in with
-                // (1 - wA), so an all-255 tile leaves the base untouched.
-                std::memset(dst, 0, layerBytes);
-                for (size_t i = 0; i < layerBytes / 4; i++) {
-                    dst[i * 4 + 3] = 255;
-                }
+                std::memcpy(dst, noop.data() + noopOff[m], layerBytes);
             }
         }
+    }
+    for (int m = 0; m < mips; m++) {
+        const size_t layerBytes = layerBytesPer[m];
+        std::memcpy(staging.data() + levelOff[m] + usedLayers * layerBytes,
+                noop.data() + noopOff[m], layerBytes);
     }
 
     TextureDesc desc;
@@ -284,14 +309,14 @@ bool createWeightArray(const std::string& name, const WeightTile* tiles, int mip
     desc.Width     = WEIGHT_SIZE;
     desc.Height    = WEIGHT_SIZE;
     desc.MipLevels = (Uint32)mips;
-    desc.ArraySize = (Uint32)WEIGHT_LAYERS;
+    desc.ArraySize = (Uint32)arrayLayers;
 
     // The Vulkan backend's InitializeContentOnDevice consumes
     // TextureSubResData in layer-major order (layer * MipLevels + mip) —
     // unlike the D3D-style mip-major GetSubresIndex convention. Point each
     // entry at its (layer, mip) slice with that mip's row pitch.
-    std::vector<TextureSubResData> subres(u64(WEIGHT_LAYERS) * mips);
-    for (size_t L = 0; L < WEIGHT_LAYERS; L++) {
+    std::vector<TextureSubResData> subres(u64(arrayLayers) * mips);
+    for (size_t L = 0; L < arrayLayers; L++) {
         for (int m = 0; m < mips; m++) {
             const size_t layerBytes = layerBytesPer[m];
             const u64 rowPitch = std::max(1u, WEIGHT_SIZE >> m) * 4;
@@ -320,8 +345,12 @@ bool createWeightArray(const std::string& name, const WeightTile* tiles, int mip
     // The default view is owned by the texture (GetDefaultView does not
     // AddRef); it is released implicitly when the texture is destroyed.
     *outView = tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-    utils::info("splatTerrain: weight array '%s' 1024^2 x %zu layers x %d mips (%.0f KB)",
-            name.c_str(), WEIGHT_LAYERS, mips, (double)total / 1024.0);
+    utils::info("splatTerrain: weight array '%s' %zu packed layers of 100 udims x %d mips (%.0f KB)",
+            name.c_str(), usedLayers, mips, (double)total / 1024.0);
+    if (loadTimingOn()) {
+        utils::info("splatTerrain: weight array '%s' %.1f ms",
+                name.c_str(), (utils::nanos() - t0) / MILLION);
+    }
     return true;
 }
 
@@ -617,16 +646,17 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
     };
     std::unordered_map<std::string, DetailTex> detailCache;
     std::vector<SplatGroup> groups;
+    std::vector<std::vector<WeightTile>> groupTiles(groupNames.size());
+    std::vector<int> groupMips(groupNames.size(), 0);
+    std::vector<size_t> groupTilesLoaded(groupNames.size(), 0);
     for (size_t g = 0; g < groupNames.size(); g++) {
-        SplatGroup group;
-        group.name = groupNames[g];
-
         // Weight tiles: scan the pak for <base>/<group>/<group>.<udim>.ktx2
         // (standard UDIM numbering: layer = file - 1001).
-        std::vector<WeightTile> tiles(WEIGHT_LAYERS);
+        std::vector<WeightTile>& tiles = groupTiles[g];
+        tiles.resize(WEIGHT_LAYERS);
         {
-            std::string tileDir = splatBaseDir(pakPath) + "/" + group.name + "/";
-            std::string prefix  = tileDir + group.name + ".";
+            std::string tileDir = splatBaseDir(pakPath) + "/" + groupNames[g] + "/";
+            std::string prefix  = tileDir + groupNames[g] + ".";
             std::vector<utils::String> files = utils::dataManagerListFiles(".ktx2");
             for (utils::String& f : files) {
                 if (f.size > prefix.size() + 5 &&
@@ -661,29 +691,99 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
                 utils::stringDestroy(&f);
             }
         }
-        int mips = 0;
-        size_t tilesLoaded = 0;
         for (size_t L = 0; L < WEIGHT_LAYERS; L++) {
             if (tiles[L].valid) {
-                if (mips == 0) {
-                    mips = tiles[L].image->mips;
+                if (groupMips[g] == 0) {
+                    groupMips[g] = tiles[L].image->mips;
                 }
-                if (tiles[L].image->mips != mips) {
+                if (tiles[L].image->mips != groupMips[g]) {
                     utils::warn("splatTerrain: %s layer %zu has %d mips (first tile %d) — using Noop",
-                            group.name.c_str(), L, tiles[L].image->mips, mips);
+                            groupNames[g].c_str(), L, tiles[L].image->mips, groupMips[g]);
                     tiles[L].valid = false;
                 } else {
-                    tilesLoaded++;
+                    groupTilesLoaded[g]++;
                 }
             }
         }
-        if (mips == 0 || !createWeightArray("splat weights " + group.name, tiles.data(), mips,
-                    &group.weights, &group.weightsView, &guard)) {
-            utils::warn("splatTerrain: no usable weight tiles for group '%s'", group.name.c_str());
+        if (groupMips[g] == 0) {
+            utils::warn("splatTerrain: no usable weight tiles for group '%s'", groupNames[g].c_str());
             return fail();
         }
-        utils::info("splatTerrain: group '%s' — %zu/%zu weight tiles, %d mips", group.name.c_str(),
-                tilesLoaded, WEIGHT_LAYERS, mips);
+    }
+
+    // Packed layer layout: the union of used udims across ALL groups plus
+    // one trailing Noop layer — one shared remap serves g_Weights0/g_Weights1
+    // (a udim only some groups ship still gets a slot; the others fill it
+    // with Noop content).
+    std::vector<size_t> packedUdims;
+    u8 udimToLayer[WEIGHT_LAYERS];
+    std::memset(udimToLayer, 0xFF, sizeof(udimToLayer));
+    for (size_t u = 0; u < WEIGHT_LAYERS; u++) {
+        bool used = false;
+        for (const std::vector<WeightTile>& tiles : groupTiles) {
+            used = used || tiles[u].valid;
+        }
+        if (used) {
+            udimToLayer[u] = (u8)packedUdims.size();
+            packedUdims.push_back(u);
+        }
+    }
+    const size_t noopLayer = packedUdims.size();
+    for (size_t u = 0; u < WEIGHT_LAYERS; u++) {
+        if (udimToLayer[u] == 0xFF) {
+            udimToLayer[u] = (u8)noopLayer;
+        }
+    }
+
+    ITexture* layerRemap = nullptr;
+    ITextureView* layerRemapView = nullptr;
+    {
+        std::vector<u32> remapData(WEIGHT_LAYERS);
+        for (size_t u = 0; u < WEIGHT_LAYERS; u++) {
+            remapData[u] = udimToLayer[u];
+        }
+        TextureDesc rdesc;
+        rdesc.Name      = "splat layer remap";
+        rdesc.Type      = RESOURCE_DIM_TEX_2D;
+        rdesc.Usage     = USAGE_IMMUTABLE;
+        rdesc.BindFlags = BIND_SHADER_RESOURCE;
+        rdesc.Format    = TEX_FORMAT_R32_UINT;
+        rdesc.Width     = (Uint32)WEIGHT_LAYERS;
+        rdesc.Height    = 1;
+        rdesc.MipLevels = 1;
+        TextureSubResData rsub(remapData.data(), (Uint32)(WEIGHT_LAYERS * 4));
+        TextureData rdata;
+        rdata.pSubResources   = &rsub;
+        rdata.NumSubresources = 1;
+        rdata.pContext        = context;
+        RefCntAutoPtr<ITexture> rtex;
+        device->CreateTexture(rdesc, &rdata, &rtex);
+        if (!rtex) {
+            utils::warn("splatTerrain: layer remap texture creation failed");
+            return fail();
+        }
+        StateTransitionDesc rbar{rtex,
+                                 RESOURCE_STATE_UNKNOWN,
+                                 RESOURCE_STATE_SHADER_RESOURCE,
+                                 STATE_TRANSITION_FLAG_UPDATE_STATE};
+        context->TransitionResourceStates(1, &rbar);
+        rtex->AddRef();
+        layerRemap     = guard.trackTexture(rtex);
+        layerRemapView = rtex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    }
+
+    for (size_t g = 0; g < groupNames.size(); g++) {
+        SplatGroup group;
+        group.name = groupNames[g];
+        if (!createWeightArray("splat weights " + group.name, groupTiles[g].data(), packedUdims,
+                    groupMips[g], &group.weights, &group.weightsView, &guard)) {
+            utils::warn("splatTerrain: weight array creation failed for group '%s'",
+                    group.name.c_str());
+            return fail();
+        }
+        utils::info("splatTerrain: group '%s' — %zu/%zu weight tiles -> %zu packed layers, %d mips",
+                group.name.c_str(), groupTilesLoaded[g], WEIGHT_LAYERS, packedUdims.size(),
+                groupMips[g]);
 
         for (int ch = 0; ch < 4; ch++) {
             SplatDetail& detail = group.details[ch];
@@ -750,6 +850,8 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
     auto* t = new SplatTerrain();
     t->chunks = std::move(chunks);
     t->groups = std::move(groups);
+    t->layerRemap     = layerRemap;
+    t->layerRemapView = layerRemapView;
     for (int b = 0; b < 3; b++) {
         t->band[b] = bands[b];
     }
@@ -1339,6 +1441,8 @@ void splatPassInit(const SplatTerrain* t) {
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_Weights1", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_LayerRemap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
+                    SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_BaseAlbedo", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
                     SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_BaseNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV,
@@ -1439,6 +1543,7 @@ void splatPassInit(const SplatTerrain* t) {
     };
     setView("g_Weights0", t->groups[0].weightsView);
     setView("g_Weights1", t->groups[1].weightsView);
+    setView("g_LayerRemap", t->layerRemapView);
     // Base material: the first detail set of the first group (always loaded —
     // a detail load failure fails the whole pass), sampled under the splat
     // chain by the PS so Noop-weight regions are not black.
@@ -2112,6 +2217,9 @@ void splatTerrainDestroyDiligent(void) {
         if (g.weights) {
             g.weights->Release();
         }
+    }
+    if (terrain->layerRemap) {
+        terrain->layerRemap->Release();
     }
     // Detail textures are shared by reference between groups (deduped by
     // name at load) — release each unique texture once.

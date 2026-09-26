@@ -35,11 +35,14 @@ namespace engine::renderer::diligent {
 // (splat pass, tasks 2/3) samples with exactly this; the loader only lays
 // the resources out in this order.
 //
-// Weight arrays carry all 100 UDIM layers; the shipped sets cover only 11
-// (grass1) + 6 (roads1) tiles. Missing layers are the Noop weight (0,0,0,255)
-// — NOT black: the SplatGroup blend chain mixes the alpha detail in with
-// (1 - wA), so an all-255 alpha tile leaves the base unchanged while black
-// would smear the alpha detail across the whole map.
+// Weight arrays carry only the PACKED layer set (the union of udims shipped
+// by ANY group, in ascending udim order, plus one trailing Noop layer); the
+// shipped sets cover only 11 (grass1) + 6 (roads1) tiles. Unused/missing
+// udims remap to the trailing Noop layer through g_LayerRemap (a 100x1
+// R32_UINT texture, udim -> packed layer). Noop is (0,0,0,255) — NOT black:
+// the SplatGroup blend chain mixes the alpha detail in with (1 - wA), so an
+// all-255 alpha tile leaves the base unchanged while black would smear the
+// alpha detail across the whole map.
 
 // Interleaved splat vertex (48 B): world-space position, normal, tangent
 // (glTF TANGENT vec4: xyz + handedness) and the chunker-remapped [0,1]^2 uv.
@@ -80,7 +83,7 @@ struct SplatDetail {
 // black base (roads1 is the base group, grass1 the top).
 struct SplatGroup {
     std::string name;
-    Diligent::ITexture* weights = nullptr;  // 1024^2 x 100 layers RGBA8_UNORM
+    Diligent::ITexture* weights = nullptr;  // 1024^2 x packed layers RGBA8_UNORM
     Diligent::ITextureView* weightsView = nullptr;
     SplatDetail details[4];  // [0]=red [1]=green [2]=blue [3]=alpha
 };
@@ -88,6 +91,8 @@ struct SplatGroup {
 struct SplatTerrain {
     std::vector<SplatChunk> chunks;
     std::vector<SplatGroup> groups;
+    Diligent::ITexture* layerRemap = nullptr;      // 100x1 R32_UINT: udim -> packed layer
+    Diligent::ITextureView* layerRemapView = nullptr;
     SplatDetail band[3];
     // splatUvRange the chunker recorded ({min:[0,-9], max:[10,1]}) — the
     // original UDIM-space uv extent, kept for the shader's inverse mapping.
@@ -98,9 +103,9 @@ struct SplatTerrain {
 // CPU-parse the packed chunker GLB (zstd GLB — readModelBytes/jansson walk,
 // the gltfSceneSurfaceHeightDiligent pattern) and upload the GPU resources:
 // per-chunk vertex/index buffers + AABBs, the per-group weight
-// TEXTURE2DARRAYs (100 UDIM layers, missing tiles Noop) and the group detail
-// sets (8 unique albedo/normal pairs, shared by reference). Every allocated
-// resource is released again on failure.
+// TEXTURE2DARRAYs (packed UDIM layers + shared g_LayerRemap, missing tiles
+// Noop) and the group detail sets (8 unique albedo/normal pairs, shared by
+// reference). Every allocated resource is released again on failure.
 bool splatTerrainLoadDiligent(const char* pakPath);
 void splatTerrainDestroyDiligent(void);
 // Non-null after a successful splatTerrainLoadDiligent.
