@@ -13,6 +13,7 @@ namespace game {
     LoadingGui::LoadingGui() : engine::System("loading") {}
 
     static void* document    = nullptr;
+    static void* model       = nullptr;
     static char loadStarted  = 0;
     static char worldReady   = 0;
     static double shownNanos = 0.0;
@@ -37,7 +38,8 @@ namespace game {
         worldReady  = 0;
         shownNanos  = utils::nanos();
         if (!document) {
-            document        = rmlNewDocument("gui/loading/loading.html");
+            model    = rmlCreateModel("loading");
+            document = rmlNewDocument("gui/loading/loading.html");
             rmlLoadDocument(document);
             rmlShowDocument(document);
         }
@@ -54,6 +56,10 @@ namespace game {
         if (document) {
             rmlUnloadDocument(document);
             document = nullptr;
+        }
+        if (model) {
+            rmlUnloadModel(model);
+            model = nullptr;
         }
     }
 
