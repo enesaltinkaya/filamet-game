@@ -153,7 +153,20 @@ control pair (TAA history starts empty either way — first world frame
 after warmup must match a cold start, verify the warmup leaves no residue
 in the history textures, e.g. by clearing them after the dummy resolve).
 
-## Phase D — Splat CPU parse on the pool (−~40–60 ms loadWorld)
+## Phase D — Splat CPU parse on the pool (−~40–60 ms loadWorld) — DONE
+
+Result (2026-09-26): the jansson parse overlapped the model loads as
+planned, but it was only ~10 ms (the terrain GLB is 11 MB, not the 210 MB
+of the old plan) — the splat phase is GPU-upload-bound: 16 chunk buffers +
+2×80 MB weight-array textures (46 ms) that must run serially on the render
+thread. Net loadWorld −~10 ms (228–252 ms). Kept: the parse is off the
+render thread and the overlap scales if the terrain grows.
+
+Structure: CPU section extracted to `splatTerrainParse` (pool-safe, no
+device access) returning a `SplatTerrainParse`; `splatTerrainParseLaunch`
+(Game.cpp, after the bytes prewarm) runs it on the thread pool;
+splatTerrainLoad waits for the matching job (or parses synchronously if
+none was launched) and uploads.
 
 `splatTerrainLoadDiligent` (SplatTerrainDiligent.cpp:373) runs its own
 jansson parse of the terrain GLB — CPU work with no device dependency —
@@ -183,12 +196,20 @@ reverted for a heap corruption that ASan couldn't isolate (ASan build
 crashes in radv Vulkan init). Needs a working heap-checker path first; not
 worth it while phases A–D are open. Reassess last.
 
-## Budget
+## Budget (measured end state, 2026-09-26)
 
-    loadWorld   ~300 ms → ~150–170 ms   (B −~80, D −~50)
-    first frame ~600 ms → ~300–350 ms   (A −~240, C −~50–150)
+    loadWorld   280–304 ms → 228–252 ms  (B −~60, D −~10)
+    first frame 534–601 ms → 298–306 ms  (A −~240; C moved the allocation
+                                          to boot, no wall-time change)
     disk        +84 MB pak (B)
     VRAM        +~150 MB held during menu (C)
+
+Remaining first-frame floor: ~42 cached-PSO deserializations + IBL 42 SRBs
+
+- shadow/splat pass inits + the first GPU frame. loadWorld floor: props
+  tinygltf parse (73–90 ms) + splat weight-array upload (46 ms) — both
+  serial CPU/device work; phase E (parallel tinygltf parse) is the only
+  remaining structural lever.
 
 Order: A (biggest, self-contained), B (trivial), C, D. Each phase is
 independent and validated by its own A/B pair; no phase depends on another

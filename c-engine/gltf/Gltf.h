@@ -37,6 +37,7 @@ bool gltfSceneSurfaceHeight(f32 x, f32 z, f32 radius, f32* outY);
 // weight) and the 8 detail sets (albedo sRGB / normal linear). It allocates
 // no GPU state while the splat draw pass has not landed; the untextured PBR
 // scene draw (gltfSceneLoad) stays as the A/B fallback.
+void splatTerrainParseLaunch(const char* pakPath);
 bool splatTerrainLoad(const char* pakPath);
 void splatTerrainDestroy(void);
 

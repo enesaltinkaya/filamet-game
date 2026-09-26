@@ -143,6 +143,9 @@ namespace game {
         engine::gltf::gltfTextureCachePrewarm();
         engine::gltf::gltfModelBytesPrewarmWait();
         ltLog("bytes prewarm + texture fill");
+        // The splat CPU parse (the terrain GLB's 2nd, jansson pass) overlaps
+        // the serial model loads below; splatTerrainLoad waits + uploads.
+        engine::gltf::splatTerrainParseLaunch("models/terrain/oghuzlands.zstd");
         const bool terrainUp =
                 engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
         ltLog("terrain");

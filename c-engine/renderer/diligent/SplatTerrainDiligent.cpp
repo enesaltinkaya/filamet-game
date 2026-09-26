@@ -13,6 +13,7 @@
 #include "renderer/diligent/TaaDiligent.h"
 #include "renderer/texture/TextureManager.h"
 #include "ecs/system/player/Player.h"
+#include "thread/Thread.h"
 
 #include <Common/interface/RefCntAutoPtr.hpp>
 #include <DiligentFXShaderSourceStreamFactory.hpp>
@@ -368,36 +369,40 @@ std::string splatBaseDir(const char* pakPath) {
     return p;
 }
 
-}  // namespace
+struct SplatTerrainParse {
+    bool ok = false;
+    std::vector<std::string> groupNames;
+    std::vector<std::array<std::string, 4>> groupDetails;
+    f32 uvMin[2] = {0, -9};
+    f32 uvMax[2] = {10, 1};
+    std::vector<RawChunk> raw;
+    size_t totalVerts = 0;
+    size_t totalTris = 0;
+};
 
-bool splatTerrainLoadDiligent(const char* pakPath) {
-    if (terrain) {
-        utils::warn("splatTerrain: already loaded — destroying first");
-        splatTerrainDestroyDiligent();
-    }
-    if (!device || !context) {
-        utils::warn("splatTerrain: renderer device not ready");
-        return false;
-    }
+// CPU-only (no device access) — pool-safe: loadWorld launches it on the
+// thread pool to overlap the serial model loads (plans/world-load-2.md D).
+static SplatTerrainParse splatTerrainParse(const char* pakPath) {
+    SplatTerrainParse out;
 
     // ── CPU parse: readModelBytes (zstd) → glbFindChunks → jansson ──
     std::vector<unsigned char> bytes;
     std::string error;
     if (!gltfReadModelBytesDiligent(pakPath, bytes, error)) {
         utils::warn("splatTerrain: cannot read %s (%s)", pakPath, error.c_str());
-        return false;
+        return out;
     }
     const unsigned char* jsonPtr = nullptr;
     size_t jsonSize = 0, binSize = 0;
     const unsigned char* binPtr = nullptr;
     if (!gltfGlbFindChunksDiligent(bytes, &jsonPtr, jsonSize, &binPtr, binSize)) {
         utils::warn("splatTerrain: %s is not a GLB", pakPath);
-        return false;
+        return out;
     }
     json_t* root = jsonParseN(reinterpret_cast<const char*>(jsonPtr), (u32)jsonSize);
     if (!root) {
         utils::warn("splatTerrain: bad GLB JSON in %s", pakPath);
-        return false;
+        return out;
     }
     json_t* accessors   = jsonGetArray(root, "accessors");
     json_t* bufferViews = jsonGetArray(root, "bufferViews");
@@ -407,7 +412,7 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
         !json_is_array(meshes) || !json_is_array(nodes)) {
         jsonFree(root);
         utils::warn("splatTerrain: GLB JSON lacks accessors/bufferViews/meshes/nodes");
-        return false;
+        return out;
     }
     const u8* bin = binPtr;
 
@@ -462,7 +467,7 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
     if (groupNames.empty()) {
         jsonFree(root);
         utils::warn("splatTerrain: no splatInfo in %s", pakPath);
-        return false;
+        return out;
     }
 
     // Per-chunk CPU geometry: POSITION/NORMAL/TANGENT/TEXCOORD_0 + indices.
@@ -579,9 +584,73 @@ bool splatTerrainLoadDiligent(const char* pakPath) {
     if (raw.empty()) {
         jsonFree(root);
         utils::warn("splatTerrain: no usable chunk meshes in %s", pakPath);
-        return false;
+        return out;
     }
     jsonFree(root);
+    out.ok = true;
+    out.groupNames = std::move(groupNames);
+    out.groupDetails = std::move(groupDetails);
+    out.uvMin[0] = uvMin[0];
+    out.uvMin[1] = uvMin[1];
+    out.uvMax[0] = uvMax[0];
+    out.uvMax[1] = uvMax[1];
+    out.raw = std::move(raw);
+    out.totalVerts = totalVerts;
+    out.totalTris = totalTris;
+    return out;
+}
+
+struct SplatParseJob {
+    const char* path = nullptr;
+    SplatTerrainParse parse;
+};
+static SplatParseJob* splatParseJob = nullptr;
+
+static void splatParseWork(void* arg) {
+    SplatParseJob* job = (SplatParseJob*)arg;
+    job->parse = splatTerrainParse(job->path);
+}
+
+static SplatTerrainParse splatTerrainTakeParse(const char* pakPath) {
+    if (splatParseJob && splatParseJob->path == pakPath) {
+        utils::threadPoolWait(nullptr);
+        SplatTerrainParse p = std::move(splatParseJob->parse);
+        splatParseJob = nullptr;
+        return p;
+    }
+    return splatTerrainParse(pakPath);
+}
+
+}  // namespace
+
+void splatTerrainParseLaunchDiligent(const char* pakPath) {
+    static SplatParseJob job;
+    job = SplatParseJob{pakPath, {}};
+    splatParseJob = &job;
+    utils::threadPoolAddWork(nullptr, splatParseWork, &job);
+}
+
+bool splatTerrainLoadDiligent(const char* pakPath) {
+    if (terrain) {
+        utils::warn("splatTerrain: already loaded — destroying first");
+        splatTerrainDestroyDiligent();
+    }
+    if (!device || !context) {
+        utils::warn("splatTerrain: renderer device not ready");
+        return false;
+    }
+
+    SplatTerrainParse parse = splatTerrainTakeParse(pakPath);
+    if (!parse.ok) {
+        return false;
+    }
+    const std::vector<std::string>& groupNames = parse.groupNames;
+    const std::vector<std::array<std::string, 4>>& groupDetails = parse.groupDetails;
+    const f32 uvMin[2] = {parse.uvMin[0], parse.uvMin[1]};
+    const f32 uvMax[2] = {parse.uvMax[0], parse.uvMax[1]};
+    const std::vector<RawChunk>& raw = parse.raw;
+    const size_t totalVerts = parse.totalVerts;
+    const size_t totalTris = parse.totalTris;
 
     // ── GPU upload ──
     LoadGuard guard;

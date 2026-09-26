@@ -38,6 +38,10 @@ bool gltfSceneSurfaceHeight(f32 x, f32 z, f32 radius, f32* outY) {
     return gltfSceneSurfaceHeightDiligent(x, z, radius, outY);
 }
 
+void splatTerrainParseLaunch(const char* pakPath) {
+    renderer::diligent::splatTerrainParseLaunchDiligent(pakPath);
+}
+
 bool splatTerrainLoad(const char* pakPath) {
     return renderer::diligent::splatTerrainLoadDiligent(pakPath);
 }

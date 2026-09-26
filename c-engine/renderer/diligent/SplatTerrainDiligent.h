@@ -106,6 +106,10 @@ struct SplatTerrain {
 // TEXTURE2DARRAYs (packed UDIM layers + shared g_LayerRemap, missing tiles
 // Noop) and the group detail sets (8 unique albedo/normal pairs, shared by
 // reference). Every allocated resource is released again on failure.
+// Launch the CPU-only GLB parse on the thread pool (no device access);
+// splatTerrainLoadDiligent waits for it and uploads the result. A load
+// without a launch parses synchronously (old behavior).
+void splatTerrainParseLaunchDiligent(const char* pakPath);
 bool splatTerrainLoadDiligent(const char* pakPath);
 void splatTerrainDestroyDiligent(void);
 // Non-null after a successful splatTerrainLoadDiligent.
