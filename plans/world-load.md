@@ -166,7 +166,7 @@ that long may still be acceptable. If not:
 - Move the CPU halves (GLB parse, ktx2 tile decode, PNG→ gone after
   phase 2) onto the existing thread pool (15 cores idle today); marshal
   device-object creation + uploads on the main thread between frames.
-- props / eve / terrain are independent → parse in parallel.
+- props / eve / terrain are independent → parse in parallel.mm
 - Minimal perceived-latency variant: keep the sync load but render a
   "loading" frame before it starts (enterWorld currently runs inside the
   RML click handler, MainMenuGui.cpp:59-87).
