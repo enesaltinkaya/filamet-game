@@ -24,6 +24,7 @@
 #include "Utils.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/ShaderCache.h"
 #include "renderer/diligent/SsaoDiligent.h"
 #include "renderer/diligent/SsrDiligent.h"
 #include "renderer/diligent/BloomDiligent.h"
@@ -267,7 +268,7 @@ static void createDownPSO(void) {
     shaderCI.EntryPoint = "main";
     shaderCI.Desc.Name = "taaDownsamplePS";
     shaderCI.Source = kDownsamplePS;
-    device->CreateShader(shaderCI, &downPS);
+    downPS = shaderCacheCreate(device, shaderCI);
     if (!downPS) {
         utils::warn("taa: downsample PS failed");
         return;
@@ -277,6 +278,7 @@ static void createDownPSO(void) {
     psoCI.PSODesc.Name = "taaDownsample";
     psoCI.pVS = blitVS;
     psoCI.pPS = downPS;
+    psoCI.pPSOCache = psoCache();
     GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
     gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
@@ -313,7 +315,7 @@ static void createBlitPSO(void) {
     shaderCI.EntryPoint = "main";
     shaderCI.Desc.Name = "taaBlitVS";
     shaderCI.Source = kBlitVS;
-    device->CreateShader(shaderCI, &blitVS);
+    blitVS = shaderCacheCreate(device, shaderCI);
     if (!blitVS) {
         utils::warn("taa: blit VS failed");
         return;
@@ -322,7 +324,7 @@ static void createBlitPSO(void) {
     shaderCI.Desc.ShaderType = SHADER_TYPE_PIXEL;
     shaderCI.Desc.Name = "taaBlitPS";
     shaderCI.Source = getenv("ENGINE_TAA_DEBUG_MV") != nullptr ? kBlitMvPS : kBlitPS;
-    device->CreateShader(shaderCI, &blitPS);
+    blitPS = shaderCacheCreate(device, shaderCI);
     if (!blitPS) {
         utils::warn("taa: blit PS failed");
         return;
@@ -332,6 +334,7 @@ static void createBlitPSO(void) {
     psoCI.PSODesc.Name = "taaBlit";
     psoCI.pVS = blitVS;
     psoCI.pPS = blitPS;
+    psoCI.pPSOCache = psoCache();
     GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
     gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
@@ -479,7 +482,7 @@ static void createCasPSO(void) {
     shaderCI.EntryPoint = "main";
     shaderCI.Desc.Name = "taaCasPS";
     shaderCI.Source = kCasPS;
-    device->CreateShader(shaderCI, &casPS);
+    casPS = shaderCacheCreate(device, shaderCI);
     if (!casPS) {
         utils::warn("taa: cas PS failed");
         return;
@@ -489,6 +492,7 @@ static void createCasPSO(void) {
     psoCI.PSODesc.Name = "taaCas";
     psoCI.pVS = blitVS;
     psoCI.pPS = casPS;
+    psoCI.pPSOCache = psoCache();
     GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
     gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
@@ -679,7 +683,7 @@ static void createAoPSO(void) {
     shaderCI.EntryPoint = "main";
     shaderCI.Desc.Name = "aoCompositePS";
     shaderCI.Source = kAoCompositePS;
-    device->CreateShader(shaderCI, &aoPS);
+    aoPS = shaderCacheCreate(device, shaderCI);
     if (!aoPS) {
         utils::warn("taa: ao composite PS failed");
         return;
@@ -689,6 +693,7 @@ static void createAoPSO(void) {
     psoCI.PSODesc.Name = "aoComposite";
     psoCI.pVS = blitVS;
     psoCI.pPS = aoPS;
+    psoCI.pPSOCache = psoCache();
     GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
     gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
@@ -842,7 +847,7 @@ static void createSsrPSO(void) {
     shaderCI.EntryPoint = "main";
     shaderCI.Desc.Name = "ssrCompositePS";
     shaderCI.Source = kSsrCompositePS;
-    device->CreateShader(shaderCI, &ssrPS);
+    ssrPS = shaderCacheCreate(device, shaderCI);
     if (!ssrPS) {
         utils::warn("taa: ssr composite PS failed");
         return;
@@ -852,6 +857,7 @@ static void createSsrPSO(void) {
     psoCI.PSODesc.Name = "ssrComposite";
     psoCI.pVS = blitVS;
     psoCI.pPS = ssrPS;
+    psoCI.pPSOCache = psoCache();
     GraphicsPipelineDesc& gp = psoCI.GraphicsPipeline;
     gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     gp.RasterizerDesc.CullMode = CULL_MODE_NONE;

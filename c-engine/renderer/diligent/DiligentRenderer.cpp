@@ -5,6 +5,7 @@
 #include "Engine.h"
 #include "Graphics/GraphicsEngine/interface/DeviceContext.h"
 #include "Graphics/GraphicsEngine/interface/Query.h"
+#include "Graphics/GraphicsEngine/interface/PipelineStateCache.h"
 #include "Graphics/GraphicsEngine/interface/RenderDevice.h"
 #include "Graphics/GraphicsEngine/interface/SwapChain.h"
 #include "Graphics/GraphicsTools/interface/ScopedDebugGroup.hpp"
@@ -27,9 +28,12 @@
 
 #include <SDL.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // vulkan types for the Diligent Vk interfaces below (resolved through volk,
@@ -215,6 +219,46 @@ namespace engine::renderer::diligent {
     static RefCntAutoPtr<IDeviceContext> contextRef;
     static RefCntAutoPtr<ISwapChain> swapChainRef;
     static RefCntAutoPtr<IEngineFactoryVk> factoryRef;
+    static RefCntAutoPtr<IPipelineStateCache> psoCacheRef;
+    static std::string psoCachePath;
+
+    IPipelineStateCache* psoCache(void) {
+        return psoCacheRef;
+    }
+
+    std::string psoReadWhole(const char* path) {
+        std::string out;
+        FILE* f = fopen(path, "rb");
+        if (!f)
+            return out;
+        if (fseek(f, 0, SEEK_END) != 0) {
+            fclose(f);
+            return out;
+        }
+        const long n = ftell(f);
+        rewind(f);
+        if (n > 0) {
+            out.resize((size_t)n);
+            if (fread(out.data(), 1, (size_t)n, f) != (size_t)n)
+                out.clear();
+        }
+        fclose(f);
+        return out;
+    }
+
+    bool psoWriteWhole(const char* path, const void* data, size_t size) {
+        char tmp[1152];
+        snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+        FILE* f = fopen(tmp, "wb");
+        if (!f)
+            return false;
+        const bool ok = fwrite(data, 1, size, f) == size && fclose(f) == 0;
+        if (!ok) {
+            remove(tmp);
+            return false;
+        }
+        return rename(tmp, path) == 0;
+    }
 
     // Whole-frame GPU time (the FPS HUD's gpu row): a RING of
     // QUERY_TYPE_DURATION queries. The Vulkan backend implements one as two
@@ -291,6 +335,31 @@ namespace engine::renderer::diligent {
             context = contextRef;
             utils::info("renderer: diligent device created (%s)",
                         device->GetAdapterInfo().Description);
+
+            {
+                std::string slug = device->GetAdapterInfo().Description;
+                for (char& c : slug)
+                    if (!isalnum((unsigned char)c))
+                        c = '_';
+                const std::string psoDir = std::string(utils::platform.dataDirectory) + "pso";
+                utils::createDirectory((psoDir + utils::platform.seperator).c_str());
+                psoCachePath = psoDir + utils::platform.seperator + slug + ".pso";
+
+                PipelineStateCacheCreateInfo pscCI;
+                pscCI.Desc.Mode = PSO_CACHE_MODE_LOAD_STORE;
+                const std::string blob = psoReadWhole(psoCachePath.c_str());
+                if (!blob.empty()) {
+                    pscCI.pCacheData    = blob.data();
+                    pscCI.CacheDataSize = (Uint32)blob.size();
+                }
+                deviceRef->CreatePipelineStateCache(pscCI, &psoCacheRef);
+                if (psoCacheRef)
+                    utils::info("renderer: PSO cache %s (%llu bytes)",
+                                blob.empty() ? "empty" : "loaded",
+                                (unsigned long long)blob.size());
+                else
+                    utils::warn("renderer: PSO cache creation failed");
+            }
 
             SwapChainDesc scDesc;
             scDesc.ColorBufferFormat = TEX_FORMAT_RGBA8_UNORM_SRGB;
@@ -719,6 +788,19 @@ namespace engine::renderer::diligent {
             ssaoDestroy();
             ssrDestroy();
             bloomDestroy();
+
+            if (psoCacheRef) {
+                RefCntAutoPtr<IDataBlob> blob;
+                psoCacheRef->GetData(&blob);
+                if (blob && blob->GetSize() > 0) {
+                    if (psoWriteWhole(psoCachePath.c_str(), blob->GetConstDataPtr(), blob->GetSize()))
+                        utils::info("renderer: PSO cache saved (%llu bytes)",
+                                    (unsigned long long)blob->GetSize());
+                    else
+                        utils::warn("renderer: PSO cache save failed");
+                }
+                psoCacheRef.Release();
+            }
 
             swapChain = nullptr;
             device    = nullptr;

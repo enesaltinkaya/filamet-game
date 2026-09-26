@@ -12,6 +12,7 @@ struct IRenderDevice;
 struct IDeviceContext;
 struct ISwapChain;
 struct ITexture;
+struct IPipelineStateCache;
 }
 
 namespace engine::renderer::diligent {
@@ -25,6 +26,8 @@ extern Diligent::ISwapChain* swapChain;
 // Set by worldDraw.
 bool diligentWorldDrew(void);
 void setWorldDrew(bool drew);
+
+Diligent::IPipelineStateCache* psoCache(void);
 
 // GPU time of the last COMPLETED frame in ns: a QUERY_TYPE_DURATION query
 // (two bottom-of-pipe timestamps, see DiligentRenderer.cpp) spans draw()

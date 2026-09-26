@@ -6,6 +6,7 @@
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/ShaderCache.h"
 #include "renderer/diligent/FrustumCull.h"
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
@@ -1178,16 +1179,14 @@ IShader* createSplatHlsl(const char* pakPath, const char* name, SHADER_TYPE type
     ci.SourceLanguage          = SHADER_SOURCE_LANGUAGE_HLSL;
     ci.pShaderSourceStreamFactory = &DiligentFXShaderSourceStreamFactory::GetInstance();
 
-    RefCntAutoPtr<IShader> shader;
     RefCntAutoPtr<IDataBlob> output;
-    device->CreateShader(ci, &shader, &output);
+    IShader* shader = shaderCacheCreate(device, ci, &output);
     utils::stringDestroy(&blob);
     if (!shader) {
         const char* msg = output ? (const char*)output->GetConstDataPtr() : "(no compiler output)";
         utils::warn("splatTerrain: shader compile failed %s: %s", name, msg);
         return nullptr;
     }
-    shader->AddRef();
     return shader;
 }
 
@@ -1633,6 +1632,7 @@ void splatPassInit(const SplatTerrain* t) {
 
     psoCI.pVS = splatVS;
     psoCI.pPS = splatPS;
+    psoCI.pPSOCache = psoCache();
     device->CreateGraphicsPipelineState(psoCI, &splatPipeline);
     if (!splatPipeline) {
         utils::warn("splatTerrain: PSO creation failed");
@@ -1941,6 +1941,7 @@ static void splatShadowCasterInit(void) {
     gp.InputLayout.NumElements   = 4;
     psoCI.pVS = splatShadowVS;
     psoCI.pPS = splatShadowPS;
+    psoCI.pPSOCache = psoCache();
     // The 0-color-target + DSV depth-only PSO IS accepted by
     // CreateGraphicsPipelineState on this Vulkan build, but its depth writes
     // do not land — the shadow readback at the same vantage shows only a

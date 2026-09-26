@@ -4,6 +4,12 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-26 — [entries](lessons/2026-09-26.md)
+
+- `RefCntAutoPtr::operator&()` attaches its out-param in a *temporary's* destructor (end of full-expression): `if (Create(name, &ptr) && ptr)` is always false — split the call and the null-check into separate statements
+- URI-referenced KTX2 can't use Diligent's GLTF file path (KTXLoader rejects ktx2): serve via `ModelCreateInfo::pTextureCache` pre-filled from the TextureManager
+- Attribute load phases to the SHIPPED asset payload, not pipeline intent — a pak can silently ship placeholders (rebuild suspect paks before profiling)
+
 ## 2026-09-14 — [entries](lessons/2026-09-14.md)
 
 - Straight-edged bright/dark trapezoid on a tall vertical prop that slides with the camera and jumps/vanishes when the cascade focus band moves: RESOLVED — DiligentFX embeds shaders at build time, so the props multi-cascade receiver edit never reached the binary (PSO reflection showed no `cbPbrPropsShadow`; the trapezoid was the stock single-slice path's frustum-footprint clip); rebuild DiligentFX + relink after ANY `.fxh` edit, and A/B renders numerically (autocontrast crops lie)
@@ -112,6 +118,11 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 - Diligent dynamic buffers are per-frame scratch, not storage
 - lossy KTX2 on splat weight maps is bigger AND visibly worse than PNG
 - World-tiling terrain textures need mipmaps + anisotropy, or distance is aliasing soup
+
+## 2026-09-26 — [entries](lessons/2026-09-26.md)
+
+- Attribute load-time phases against the SHIPPED asset payload, not the pipeline's intent: 1×1 placeholder PNGs + unreferenced ktx2 made the "props = libpng" baseline measure nothing
+- URI KTX2 images can't use Diligent's GLTF loader file path (KTX2 unsupported) — pre-fill `ModelCreateInfo::pTextureCache` from the TextureManager; filename semantic suffix carries sRGB/linear
 
 ## Filament era (archive) — [entries](lessons-filament-archive.md)
 

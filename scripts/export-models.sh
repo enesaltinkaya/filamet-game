@@ -95,6 +95,20 @@ convertModel() {
     echo ok
     mv "$f32" "$glb"
 
+    # Embedded raster textures -> external toktx ktx2 (raw RGBA8 + KTX_SS_ZSTD,
+    # the terrain recipe) under images/models/<name>/ + URI rewrite: libpng
+    # decoding of the embedded PNGs was the bulk of the props/eve load time
+    # (plans/world-load.md phase 2). See scripts/gltf-extract-textures.py.
+    echo -n "textures ktx2... "
+    local imgDir="$ROOT/c-game/data/pak_1/images/models/${name}"
+    rm -rf "$imgDir"
+    if ! python3 "$ROOT/scripts/gltf-extract-textures.py" "$name" "$imgDir" "$glb" "$glb" >> "$log" 2>&1; then
+        echo "FAILED (log: $log)" >&2
+        tail -n 20 "$log" >&2
+        return 1
+    fi
+    echo "$(du -sh "$imgDir" 2>/dev/null | cut -f1 || echo none)"
+
     echo -n "jolt shapes... "
     JOLT_SHAPE_BUILDER="$ROOT/tools/jolt-shape-builder/jolt-shape-builder"
     local joltFile="$STAGE_DIR/${name}.jolt"

@@ -5,6 +5,7 @@
 #include "image/Image.h"
 #include "logger/Logger.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/ShaderCache.h"
 #include "renderer/RenderBackend.h"
 #include "renderer/texture/TextureManager.h"
 
@@ -450,16 +451,14 @@ IShader* createHlslShader(const char* pakPath, const char* name, SHADER_TYPE typ
     ci.SourceLanguage     = SHADER_SOURCE_LANGUAGE_HLSL;
     ci.pShaderSourceStreamFactory = &DiligentFXShaderSourceStreamFactory::GetInstance();
 
-    RefCntAutoPtr<IShader> shader;
     RefCntAutoPtr<IDataBlob> output;
-    device->CreateShader(ci, &shader, &output);
+    IShader* shader = shaderCacheCreate(device, ci, &output);
     utils::stringDestroy(&blob);
     if (!shader) {
         const char* msg = output ? (const char*)output->GetConstDataPtr() : "(no compiler output)";
         utils::warn("rmlui: shader compile failed %s: %s", name, msg);
         return nullptr;
     }
-    shader->AddRef();  // keep one ref past this scope
     return shader;
 }
 
@@ -574,6 +573,7 @@ void initPassImpl(void) {
 
     psoCI.pVS = vs;
     psoCI.pPS = ps;
+    psoCI.pPSOCache = psoCache();
     // No depth attachment: the pass draws inside the backend's own dynamic-
     // rendering scope (color + the swapchain's depth image — see drawImpl),
     // so the pipeline must declare the depth format the scope uses (VUID

@@ -9,6 +9,7 @@
 #include "renderer/diligent/SplatTerrainDiligent.h"
 #include "renderer/diligent/TaaDiligent.h"
 #include "renderer/RenderBackend.h"
+#include "renderer/texture/TextureManager.h"
 
 #include <Graphics/GraphicsEngine/interface/Buffer.h>
 #include <Graphics/GraphicsEngine/interface/DeviceContext.h>
@@ -688,6 +689,63 @@ bool gltfInitDiligent(void) {
 // entry (g_currentModelPakPath) — models ship as <name>.zstd (compressed glb).
 static const char* g_currentModelPakPath = nullptr;
 
+// External model textures (images/models/<model>/<name>_<semantic>.ktx2, the
+// export pipeline's toktx output). Diligent's own KTX loader rejects KTX2
+// ("ktx2.0 is not currently supported"), so URI images are served through
+// the GLTF loader's texture cache instead: the entries below let tinygltf's
+// FileExists/ReadWholeFile/LoadImageData and Model::AddTexture short-circuit
+// on a cache hit — no file bytes, no Diligent texture loader involved. The
+// weak refs stay alive through the texture manager's own strong refs.
+static GLTF::TextureCacheType gltfTextureCache;
+
+// The ktx2 are raw RGBA8: the concrete Diligent format (UNORM vs UNORM_SRGB)
+// comes from the file name's semantic suffix — the same color-slot set
+// Diligent's GetPBRTextureSRV treats as sRGB (base/emissive/diffuse/
+// clearcoat/sheen color), everything else linear.
+static bool gltfTextureNameSrgb(const char* fileName) {
+    static const char* colorSuffixes[] = {
+            "_baseColorTexture.ktx2", "_emissiveTexture.ktx2", "_diffuseTexture.ktx2",
+            "_clearcoatTexture.ktx2", "_sheenColorTexture.ktx2",
+    };
+    const size_t len = std::strlen(fileName);
+    for (const char* suffix : colorSuffixes) {
+        const size_t sl = std::strlen(suffix);
+        if (len >= sl && std::strcmp(fileName + len - sl, suffix) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void gltfTextureCacheFill(void) {
+    static bool filled = false;
+    if (filled) {
+        return;
+    }
+    filled = true;
+    std::vector<utils::String> files = utils::dataManagerListFiles(".ktx2");
+    size_t added = 0;
+    for (utils::String& f : files) {
+        const bool external = f.size > 14 && std::strncmp(f.data, "images/models/", 14) == 0;
+        if (!external) {
+            utils::stringDestroy(&f);
+            continue;
+        }
+        const char* slash = std::strrchr(f.data, '/');
+        const bool srgb = gltfTextureNameSrgb(slash ? slash + 1 : f.data);
+        Diligent::ITexture* texture = textureManagerGetTexture(f.data, srgb);
+        if (texture) {
+            std::unique_lock<Threading::SharedMutex> lock(gltfTextureCache.TexturesMtx);
+            gltfTextureCache.Textures.emplace(std::string(f.data),
+                    Diligent::RefCntWeakPtr<Diligent::ITexture>(texture));
+            texture->Release();
+            added++;
+        }
+        utils::stringDestroy(&f);
+    }
+    utils::info("gltf: texture cache filled with %zu external ktx2", added);
+}
+
 bool gltfReadModelBytesDiligent(const char* path, std::vector<unsigned char>& data, std::string& error) {
     utils::String bytes = utils::dataManagerRead(path);
     if (!bytes.data) {
@@ -725,6 +783,8 @@ static std::unique_ptr<GLTF::Model> loadModelBytes(const char* pakPath, std::str
     modelCI.ComputeBoundingBoxes = true;
     const std::string stagedName = std::string(pakPath) + ".glb";
     modelCI.FileName = stagedName.c_str();
+    gltfTextureCacheFill();
+    modelCI.pTextureCache = &gltfTextureCache;
     g_currentModelPakPath = pakPath;
     modelCI.ReadWholeFileCallback =
             [](const char* /*path*/, std::vector<unsigned char>& data, std::string& cbError) -> bool {

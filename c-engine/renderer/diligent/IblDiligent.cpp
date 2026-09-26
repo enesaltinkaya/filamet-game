@@ -4,6 +4,7 @@
 #include "Utils.h"
 #include "datamanager/DataManager.h"
 #include "renderer/diligent/DiligentRenderer.h"
+#include "renderer/diligent/ShaderCache.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "DiligentFXShaderSourceStreamFactory.hpp"
@@ -90,15 +91,13 @@ Diligent::IShader* compileFx(const char* name, const char* filePath,
     ci.CompileFlags = Diligent::SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR;
     ci.pShaderSourceStreamFactory = &Diligent::DiligentFXShaderSourceStreamFactory::GetInstance();
 
-    Diligent::RefCntAutoPtr<Diligent::IShader> shader;
     Diligent::RefCntAutoPtr<Diligent::IDataBlob> output;
-    device->CreateShader(ci, &shader, &output);
+    Diligent::IShader* shader = shaderCacheCreate(device, ci, &output);
     if (!shader) {
         const char* msg = output ? (const char*)output->GetConstDataPtr() : "(no compiler output)";
         utils::warn("ibl: shader compile failed %s: %s", name, msg);
         return nullptr;
     }
-    shader->AddRef();
     return shader;
 }
 
@@ -150,6 +149,7 @@ bool buildPSOs(void) {
 
         psoCI.pVS = faceVS;
         psoCI.pPS = ps;
+        psoCI.pPSOCache = psoCache();
 
         Diligent::PipelineResourceLayoutDescX layout;
         layout
@@ -195,6 +195,7 @@ bool buildPSOs(void) {
 
         psoCI.pVS = fullVS;
         psoCI.pPS = brdfPS;
+        psoCI.pPSOCache = psoCache();
 
         brdfPSO = nullptr;
         device->CreateGraphicsPipelineState(psoCI, &brdfPSO);

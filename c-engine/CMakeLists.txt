@@ -134,6 +134,7 @@ target_precompile_headers(c-engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/pch.h)
 # shared pch — skip the pch for them
 set_source_files_properties(
     renderer/diligent/DiligentRenderer.cpp
+    renderer/diligent/ShaderCache.cpp
     renderer/diligent/IblDiligent.cpp
     renderer/diligent/ShadowDiligent.cpp
     renderer/diligent/SsaoDiligent.cpp

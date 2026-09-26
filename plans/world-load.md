@@ -87,6 +87,23 @@ BC7 (like the preloaded 66 ktx2, UASTC→BC7 on the thread pool) can replace
 raw RGBA8 later if VRAM matters; raw+zstd keeps this phase a pure
 container change with zero quality risk.
 
+DONE 2026-09-26. `scripts/gltf-extract-textures.py` (toktx raw RGBA8 +
+KTX_SS_ZSTD, single mip for exact PNG-path parity, semantic filename suffix)
+wired into `export-models.sh` after the rotation-f32 step; engine side in
+GltfDiligent.cpp (GLTF::TextureCacheType pre-filled from the TextureManager
+— Diligent's own KTX loader rejects KTX2, see lessons 2026-09-26). Measured
+(ENGINE_LOAD_TIMING, warm): gltfLoad eve 193→8.9 ms, loadWorld total
+461→317 ms; RenderDoc: props draws bind the 2048² ktx2 (11 sRGB + 7 UNORM
+formats correct), player binds all 3; whole-run perf profile has ZERO
+png/inflate samples. Visual A/B at the parked vantage 0.01 % px Δ>30 (=
+control floor) — the vantage frames no props, so props correctness was
+verified by binding inspection instead. NOTE the pre-phase2 baseline was
+broken data: the shipped test2.zstd had 32 1×1 placeholder PNGs embedded
+and the real textures as unreferenced files (morning session's unfinished
+experiment) — props load was never PNG-bound; it is now GLB-parse bound
+(61 MB zstd → 147 MB mesh GLB — phase 4/5 territory). Pak 225→281 MB (raw
+RGBA8 ktx2 larger than PNG on disk; BC7 follow-up would shrink ~4×).
+
 ## Phase 3 — Shader + PSO caches (−~300–500 ms of boot/first-frame stutter)
 
 All pipelines compile from HLSL at runtime (`device->CreateShader` with
