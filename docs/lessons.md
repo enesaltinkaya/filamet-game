@@ -6,7 +6,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 ## 2026-09-14 — [entries](lessons/2026-09-14.md)
 
-- Straight-edged bright/dark trapezoid on a tall vertical prop that slides with the camera and jumps/vanishes when the cascade focus band moves = the camera-anchored cascade slab boundary slicing the prop (band A/B via `ENGINE_SHADOW_FOCUS_MARGIN` decides in 3 runs) — zstart-gating the props union loop did NOT fix it; wall's own caster depth is absent from c1's atlas at its own UVs, caster side suspected, leads in the dated file
+- Straight-edged bright/dark trapezoid on a tall vertical prop that slides with the camera and jumps/vanishes when the cascade focus band moves: RESOLVED — DiligentFX embeds shaders at build time, so the props multi-cascade receiver edit never reached the binary (PSO reflection showed no `cbPbrPropsShadow`; the trapezoid was the stock single-slice path's frustum-footprint clip); rebuild DiligentFX + relink after ANY `.fxh` edit, and A/B renders numerically (autocontrast crops lie)
 
 ## 2026-09-13 — [entries](lessons/2026-09-13.md)
 
