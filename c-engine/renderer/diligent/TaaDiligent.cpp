@@ -1271,8 +1271,8 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
     // Jitter this frame's projection (TAA picks the Halton phase for the
     // CURRENT frame — PrepareResources above stamped the frame index).
     currJitter = taaOn ? taa->GetJitterOffset() : float2{0.0f, 0.0f};
-    proj._13 += -currJitter.x;
-    proj._23 += -currJitter.y;
+    proj._31 += currJitter.x;
+    proj._32 += currJitter.y;
 
     // Camera attribs (curr = [0], prev = [1]).
     camAttribs[1] = camAttribs[0];
