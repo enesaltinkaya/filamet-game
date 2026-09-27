@@ -128,6 +128,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 - Coplanar PCF self-shadowing (flat ground quad) cancels the fixed depth bias to zero — a ~1-texel-equivalent bias leaves a periodic wedge lattice; use ~4 texels (0.01/0.02 × z-scale) — superseded 2026-09-27: that factor is a threshold, not a margin; ~6 texels (0.06/0.12)
 
 ## 2026-09-27 — [entries](lessons/2026-09-27.md)
+- A glTF material with `metallicFactor` ABSENT defaults to metallic 1.0 — a Blender lawn authored metallic renders as a green mirror (zero diffuse); the sun GGX lobe + sky-IBL spec sweep the per-pixel reflect vector over flat ground = a huge dark gradient "around" the player shadow. Fingerprint: dolly-invariant, bit-identical with shadows/SSR/fog/AO off, term ratio = D_GGX(NdotH) at material roughness, no `metallicFactor` key in the pak glTF JSON. Fix: metallic 0 in the blend + re-export.
 
 - Fixed CSM bias 0.01/0.02 is a threshold not a margin — parked-spot/sun changes re-trigger the coplanar wedge lattice; ship ~6 texels (0.06/0.12 × zScale) + `ENGINE_SHADOW_FIXED_BIAS_SCALE`
 - Screenshot runs and renderdoc runs see different cameras/world states (automated gate skips camera-db restore for SCREENSHOT but not RENDERDOC_CAPTURE) — A/B render-state changes only via renderdoc + pixel history/high-pass metrics
