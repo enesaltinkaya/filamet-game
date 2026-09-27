@@ -125,6 +125,13 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 - Attribute load-time phases against the SHIPPED asset payload, not the pipeline's intent: 1×1 placeholder PNGs + unreferenced ktx2 made the "props = libpng" baseline measure nothing
 - URI KTX2 images can't use Diligent's GLTF loader file path (KTX2 unsupported) — pre-fill `ModelCreateInfo::pTextureCache` from the TextureManager; filename semantic suffix carries sRGB/linear
+- Coplanar PCF self-shadowing (flat ground quad) cancels the fixed depth bias to zero — a ~1-texel-equivalent bias leaves a periodic wedge lattice; use ~4 texels (0.01/0.02 × z-scale) — superseded 2026-09-27: that factor is a threshold, not a margin; ~6 texels (0.06/0.12)
+
+## 2026-09-27 — [entries](lessons/2026-09-27.md)
+
+- Fixed CSM bias 0.01/0.02 is a threshold not a margin — parked-spot/sun changes re-trigger the coplanar wedge lattice; ship ~6 texels (0.06/0.12 × zScale) + `ENGINE_SHADOW_FIXED_BIAS_SCALE`
+- Screenshot runs and renderdoc runs see different cameras/world states (automated gate skips camera-db restore for SCREENSHOT but not RENDERDOC_CAPTURE) — A/B render-state changes only via renderdoc + pixel history/high-pass metrics
+- DiligentFX .fxh edits need the cpp-thirdparty rebuild (shaders_inc embedded at FX build time) AND a shadercache bust (cache key has no source hash); glslang rejects mutable static globals and stale PSOs run on silently
 
 ## Filament era (archive) — [entries](lessons-filament-archive.md)
 

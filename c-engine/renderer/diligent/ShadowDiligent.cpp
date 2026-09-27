@@ -317,12 +317,26 @@ namespace engine::renderer::diligent {
                 casterW2LP[c]._43 *= farPadS;
             }
 
-            // Depth bias per resolution (the Shadows sample's policy), normalized
-            // to the cascade z range: FractionalSamplingError adds it verbatim in
-            // NDC depth, so a fixed 0.005 is ~30 texels of cascade-0 depth here and
-            // washes every comparison to lit. Scale by the light-space z scale.
-            sa.fFixedDepthBias =
-                (tier.resolution >= 2048 ? 0.0025f : 0.005f) * sa.Cascades[0].f4LightSpaceScale.z * farPadS;
+            // Fixed receiver depth bias (the Shadows sample's policy): the
+            // receivers subtract it verbatim in NDC depth. The per-texel NDC
+            // depth step of a coplanar caster is ~constant across cascades
+            // (z-scale shrinks as the world texel grows), so ONE scalar covers
+            // all cascades — but it must clear the PCF tap footprint's slope
+            // noise: the Shadows-sample ~1-texel 0.0025·zScale left a periodic
+            // wedge lattice on the flat ground quad
+            // (docs/lessons/2026-09-26.md). ~6 texels of cascade-0 depth clears
+            // every cascade (world-space clearance grows on deeper cascades —
+            // accepted; shadow offset stays sub-meter).
+            static const float fixedBiasScale = [] {
+                float v = 1.0f;
+                if (const char* env = getenv("ENGINE_SHADOW_FIXED_BIAS_SCALE")) {
+                    const float parsed = (float)atof(env);
+                    if (parsed >= 0.0f && parsed <= 64.0f) v = parsed;
+                }
+                return v;
+            }();
+            sa.fFixedDepthBias = fixedBiasScale *
+                    (tier.resolution >= 2048 ? 0.06f : 0.12f) * sa.Cascades[0].f4LightSpaceScale.z * farPadS;
             for (int c = 0; c < sa.iNumCascades; c++) {
                 sa.Cascades[c].f4LightSpaceScale.z *= farPadS;
                 sa.Cascades[c].f4LightSpaceScaledBias.z *= farPadS;

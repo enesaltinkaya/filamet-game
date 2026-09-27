@@ -1584,7 +1584,6 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
     renderer.PointSize = 1.0f;
     renderer.MipBias = 0.0f;
     renderer.LightCount = 1;
-    renderer.DebugView = 0;
 
     // directional sun (frame->Lights[0]; the C++ PBRFrameAttribs carries the
     // Lights/ShadowMaps arrays — see the PBR_MAX_* mirrors at the top)
@@ -1638,9 +1637,13 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
         }
         props->numCascades = la->ShadowAttribs.iNumCascades;
         props->mode        = (float)engine::renderer::diligent::shadowDiligentMode();
+        static const f32 propsShadowDbg = [] {
+            const char* v = getenv("ENGINE_PBR_PROPS_SHADOW_DBG");
+            return v ? (f32)atoi(v) : 0.0f;
+        }();
         props->biasParams  = Diligent::float4{la->ShadowAttribs.fReceiverPlaneDepthBiasClamp,
                                               la->ShadowAttribs.fFixedDepthBias,
-                                              la->ShadowAttribs.fCascadeTransitionRegion, 0.0f};
+                                              la->ShadowAttribs.fCascadeTransitionRegion, propsShadowDbg};
     }
 }
 

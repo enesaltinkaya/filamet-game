@@ -183,7 +183,20 @@ VSOut main(in uint VertId : SV_VertexID)
 // sRGB-encoded swapchain, which encodes on store). Sampling the linear
 // offscreen and storing the same value into the sRGB backbuffer is the
 // identical encode-on-write — no extra conversion here.
-static constexpr char kBlitPS[] = R"(
+static constexpr char kDitherFn[] = R"(
+float bayerDither(float2 px)
+{
+    const float4x4 b = float4x4(
+        0.0 / 16.0,  8.0 / 16.0,  2.0 / 16.0, 10.0 / 16.0,
+       12.0 / 16.0,  4.0 / 16.0, 14.0 / 16.0,  6.0 / 16.0,
+        3.0 / 16.0, 11.0 / 16.0,  1.0 / 16.0,  9.0 / 16.0,
+       15.0 / 16.0,  7.0 / 16.0, 13.0 / 16.0,  5.0 / 16.0);
+    uint2 i = uint2(fmod(px, float2(4.0)));
+    return b[i.y][i.x] - 0.5;
+}
+)";
+
+std::string makeBlitPS(void) { return std::string(kDitherFn) + R"(
 Texture2D<float4> g_Source;
 SamplerState g_Source_sampler;
 
@@ -195,7 +208,91 @@ struct PSIn
 
 float4 main(in PSIn In) : SV_Target
 {
-    return g_Source.Sample(g_Source_sampler, In.UV);
+    float4 c = g_Source.Sample(g_Source_sampler, In.UV);
+    c.rgb += bayerDither(floor(In.Pos.xy)) * (1.0 / 512.0);
+    return c;
+}
+)"; }
+
+std::string makeCasPS(void) { return std::string(kDitherFn) + R"(
+Texture2D<float4> g_Source;
+SamplerState g_Source_sampler;
+
+struct CasAttribs
+{
+    float2 Texel;
+    float Sharpness;
+    float Pad;
+};
+cbuffer cbCasAttribs
+{
+    CasAttribs g_Cas;
+}
+
+struct PSIn
+{
+    float4 Pos : SV_Position;
+    float2 UV : UV;
+};
+
+static const float RCAS_LIMIT = 0.25 - 1.0 / 16.0;
+
+float rcasRcpMed(float x) { return exp2(-log2(x)); }
+)";
+}
+
+static constexpr char kCasPSTail[] = R"(
+float3 rcasFilter(float3 b, float3 d, float3 e, float3 f, float3 h, float s) {
+    float bL = b.b * 0.5 + (b.r * 0.5 + b.g);
+    float dL = d.b * 0.5 + (d.r * 0.5 + d.g);
+    float eL = e.b * 0.5 + (e.r * 0.5 + e.g);
+    float fL = f.b * 0.5 + (f.r * 0.5 + f.g);
+    float hL = h.b * 0.5 + (h.r * 0.5 + h.g);
+
+    float nz = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;
+    nz = saturate(abs(nz) * rcasRcpMed(max(max(max(bL, dL), eL), max(fL, hL)) -
+                                       min(min(min(bL, dL), eL), min(fL, hL))));
+    nz = -0.5 * nz + 1.0;
+
+    float mn4R = min(min(min(b.r, d.r), f.r), h.r);
+    float mn4G = min(min(min(b.g, d.g), f.g), h.g);
+    float mn4B = min(min(min(b.b, d.b), f.b), h.b);
+    float mx4R = max(max(max(b.r, d.r), f.r), h.r);
+    float mx4G = max(max(max(b.g, d.g), f.g), h.g);
+    float mx4B = max(max(max(b.b, d.b), f.b), h.b);
+
+    float hitMinR = mn4R / (4.0 * mx4R);
+    float hitMinG = mn4G / (4.0 * mx4G);
+    float hitMinB = mn4B / (4.0 * mx4B);
+    float hitMaxR = (1.0 - mx4R) / (4.0 * mn4R - 4.0);
+    float hitMaxG = (1.0 - mx4G) / (4.0 * mn4G - 4.0);
+    float hitMaxB = (1.0 - mx4B) / (4.0 * mn4B - 4.0);
+    float lobeR   = max(-hitMinR, hitMaxR);
+    float lobeG   = max(-hitMinG, hitMaxG);
+    float lobeB   = max(-hitMinB, hitMaxB);
+    float lobe =
+        max(-RCAS_LIMIT, min(max(max(lobeR, lobeG), lobeB), 0.0)) * s;
+
+    lobe = max(-RCAS_LIMIT, lobe);
+
+    lobe *= nz;
+
+    float rcpL = rcasRcpMed(4.0 * lobe + 1.0);
+    return (lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL;
+}
+
+float4 main(in PSIn In) : SV_Target
+{
+    const float2 t = g_Cas.Texel;
+    float3 b = g_Source.Sample(g_Source_sampler, In.UV + float2(0.0, -t.y)).rgb;
+    float3 d = g_Source.Sample(g_Source_sampler, In.UV + float2(-t.x, 0.0)).rgb;
+    float4 e4 = g_Source.Sample(g_Source_sampler, In.UV);
+    float3 e = e4.rgb;
+    float3 f = g_Source.Sample(g_Source_sampler, In.UV + float2(t.x, 0.0)).rgb;
+    float3 h = g_Source.Sample(g_Source_sampler, In.UV + float2(0.0, t.y)).rgb;
+    float3 c = rcasFilter(b, d, e, f, h, g_Cas.Sharpness);
+    c += bayerDither(floor(In.Pos.xy)) * (1.0 / 512.0);
+    return float4(c, e4.a);
 }
 )";
 
@@ -323,7 +420,9 @@ static void createBlitPSO(void) {
 
     shaderCI.Desc.ShaderType = SHADER_TYPE_PIXEL;
     shaderCI.Desc.Name = "taaBlitPS";
-    shaderCI.Source = getenv("ENGINE_TAA_DEBUG_MV") != nullptr ? kBlitMvPS : kBlitPS;
+    std::string blitSrc = makeBlitPS();
+    shaderCI.Source = getenv("ENGINE_TAA_DEBUG_MV") != nullptr ? kBlitMvPS
+                                                              : blitSrc.c_str();
     blitPS = shaderCacheCreate(device, shaderCI);
     if (!blitPS) {
         utils::warn("taa: blit PS failed");
@@ -369,104 +468,7 @@ static void createBlitPSO(void) {
     }
 }
 
-static constexpr char kCasPS[] = R"(
-Texture2D<float4> g_Source;
-SamplerState g_Source_sampler;
-
-struct CasAttribs
-{
-    float2 Texel;
-    float Sharpness;
-    float Pad;
-};
-cbuffer cbCasAttribs
-{
-    CasAttribs g_Cas;
-}
-
-struct PSIn
-{
-    float4 Pos : SV_Position;
-    float2 UV : UV;
-};
-
-static const float RCAS_LIMIT = 0.25 - 1.0 / 16.0;
-
-/* Approximate reciprocal with fp16-ish precision (AMD
- * ffxApproximateReciprocalMedium). The resolve deliberately uses this to
- * avoid visible tonality changes. */
-float rcasRcpMed(float x) { return exp2(-log2(x)); }
-
-/* Sharpening algorithm uses a minimal 3x3 neighborhood (cross taps):
- *    b
- *  d e f
- *    h
- *
- * Ported from the old engine's rcas.shader — FsrRcasFilterF (f32) with
- * FSR_RCAS_DENOISE on; the math is unchanged. */
-float3 rcasFilter(float3 b, float3 d, float3 e, float3 f, float3 h, float s) {
-    // Luma times 2.
-    float bL = b.b * 0.5 + (b.r * 0.5 + b.g);
-    float dL = d.b * 0.5 + (d.r * 0.5 + d.g);
-    float eL = e.b * 0.5 + (e.r * 0.5 + e.g);
-    float fL = f.b * 0.5 + (f.r * 0.5 + f.g);
-    float hL = h.b * 0.5 + (h.r * 0.5 + h.g);
-
-    // Noise detection.
-    float nz = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;
-    nz = saturate(abs(nz) * rcasRcpMed(max(max(max(bL, dL), eL), max(fL, hL)) -
-                                       min(min(min(bL, dL), eL), min(fL, hL))));
-    nz = -0.5 * nz + 1.0;
-
-    // Min and max of ring.
-    float mn4R = min(min(min(b.r, d.r), f.r), h.r);
-    float mn4G = min(min(min(b.g, d.g), f.g), h.g);
-    float mn4B = min(min(min(b.b, d.b), f.b), h.b);
-    float mx4R = max(max(max(b.r, d.r), f.r), h.r);
-    float mx4G = max(max(max(b.g, d.g), f.g), h.g);
-    float mx4B = max(max(max(b.b, d.b), f.b), h.b);
-
-    // Limiters (high precision division).
-    float hitMinR = mn4R / (4.0 * mx4R);
-    float hitMinG = mn4G / (4.0 * mx4G);
-    float hitMinB = mn4B / (4.0 * mx4B);
-    float hitMaxR = (1.0 - mx4R) / (4.0 * mn4R - 4.0);
-    float hitMaxG = (1.0 - mx4G) / (4.0 * mn4G - 4.0);
-    float hitMaxB = (1.0 - mx4B) / (4.0 * mn4B - 4.0);
-    float lobeR   = max(-hitMinR, hitMaxR);
-    float lobeG   = max(-hitMinG, hitMaxG);
-    float lobeB   = max(-hitMinB, hitMaxB);
-    float lobe =
-        max(-RCAS_LIMIT, min(max(max(lobeR, lobeG), lobeB), 0.0)) * s;
-
-    /* Engine extension (old engine's rcas.shader): s may exceed 1.0 (the
-     * slider goes to 150%). AMD only ever uses multipliers in [0.25, 1.0],
-     * where the resolve denominator 1 + 4*lobe is guaranteed >= 0.25. Above
-     * 1.0 an unclamped lobe could reach -0.375 and flip the denominator
-     * negative (inverted / NaN pixels). Re-clamp after the multiply: >1.0
-     * amplifies the adaptive lobe but never past the kernel's hard bound. */
-    lobe = max(-RCAS_LIMIT, lobe);
-
-    // Apply noise removal.
-    lobe *= nz;
-
-    // Resolve.
-    float rcpL = rcasRcpMed(4.0 * lobe + 1.0);
-    return (lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL;
-}
-
-float4 main(in PSIn In) : SV_Target
-{
-    const float2 t = g_Cas.Texel;
-    float3 b = g_Source.Sample(g_Source_sampler, In.UV + float2(0.0, -t.y)).rgb;
-    float3 d = g_Source.Sample(g_Source_sampler, In.UV + float2(-t.x, 0.0)).rgb;
-    float4 e4 = g_Source.Sample(g_Source_sampler, In.UV);
-    float3 e = e4.rgb;
-    float3 f = g_Source.Sample(g_Source_sampler, In.UV + float2(t.x, 0.0)).rgb;
-    float3 h = g_Source.Sample(g_Source_sampler, In.UV + float2(0.0, t.y)).rgb;
-    return float4(rcasFilter(b, d, e, f, h, g_Cas.Sharpness), e4.a);
-}
-)";
+static std::string casPSSource(void) { return makeCasPS() + kCasPSTail; }
 
 static void createCasPSO(void) {
     if (casPSO) {
@@ -481,7 +483,8 @@ static void createCasPSO(void) {
     shaderCI.Desc.ShaderType = SHADER_TYPE_PIXEL;
     shaderCI.EntryPoint = "main";
     shaderCI.Desc.Name = "taaCasPS";
-    shaderCI.Source = kCasPS;
+    std::string casSrc = casPSSource();
+    shaderCI.Source = casSrc.c_str();
     casPS = shaderCacheCreate(device, shaderCI);
     if (!casPS) {
         utils::warn("taa: cas PS failed");
