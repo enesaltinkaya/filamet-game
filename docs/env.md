@@ -39,13 +39,11 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 
 | Var                   | Value                               | Effect                                                                                                  |
 | --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `ENGINE_CAMERA`       | `topdown` \| `close` \| `character` | Pick a fixed validation vantage after world load (instead of the default framing).                      |
-| `ENGINE_CAMERA_DOLLY` | `x,y,z`                             | Constant camera velocity in m/s (also marks the run as automated → player parked).                      |
 | `ENGINE_TELEPORT`     | `x,y,z`                             | Override the spawn position (world metres, f32).                                                        |
 | `ENGINE_AUTO_RUN`     | truthy                              | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
 | `ENGINE_TPOSE`        | truthy                              | Always play the character T-pose (inspect hook).                                                        |
 | `ENGINE_NO_ANIM`      | any value                           | Skip loading/playing the character animation clips.                                                     |
-| `ENGINE_NO_PLAYER`    | any value                           | Keep the player parked (same gate as screenshot/dolly runs).                                            |
+| `ENGINE_NO_PLAYER`    | any value                           | Keep the player parked (same gate as screenshot runs).                                            |
 | `ENGINE_FOG_DENSITY`  | float                               | Override the exponential fog density (default 0.00035).                                                 |
 
 ## GLTF / character

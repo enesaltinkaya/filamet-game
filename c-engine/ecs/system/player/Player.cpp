@@ -85,13 +85,8 @@ static char autoRunEnabled(void) {
     return v;
 }
 
-// Screenshot / dolly / renderdoc / no-player runs keep the player parked:
-// the scripted camera owns the view, so a fly-end must not auto-activate the
-// player over it (same gate as added(); ENGINE_AUTO_RUN is the exception —
-// it IS the camera-follow test).
 static char automatedRun(void) {
     return (getenv("ENGINE_SCREENSHOT") != nullptr) ||
-           (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
            (getenv("ENGINE_NO_PLAYER") != nullptr);
 }
 
@@ -389,10 +384,6 @@ static void playerSpawn(void) {
 
 void PlayerSystem::added() {
     playerSpawn();
-    // Automated runs (screenshot / dolly / renderdoc) keep their scripted
-    // camera: the player exists (model at spawn) but the mode stays off so
-    // WASD and the orbit camera never fight ENGINE_CAMERA/DOLLY framing.
-    // ENGINE_AUTO_RUN is the exception — it IS the camera-follow test.
     char automated = automatedRun();
     p.autoRun = autoRunEnabled();
     p.canTakeover = !automated;
@@ -786,11 +777,6 @@ void PlayerSystem::postUpdate() {
     if (now > lastSave + 1000.0) {
         lastSave = now;
         playerDbSaveState();
-        // The camera table holds the last camera view in either mode — while
-        // the orbit drives the renderer camera, persist its actual eye
-        // position + yaw/pitch (fly convention: pitch > 0 = looking up). Gated
-        // on p.active: automated runs (screenshot / dolly) keep their scripted
-        // camera and must not clobber the saved view.
         if (p.active) {
             f32 pos[3];
             f32 f[3];

@@ -27,7 +27,6 @@ static void lookQuaternion(const float f[3], float q[4]) {
     float up[3] = {0.0f, 1.0f, 0.0f};
     float d     = f[0] * up[0] + f[1] * up[1] + f[2] * up[2];
     // looking straight up/down degenerates the basis; fall back to the -Z up
-    // the topdown ENGINE_CAMERA vantage itself uses
     if (d > 0.9999f || d < -0.9999f) {
         up[0] = 0.0f;
         up[1] = 0.0f;

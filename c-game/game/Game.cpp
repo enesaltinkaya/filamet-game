@@ -37,40 +37,6 @@ namespace game {
         return on;
     }
 
-    // Automated validation hook: ENGINE_CAMERA_DOLLY="vx,vy,vz" pans the camera
-    // at that velocity (m/s) while the world is up. Combined with
-    // ENGINE_SCREENSHOT_FRAME it screenshots a camera that has actually moved,
-    // so a headless run exercises the TAA reprojection + the world anchor
-    // re-centering (the gltf placement roots re-derive against the moving
-    // camera eye every frame).
-    static void updateCameraDolly() {
-        static f32 vel[3]  = {};
-        static bool parsed = false;
-        if (!parsed) {
-            parsed        = true;
-            const char* v = getenv("ENGINE_CAMERA_DOLLY");
-            if (v && v[0]) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "%s", v);
-                for (char* c = buf; *c; c++) {
-                    if (*c == ',') *c = ' ';
-                }
-                sscanf(buf, "%f %f %f", &vel[0], &vel[1], &vel[2]);
-                utils::info("game: camera dolly (%.1f, %.1f, %.1f) m/s", vel[0], vel[1], vel[2]);
-            }
-        }
-        if (vel[0] == 0.0f && vel[1] == 0.0f && vel[2] == 0.0f) return;
-        if (engine::flyingCameraFlying()) return;  // the player owns the camera
-
-        f32 pos[3], fwd[3];
-        engine::renderer::rendererCameraGet(pos, fwd);
-        const f32 step   = (f32)utils::timer.dt;
-        const f32 eye[3] = {pos[0] + vel[0] * step, pos[1] + vel[1] * step, pos[2] + vel[2] * step};
-        const f32 target[3] = {eye[0] + fwd[0], eye[1] + fwd[1], eye[2] + fwd[2]};
-        const f32 up[3]     = {0.0f, 1.0f, 0.0f};
-        engine::renderer::rendererCameraLookAt(eye, target, up);
-    }
-
     GameSystem::GameSystem() : System("Game") {}
 
     void GameSystem::added() {
@@ -189,75 +155,6 @@ namespace game {
         // at this point.
         engine::playerSetSpawn(spawnPt[0], spawnPt[1], spawnPt[2]);
 
-        // Camera framing: ENGINE_CAMERA selects a validation vantage; the
-        // default frames the spawn on the terrain.
-        f32 center[3] = {spawnPt[0], spawnPt[1], spawnPt[2]};
-
-        const char* cameraMode = getenv("ENGINE_CAMERA");
-        if (cameraMode && utils::strequals(cameraMode, "topdown")) {
-            // top-down view (validation shots): up = -z keeps the frame stable
-            f32 eye[3] = {center[0], center[1] + 9000.0f, center[2] + 0.01f};
-            f32 up[3]  = {0.0f, 0.0f, -1.0f};
-            engine::renderer::rendererCameraLookAt(eye, center, up);
-        } else if (cameraMode && utils::strequals(cameraMode, "close")) {
-            f32 eye[3]    = {center[0] + 180.0f, center[1] + 60.0f, center[2] + 180.0f};
-            f32 lookAt[3] = {center[0], center[1], center[2] + 60.0f};
-            f32 up[3]     = {0.0f, 1.0f, 0.0f};
-            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
-        } else if (cameraMode && utils::strequals(cameraMode, "ground")) {
-            f32 eye[3]    = {center[0] + 12.0f, center[1] + 6.0f, center[2] + 12.0f};
-            f32 up[3]     = {0.0f, 1.0f, 0.0f};
-            engine::renderer::rendererCameraLookAt(eye, center, up);
-        } else if (cameraMode && utils::strequals(cameraMode, "cast")) {
-            f32 lookAt[3] = {center[0] - 30.0f, center[1] + 0.3f, center[2] - 30.0f};
-            f32 eye[3]    = {center[0] - 36.0f, center[1] + 4.3f, center[2] - 36.0f};
-            f32 up[3]     = {0.0f, 1.0f, 0.0f};
-            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
-        } else if (cameraMode && utils::strequals(cameraMode, "shadow")) {
-            f32 eye[3]    = {center[0] - 1.66f, center[1] - 0.3f, center[2] + 2.0f};
-            f32 lookAt[3] = {center[0] + 0.25f, center[1] - 1.55f, center[2] + 0.21f};
-            f32 up[3]     = {0.0f, 1.0f, 0.0f};
-            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
-        } else if (cameraMode && utils::strequals(cameraMode, "character")) {
-            // Portrait of the player character (eve at the old spawn point):
-            // ~1 character-height diagonal back, eye slightly above chest,
-            // looking at chest height — close enough for a texture/material
-            // check, far enough that the whole silhouette is in frame. The
-            // framing uses the LOCAL bounds + spawn (the model is placed
-            // after framing, once the anchor exists).
-            f32 lmin[3], lmax[3];
-            if (engine::gltf::gltfLocalBoundingBox(lmin, lmax)) {
-                // feet y: the spawn y (terrain surface probe / teleport value)
-                const f32 feetY = spawnPt[1];
-                // placement pins the local ORIGIN (feet) at the spawn point, so
-                // the body centre sits at spawn + (centre - origin) — the
-                // local centre relative to the origin, not relative to min
-                const double cx   = spawnPt[0] + (lmax[0] + lmin[0]) * 0.5;
-                const double cz   = spawnPt[2] + (lmax[2] + lmin[2]) * 0.5;
-                const double h    = lmax[1] - lmin[1];
-                const double chest[3] = {cx, feetY + h * 0.6, cz};
-                const double eye[3]   = {chest[0] + h, chest[1] + h * 0.2, chest[2] - h};
-                const double up[3]    = {0.0, 1.0, 0.0};
-                utils::info("game: character camera — local bounds [%.2f %.2f %.2f]-[%.2f %.2f %.2f]",
-                            lmin[0],
-                            lmin[1],
-                            lmin[2],
-                            lmax[0],
-                            lmax[1],
-                            lmax[2]);
-                engine::renderer::rendererCameraLookAt(eye, chest, up);
-            } else {
-                utils::warn("game: character camera — no gltf bounds, keeping default camera");
-            }
-        } else {
-            f32 eye[3]    = {center[0] + 180.0f, center[1] + 75.0f, center[2] + 180.0f};
-            f32 lookAt[3] = {center[0], center[1] + 30.0f, center[2]};
-            f32 up[3]     = {0.0f, 1.0f, 0.0f};
-            engine::renderer::rendererCameraLookAt(eye, lookAt, up);
-        }
-
-        // Model placement: NOW that the camera (and therefore the world
-        // anchor) is framed — the feet are re-expressed relative to it.
         engine::gltf::gltfPlaceAt(spawnPt[0], spawnPt[1], spawnPt[2]);
 
         // sun (directional) + constant ambient, backend-agnostic.
@@ -361,7 +258,6 @@ namespace game {
 
     void GameSystem::update() {
         engine::gltf::gltfUpdate(utils::timer.dt);
-        updateCameraDolly();
     }
 
     GameSystem gameSystem;

@@ -161,17 +161,9 @@ void FlyingCameraSystem::added() {
 
     // Restore the last saved free-camera view; R (reset) then returns to
     // this same state rather than the scripted startup camera.
-    // Automated runs (screenshot / camera vantage / dolly / renderdoc /
-    // no-player) skip the restore: the scripted camera owns the view and the
-    // DB row is a leftover from an interactive session (the same gate as the
-    // player takeover suppression in Player.cpp).
-    const char automated =
-            ((getenv("ENGINE_SCREENSHOT") != nullptr) || (getenv("ENGINE_CAMERA") != nullptr) ||
-             (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
-             (getenv("ENGINE_NO_PLAYER") != nullptr)) && (getenv("ENGINE_CAMERA_DB") == nullptr);
     cameraDbInit();
     CameraDb saved = {};
-    if (!automated && cameraDbLoad("camera", &saved)) {
+    if (cameraDbLoad("camera", &saved)) {
         pos   = {saved.pos[0], saved.pos[1], saved.pos[2]};
         yaw   = saved.yaw;
         pitch = saved.pitch;
@@ -237,8 +229,6 @@ void FlyingCameraSystem::update() {
     }
     applyCamera();
 
-    // Periodic save like the player's (automated runs never fly, so a
-    // scripted camera — dolly, framing — is never persisted).
     static double lastSave = 0.0;
     const double now = utils::millies();
     if (now > lastSave + 1000.0) {
