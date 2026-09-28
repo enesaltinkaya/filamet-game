@@ -57,7 +57,7 @@ void settingsInit(void) {
      * diligent backend via ssaoSettingsApply. Types must match exactly or the
      * settings file validation rewrites the whole file (docs/lessons.md). */
     templates.push_back((Template{"ssaoRadius", "double", 1.0}));
-    templates.push_back((Template{"ssaoAlgorithm", "int", 0.0}));
+    templates.push_back((Template{"ssaoAlgorithm", "int", 2.0}));
     templates.push_back((Template{"ssaoIntensity", "double", 1.0}));
     templates.push_back((Template{"ssrDisabled", "boolean", 0.}));
     templates.push_back((Template{"ssrStrength", "double", 1.0}));

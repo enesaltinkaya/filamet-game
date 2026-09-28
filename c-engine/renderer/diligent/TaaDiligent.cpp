@@ -1635,9 +1635,54 @@ static void taaDumpTex16fPng(IDeviceContext* ctx, ITexture* tex, const char* pat
     stbi_write_png(path, (int)w, (int)h, 4, px.data(), (int)w * 4);
 }
 
+static void taaDumpTexR8Png(IDeviceContext* ctx, ITexture* tex, const char* path) {
+    if (!tex) {
+        return;
+    }
+    RefCntAutoPtr<ITexture> staging;
+    {
+        TextureDesc desc = tex->GetDesc();
+        desc.Name = "taaStageDumpStagingR8";
+        desc.Usage = USAGE_STAGING;
+        desc.BindFlags = BIND_NONE;
+        desc.CPUAccessFlags = CPU_ACCESS_READ;
+        device->CreateTexture(desc, nullptr, &staging);
+        if (!staging) {
+            return;
+        }
+    }
+    {
+        CopyTextureAttribs copy{tex, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                staging, RESOURCE_STATE_TRANSITION_MODE_TRANSITION};
+        ctx->CopyTexture(copy);
+        ctx->WaitForIdle();
+    }
+    MappedTextureSubresource mapped;
+    ctx->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_NONE, nullptr, mapped);
+    if (!mapped.pData) {
+        return;
+    }
+    const u32 w = tex->GetDesc().Width;
+    const u32 h = tex->GetDesc().Height;
+    std::vector<u8> px((size_t)w * h * 4);
+    for (u32 y = 0; y < h; y++) {
+        const u8* src = (const u8*)mapped.pData + (size_t)y * mapped.Stride;
+        u8* row = &px[(size_t)y * w * 4];
+        for (u32 x = 0; x < w; x++) {
+            const u8 v = src[(size_t)x];
+            row[(size_t)x * 4 + 0] = v;
+            row[(size_t)x * 4 + 1] = v;
+            row[(size_t)x * 4 + 2] = v;
+            row[(size_t)x * 4 + 3] = 255;
+        }
+    }
+    ctx->UnmapTextureSubresource(staging, 0, 0);
+    stbi_write_png(path, (int)w, (int)h, 4, px.data(), (int)w * 4);
+}
+
 void taaStageDump(IDeviceContext* ctx) {
     const char* dir = taaStageDumpDir();
-    if (!dir || !taaOn) {
+    if (!dir) {
         return;
     }
     static u32 remaining = [] {
@@ -1662,11 +1707,17 @@ void taaStageDump(IDeviceContext* ctx) {
         return;
     }
     char path[600];
-    snprintf(path, sizeof(path), "%s/%u_world.png", dir, frameIdx);
-    taaDumpTex16fPng(ctx, sceneColorTex, path);
-    ITextureView* accSRV = taa->GetAccumulatedFrameSRV();
-    snprintf(path, sizeof(path), "%s/%u_accum.png", dir, frameIdx);
-    taaDumpTex16fPng(ctx, accSRV ? accSRV->GetTexture() : nullptr, path);
+    if (ITextureView* aoSRV = ssaoAOSRV()) {
+        snprintf(path, sizeof(path), "%s/%u_ssao.png", dir, frameIdx);
+        taaDumpTexR8Png(ctx, aoSRV->GetTexture(), path);
+    }
+    if (taaOn) {
+        snprintf(path, sizeof(path), "%s/%u_world.png", dir, frameIdx);
+        taaDumpTex16fPng(ctx, sceneColorTex, path);
+        ITextureView* accSRV = taa->GetAccumulatedFrameSRV();
+        snprintf(path, sizeof(path), "%s/%u_accum.png", dir, frameIdx);
+        taaDumpTex16fPng(ctx, accSRV ? accSRV->GetTexture() : nullptr, path);
+    }
     remaining--;
 }
 

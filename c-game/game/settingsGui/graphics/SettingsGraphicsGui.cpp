@@ -30,7 +30,7 @@ static int   shadowsQuality        = 2;       // Medium
 static char  shadowQualityDisabled = 0;
 static char  aoEnabled             = 1;
 static float ssaoRadius            = 1.0f;   // AO radius 0.1..10 (world-space)
-static int   ssaoAlgorithm         = 0;      // 0=GTAO 1=HBAO 2=VBAO
+static int   ssaoAlgorithm         = 2;      // 0=GTAO 1=HBAO 2=VBAO
 static float ssaoIntensity         = 1.0f;   // AO composite strength 0..2
 static char  ssrEnabled             = 1;
 static float ssrStrength            = 1.0f;   // SSR composite strength 0..2

@@ -6,6 +6,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 ## 2026-09-28 — [entries](lessons/2026-09-28.md)
 
+- "Ghosty AO" is a GTAO spatial smear at 1.0 world radius, not temporal history (the `ENGINE_SSAO_NO_HISTORY` A/B keeps the same contact blob; judge on the AO stage dump, not sRGB) — fixed by defaulting to VBAO (`ssaoAlgorithm` 2): contact dark area 0.262 -> 0.176
 - TAA grass shimmer in a static scene is the 16-sample Halton jitter table (3.75 Hz period ≈ the IIR corner at weight 0.9 → ~26% transmission, not attenuation) flipping 1 px hard-edged transparent props ON/OFF at full contrast: fix = engine-side 1024-sample aperiodic jitter + 0.25× scale + total-apparent-motion MV (RenderPBR.psh 2-arg GetMotionVector) + unjittered props pass (`fillFrameAttribsUnjittered`) — grass flicker 8–10k px/frame → 0; the residual "player" and "FPS text" flicker are real (idle animation, showFps counter), and the prebuilt libDiligentFX.a is newer than its git sources (probe the .a, not the .cpp)
 
 ## 2026-09-26 — [entries](lessons/2026-09-26.md)

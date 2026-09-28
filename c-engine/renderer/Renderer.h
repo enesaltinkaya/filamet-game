@@ -18,7 +18,7 @@ struct GraphicsSettings {
     int shadowQuality = 1;         // 0 low, 1 medium, 2 high (ignored while mode == off)
     bool ssao = true;
     float ssaoRadius    = 1.0f;   // 0.1..10 world-space AO radius (DiligentFX EffectRadius)
-    int ssaoAlgorithm   = 0;      // 0=GTAO 1=HBAO 2=VBAO
+    int ssaoAlgorithm   = 2;      // 0=GTAO 1=HBAO 2=VBAO
     float ssaoIntensity = 1.0f;   // 0..2 composite strength (ao.r multiply)
     bool ssr = true;
     float ssrStrength = 1.0f;      // 0..2 composite strength (ssr.r multiply)
