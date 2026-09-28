@@ -4,6 +4,10 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+## 2026-09-28 — [entries](lessons/2026-09-28.md)
+
+- TAA grass shimmer in a static scene is the 16-sample Halton jitter table (3.75 Hz period ≈ the IIR corner at weight 0.9 → ~26% transmission, not attenuation) flipping 1 px hard-edged transparent props ON/OFF at full contrast: fix = engine-side 1024-sample aperiodic jitter + 0.25× scale + total-apparent-motion MV (RenderPBR.psh 2-arg GetMotionVector) + unjittered props pass (`fillFrameAttribsUnjittered`) — grass flicker 8–10k px/frame → 0; the residual "player" and "FPS text" flicker are real (idle animation, showFps counter), and the prebuilt libDiligentFX.a is newer than its git sources (probe the .a, not the .cpp)
+
 ## 2026-09-26 — [entries](lessons/2026-09-26.md)
 
 - `extern "C"` cache hooks into a statically-linked third-party lib must be declared in a shared header but DEFINED in a separate archive member — inline bodies in the header get inlined into the lib's TU and your strong game-side definitions are silently never used (no link error; `nm` on the lib object shows no `U` refs; timing unchanged)

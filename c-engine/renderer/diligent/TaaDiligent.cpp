@@ -4,8 +4,10 @@
 // offscreen chain, the jittered projection, the camera-attribs constant
 // buffer and the final blit into the sRGB swapchain backbuffer.
 // Motion-vector convention (must match the world passes' output): NDC-space
-// per-pixel delta (currNDC − currJitter) − (prevNDC − prevJitter), the
-// same quantity RenderPBR.psh's GetMotionVector produces for the glTF pass.
+// per-pixel total apparent motion currNDC − prevNDC (RenderPBR.psh's
+// GetMotionVector), including the per-frame camera-jitter delta — TAA
+// reprojection needs it to align the previous (differently jittered)
+// frame's history with the current one.
 // Integration reference: DiligentSamples Tutorial27_PostProcessing
 // (PrepareResources every frame, Execute with camera CB + curr/prev depth +
 // motion vectors, GetAccumulatedFrameSRV feeds the final pass).
@@ -1256,6 +1258,36 @@ void taaWarmup(void) {
     taaEnsureFrameResources(context);
 }
 
+
+static float haltonValue(float base, u32 index) {
+    float result = 0.0f;
+    float f = 1.0f;
+    while (index > 0) {
+        f /= base;
+        result += f * (float)(index % (u32)base);
+        index /= (u32)base;
+    }
+    return result;
+}
+
+static u32 taaJitterSampleCount(void) {
+    static const u32 count = [] {
+        if (const char* e = getenv("ENGINE_JITTER_SAMPLES")) {
+            const u32 v = (u32)strtoul(e, nullptr, 10);
+            return v ? v : (u32)16;
+        }
+        return (u32)1024;
+    }();
+    return count;
+}
+
+static float2 taaJitterOffset(u32 frameIdx, u32 width, u32 height) {
+    const u32 count = taaJitterSampleCount();
+    const u32 phase = frameIdx % count;
+    return float2{(haltonValue(2.0f, phase + 1) - 0.5f) / (0.5f * (float)width),
+                  (haltonValue(3.0f, phase + 1) - 0.5f) / (0.5f * (float)height)};
+}
+
 void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
     if (!postFXContext || !taa || !cameraCB) {
         return;
@@ -1270,7 +1302,19 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
 
     // Jitter this frame's projection (TAA picks the Halton phase for the
     // CURRENT frame — PrepareResources above stamped the frame index).
-    currJitter = taaOn ? taa->GetJitterOffset() : float2{0.0f, 0.0f};
+    static const float jitterScale = [] {
+        if (const char* env = getenv("ENGINE_JITTER_SCALE")) {
+            const float v = (float)atof(env);
+            return v < 0.0f ? 0.0f : v;
+        }
+        return 0.25f;
+    }();
+    float2 jitterOffset = taaOn ? taaJitterOffset(frameIdx, targetWidth, targetHeight) : float2{0.0f, 0.0f};
+    jitterOffset *= jitterScale;
+    currJitter = jitterOffset;
+    if (getenv("ENGINE_JITTER_DUMP")) {
+        utils::info("jit: frame %u (%+.6f, %+.6f) NDC", frameIdx, currJitter.x, currJitter.y);
+    }
     proj._31 += currJitter.x;
     proj._32 += currJitter.y;
 
@@ -1354,7 +1398,7 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
             float4 cp = rowClip(camAttribs[1].mViewProj, relPrev);
             float2 nCurr{cc.x / cc.w, cc.y / cc.w};
             float2 nPrev{cp.x / cp.w, cp.y / cp.w};
-            float2 mv = (nCurr - camAttribs[0].f2Jitter) - (nPrev - camAttribs[1].f2Jitter);
+            float2 mv = nCurr - nPrev;
             utils::info("taa: MVPROBE ndcCurr=(%+.4f,%+.4f) ndcPrev=(%+.4f,%+.4f) mv=(%+.5f,%+.5f) NDC",
                     nCurr.x, nCurr.y, nPrev.x, nPrev.y, mv.x, mv.y);
         }
@@ -1539,6 +1583,93 @@ static void taaDumpMotionVectors(IDeviceContext* ctx) {
     }
 }
 
+
+static const char* taaStageDumpDir(void) {
+    static const char* dir = getenv("ENGINE_STAGE_DUMP");
+    return dir;
+}
+
+static void taaDumpTex16fPng(IDeviceContext* ctx, ITexture* tex, const char* path) {
+    if (!tex) {
+        return;
+    }
+    RefCntAutoPtr<ITexture> staging;
+    {
+        TextureDesc desc = tex->GetDesc();
+        desc.Name = "taaStageDumpStaging";
+        desc.Usage = USAGE_STAGING;
+        desc.BindFlags = BIND_NONE;
+        desc.CPUAccessFlags = CPU_ACCESS_READ;
+        device->CreateTexture(desc, nullptr, &staging);
+        if (!staging) {
+            return;
+        }
+    }
+    {
+        CopyTextureAttribs copy{tex, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                staging, RESOURCE_STATE_TRANSITION_MODE_TRANSITION};
+        ctx->CopyTexture(copy);
+        ctx->WaitForIdle();
+    }
+    MappedTextureSubresource mapped;
+    ctx->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_NONE, nullptr, mapped);
+    if (!mapped.pData) {
+        return;
+    }
+    const u32 w = tex->GetDesc().Width;
+    const u32 h = tex->GetDesc().Height;
+    std::vector<u8> px((size_t)w * h * 4);
+    for (u32 y = 0; y < h; y++) {
+        const u8* src = (const u8*)mapped.pData + (size_t)y * mapped.Stride;
+        u8* row = &px[(size_t)y * w * 4];
+        for (u32 x = 0; x < w; x++) {
+            for (u32 c = 0; c < 4; c++) {
+                float v = f16tof32(*(const u16*)(src + (size_t)x * 8 + c * 2));
+                if (v < 0.0f) v = 0.0f;
+                if (v > 1.0f) v = 1.0f;
+                row[(size_t)x * 4 + c] = (u8)(v * 255.0f + 0.5f);
+            }
+        }
+    }
+    ctx->UnmapTextureSubresource(staging, 0, 0);
+    stbi_write_png(path, (int)w, (int)h, 4, px.data(), (int)w * 4);
+}
+
+void taaStageDump(IDeviceContext* ctx) {
+    const char* dir = taaStageDumpDir();
+    if (!dir || !taaOn) {
+        return;
+    }
+    static u32 remaining = [] {
+        if (const char* e = getenv("ENGINE_SCREENSHOT_BURST")) return (u32)strtoul(e, nullptr, 10);
+        return (u32)8;
+    }();
+    static u32 stride = [] {
+        if (const char* e = getenv("ENGINE_SCREENSHOT_BURST_STRIDE")) {
+            const u32 v = (u32)strtoul(e, nullptr, 10);
+            return v ? v : (u32)1;
+        }
+        return (u32)8;
+    }();
+    static const u32 start = [] {
+        if (const char* e = getenv("ENGINE_SCREENSHOT_FRAME")) return (u32)strtoul(e, nullptr, 10);
+        return (u32)120;
+    }();
+    if (frameIdx < start || !remaining) {
+        return;
+    }
+    if ((frameIdx - start) % stride != 0) {
+        return;
+    }
+    char path[600];
+    snprintf(path, sizeof(path), "%s/%u_world.png", dir, frameIdx);
+    taaDumpTex16fPng(ctx, sceneColorTex, path);
+    ITextureView* accSRV = taa->GetAccumulatedFrameSRV();
+    snprintf(path, sizeof(path), "%s/%u_accum.png", dir, frameIdx);
+    taaDumpTex16fPng(ctx, accSRV ? accSRV->GetTexture() : nullptr, path);
+    remaining--;
+}
+
 void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     if (!sceneColorTex || !backRTV) {
         return;
@@ -1588,6 +1719,7 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
             srcColorSRV = taa->GetAccumulatedFrameSRV();
         }
     }
+    taaStageDump(ctx);
 
     if (!taaOn && postFXContext && cameraCB &&
             ((ssaoReady() && ssaoOn()) || (ssrReady() && ssrOn()))) {

@@ -12,10 +12,10 @@
 //         → blit (linear → sRGB swapchain backbuffer)
 //         → imgui/rmlui draw directly on the backbuffer (unchanged)
 // Motion vectors follow the DiligentFX PBR convention
-// (RenderPBR.psh GetMotionVector): NDC-space
-// (currNDC − currJitter) − (prevNDC − prevJitter). The camera jitter comes
-// from TAA::GetJitterOffset (Halton 2/3) and is baked into the projection
-// every world pass consumes via diligentFrameProj().
+// (RenderPBR.psh GetMotionVector): NDC-space total apparent motion
+// currNDC − prevNDC, including the per-frame camera-jitter delta. The
+// camera jitter comes from TAA::GetJitterOffset (Halton 2/3) and is baked
+// into the projection every world pass consumes via diligentFrameProj().
 // Settings live here: taaSettingsApply is driven by
 // RenderBackend::applyGraphicsSettings (taaEnabled / taaWeight in
 // settings.json — the graphics settings page).

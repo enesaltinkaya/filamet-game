@@ -1516,10 +1516,9 @@ size_t gltfDiligentMeshNodeCount(void) {
     return count;
 }
 
-// fills the shared PBR frame attribs (camera + sun) for GLTF_PBR_Renderer
-static void fillFrameAttribs(IDeviceContext* ctx) {
+static void fillFrameAttribsInner(IDeviceContext* ctx, const float4x4& proj,
+        float2 jitter, const HLSL::CameraAttribs* prevCamera) {
     const float4x4& view = engine::renderer::diligent::diligentFrameView();
-    const float4x4& proj = engine::renderer::diligent::diligentFrameProj();
     const SwapChainDesc& scDesc = swapChain->GetDesc();
 
     MapHelper<HLSL::PBRFrameAttribs> frame(ctx, frameAttribsCB, MAP_WRITE, MAP_FLAG_DISCARD);
@@ -1548,10 +1547,8 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
     camera.fHandness = view.Determinant() > 0 ? 1.0f : -1.0f;
     // TAA: this frame's sub-pixel jitter (undone by the shader's motion
     // math) and the previous frame's camera for the reprojection.
-    camera.f2Jitter = float2{engine::renderer::diligent::taaCurrentJitterX(),
-            engine::renderer::diligent::taaCurrentJitterY()};
-    frame->PrevCamera = *static_cast<const HLSL::CameraAttribs*>(
-            engine::renderer::diligent::taaPrevCameraAttribs());
+    camera.f2Jitter = jitter;
+    frame->PrevCamera = *prevCamera;
 
     // Prev-camera anchor correction (taaPrevAnchorDelta): the glTF PBR
     // world positions are also anchored at the CURRENT anchor, so the
@@ -1647,6 +1644,31 @@ static void fillFrameAttribs(IDeviceContext* ctx) {
     }
 }
 
+// fills the shared PBR frame attribs (camera + sun) for GLTF_PBR_Renderer
+static void fillFrameAttribs(IDeviceContext* ctx) {
+    fillFrameAttribsInner(ctx, engine::renderer::diligent::diligentFrameProj(),
+            float2{engine::renderer::diligent::taaCurrentJitterX(),
+                   engine::renderer::diligent::taaCurrentJitterY()},
+            static_cast<const HLSL::CameraAttribs*>(
+                    engine::renderer::diligent::taaPrevCameraAttribs()));
+}
+
+static void fillFrameAttribsUnjittered(IDeviceContext* ctx) {
+    float4x4 proj = engine::renderer::diligent::diligentFrameProj();
+    proj._31 -= engine::renderer::diligent::taaCurrentJitterX();
+    proj._32 -= engine::renderer::diligent::taaCurrentJitterY();
+    const HLSL::CameraAttribs* prev = static_cast<const HLSL::CameraAttribs*>(
+            engine::renderer::diligent::taaPrevCameraAttribs());
+    HLSL::CameraAttribs prevUnjittered = *prev;
+    prevUnjittered.mProj._31 -= prev->f2Jitter.x;
+    prevUnjittered.mProj._32 -= prev->f2Jitter.y;
+    prevUnjittered.mViewProj = prevUnjittered.mView * prevUnjittered.mProj;
+    prevUnjittered.mProjInv = prevUnjittered.mProj.Inverse();
+    prevUnjittered.mViewProjInv = prevUnjittered.mViewProj.Inverse();
+    fillFrameAttribsInner(ctx, proj, float2{0.0f, 0.0f}, &prevUnjittered);
+}
+
+
 // internal accessors for the render hook below (statics stay file-local)
 GLTF::Model* worldModel(void) { return model.get(); }
 GLTF::ModelTransforms* worldTransforms(void) { return transforms.get(); }
@@ -1740,6 +1762,9 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
         for (size_t i = 0, n = sceneModels.size(); i < n; i++) {
             StaticSceneModel& e = sceneModels[i];
             if (!(i == 0 && splatActive)) {
+                if (i > 0) {
+                    fillFrameAttribsUnjittered(ctx);
+                }
                 Diligent::ScopedDebugGroup group(ctx, (i == 0) ? "terrain" : "props");
                 const GLTF::ModelTransforms* prev =
                         prevPoses[i].NodeGlobalMatrices.size() == e.transforms->NodeGlobalMatrices.size() &&
@@ -1751,6 +1776,7 @@ void worldDraw(Diligent::IDeviceContext* ctx) {
             prevPoses[i] = *e.transforms;  // next frame's motion-vector reference
         }
     }
+    fillFrameAttribs(ctx);
     if (model) {
         Diligent::ScopedDebugGroup playerGroup(ctx, "player");
         renderInfo.SceneIndex = worldSceneIndex();
