@@ -21,6 +21,7 @@ first use (`static`), so set them before launch, not mid-run.
 | `ENGINE_GRAPHICS_SETTINGS_AUTOTEST` | `close` \| `wire`                                       | `wire` flips 5 toggles + sets 6 sliders, lets `update()` apply them to `data/settings.json`, then closes — the settings wiring test.              |
 | `ENGINE_FAKE_ESC_FRAMES`            | comma-sep frames                                        | Inject a synthetic ESC keypress at each listed frame number (up to 16).                                                                           |
 | `ENGINE_FAKE_DRAG`                  | any value                                               | Hold RMB + sweep yaw every frame — exercises the interactive orbit-drag path headlessly.                                                          |
+| `ENGINE_STAGE_DUMP`                 | dir                                                     | Per-frame burst dump (frames `ENGINE_SCREENSHOT_FRAME`.., `ENGINE_SCREENSHOT_BURST` files, `..._BURST_STRIDE` spacing): `N_ssao.png` (AO map), `N_depth.png` (inverse-depth, 3 m/R8), `N_moved.txt` (camera-motion flags + dEye/dRot + camera basis), `N_world.png` + `N_accum.png` (TAA chain). |
 
 ## RenderDoc
 
@@ -41,6 +42,7 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `ENGINE_TELEPORT`     | `x,y,z`                             | Override the spawn position (world metres, f32).                                                        |
 | `ENGINE_CAMERA_DOLLY` | truthy                              | From wherever the camera sits when the world comes up, dolly straight backwards (opposite the look direction) 30 m over 3 s, then back to the start over 3 s, looping. Turnarounds are smooth (velocity hits zero at both ends); the orientation never changes. Parks the player (the scripted camera owns the view) — pair with `ENGINE_SCREENSHOT_FRAME` / `ENGINE_DEBUG_CAM` to inspect a frame that has actually moved. |
+| `ENGINE_CAMERA_DOLLY_LEG`   | float (s)  | Dolly leg duration (default 1; distance stays 15 m → speed = 15/leg s — e.g. 15 = a 1 m/s dolly for slow-motion A/B). |
 | `ENGINE_AUTO_RUN`     | truthy                              | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
 | `ENGINE_TPOSE`        | truthy                              | Always play the character T-pose (inspect hook).                                                        |
 | `ENGINE_NO_ANIM`      | any value                           | Skip loading/playing the character animation clips.                                                     |
@@ -61,6 +63,9 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | `ENGINE_NO_GPU_TIME` | any value | Disable the per-frame GPU-time query (A/B the timing overhead).                       |
 | `ENGINE_DEBUG_CAM`   | any value | Log the camera eye/center/up + view matrix every frame.                               |
 | `ENGINE_RML_PROBE`   | any value | Verbose rmlui log: frame commands/bounding boxes, texture table, per-batch draw info. |
+| `ENGINE_AO_MOTION_RESET`    | float (px/frame) | Camera-motion threshold for the SSAO history reset (eye translation at near-plane depth + view rotation, converted to screen pixels). Default 0.1; 0 = never reset (keep history while the camera moves — the ghost baseline). |
+| `ENGINE_SSAO_RESET_TRACE`   | any value | Log each SSAO accumulation-reset state change (ACTIVE/off) with this frame's dEye + dRot. |
+| `ENGINE_SSAO_NO_HISTORY`    | any value | Force the SSAO accumulation reset every frame (single-frame AO — the ghost-free ground truth). |
 
 ## Shadow (cascades)
 

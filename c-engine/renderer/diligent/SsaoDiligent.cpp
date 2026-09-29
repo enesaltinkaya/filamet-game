@@ -2,6 +2,7 @@
 
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/TaaDiligent.h"
+#include "Utils.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/DeviceContext.h"
@@ -74,9 +75,26 @@ namespace engine::renderer::diligent {
                                taaPostFXContext(),
                                ScreenSpaceAmbientOcclusion::FEATURE_FLAG_HALF_RESOLUTION);
 
-        if (getenv("ENGINE_SSAO_NO_HISTORY")) {
-            ssaoAttribs.ResetAccumulation = TRUE;
+        // DiligentFX's AO history reprojects with the OBJECT motion vectors
+        // only (PostFXContext closest-MV: zero for static terrain/props), so
+        // camera motion never reprojects it — every frame keeps
+        // 1 - 1/history (~94%) of last frame's screen-space AO and the
+        // occlusion trails the geometry (AO ghosting while the camera moves,
+        // docs/lessons.md 2026-09-28). Reset on moving frames; static frames
+        // keep accumulating so the half-res AO stays denoised.
+        static const bool noHistory = getenv("ENGINE_SSAO_NO_HISTORY") != nullptr;
+        static const bool trace     = getenv("ENGINE_SSAO_RESET_TRACE") != nullptr;
+        const bool reset = noHistory ? true : taaCameraMoved();
+        if (trace) {
+            static int last = -1;
+            if (last != (int)reset) {
+                last = (int)reset;
+                utils::info("ssao: accumulation reset %s (dRot %.5f rad, dEye %.4f m)",
+                            reset ? "ACTIVE" : "off",
+                            (double)taaCameraRotationRad(), (double)taaPrevEyeDeltaMag());
+            }
         }
+        ssaoAttribs.ResetAccumulation = reset ? TRUE : FALSE;
     }
 
     bool ssaoExecute(Diligent::IDeviceContext* ctx, Diligent::ITextureView* depthSRV) {

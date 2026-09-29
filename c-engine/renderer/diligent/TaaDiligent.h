@@ -67,6 +67,25 @@ void taaFrameBegin(Diligent::IDeviceContext* ctx, const Diligent::float4x4& view
 float taaCurrentJitterX(void);
 float taaCurrentJitterY(void);
 
+// Per-frame camera motion (measured in taaFrameBegin, NDC-pixel thresholds:
+// eye translation at the near-plane depth proxy + view-forward rotation,
+// ENGINE_AO_MOTION_RESET px/frame, default 0.1, 0 = never "moved"). True on
+// the first measured frame. Drives the SSAO accumulation reset: the AO
+// history only receives the object motion vectors, so camera motion ghosts
+// it (DiligentFX SSAO_MAX_HISTORY_LENGTH: "reduce noise ... increased
+// ghosting") unless the accumulation resets on moving frames.
+bool taaCameraMoved(void);
+
+// This frame's view-forward rotation (radians, 0 on the first frame).
+f32 taaCameraRotationRad(void);
+
+// Last measured per-frame eye translation magnitude (metres).
+f32 taaPrevEyeDeltaMag(void);
+
+// This frame's camera world axes (unit vectors): forward, right =
+// fwd × up, up. For the stage dump's per-pixel camera-flow computation.
+void taaCameraBasis(f32 fwd[3], f32 right[3], f32 up[3]);
+
 // The PREVIOUS frame's camera attribs (raw row-major storage — consumers
 // transpose as their cbuffer convention requires).
 const void* taaPrevCameraAttribs(void);

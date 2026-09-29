@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -97,7 +98,17 @@ static f32 lastDEyeMag = 0.0f;
 // stale eye cannot skew the first frame's motion vectors.
 static f64 prevEye[3] = {0.0, 0.0, 0.0};
 static bool havePrevEye = false;
-static f32 lastDEye[3] = {0.0f, 0.0f, 0.0f};
+static f32 lastDEye[3] = { 0.0f, 0.0f, 0.0f };
+
+// Per-frame camera motion (translation + rotation) measured in taaFrameBegin:
+// drives the SSAO history reset (the AO ghost fix). The prev forward is the
+// frame BEFORE lastDEye's frame — the translation term uses lastDEye, the
+// rotation term this stored direction.
+static f32 prevFwd[3]   = { 0.0f, 0.0f, 1.0f };
+static bool havePrevFwd = false;
+static bool camMoved    = true;
+static f32 camRotRad    = 0.0f;
+static f32 camBasis[3][3];
 
 static RefCntAutoPtr<IShader> blitVS;
 static RefCntAutoPtr<IShader> blitPS;
@@ -1419,10 +1430,76 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
     cam.fHandness = view.Determinant() > 0 ? 1.0f : -1.0f;
     cam.f2Jitter = currJitter;
 
+
+    {
+        // Per-frame camera motion for the SSAO accumulation reset (the AO
+        // ghost fix). The AO history only receives the OBJECT motion vectors
+        // (PostFXContext closest-MV: zero for static terrain/props), so a
+        // moving camera never reprojects it and every frame keeps
+        // 1 - 1/history (~94%) of the stale screen-space AO -> the occlusion
+        // trails the geometry. Resetting on moving frames drops that history;
+        // static frames keep the accumulation denoise.
+        float3 fwd{view._13, view._23, view._33};
+        const float fl = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z);
+        float dRot = 0.0f;
+        if (fl > 1e-6f) {
+            fwd /= fl;
+            if (havePrevFwd) {
+                const float dot = std::min(1.0f, fwd.x * prevFwd[0] + fwd.y * prevFwd[1] + fwd.z * prevFwd[2]);
+                dRot = std::sqrt(std::max(0.0f, 1.0f - dot * dot)) / std::max(dot, 1e-3f);
+            }
+            prevFwd[0] = fwd.x;
+            prevFwd[1] = fwd.y;
+            prevFwd[2] = fwd.z;
+            havePrevFwd = true;
+        }
+        {
+            const float3 up{view._31, view._32, view._33};
+            const float3 right{fwd.y * up.z - fwd.z * up.y,
+                               fwd.z * up.x - fwd.x * up.z,
+                               fwd.x * up.y - fwd.y * up.x};
+            camBasis[0][0] = fwd.x;   camBasis[1][0] = right.x; camBasis[2][0] = up.x;
+            camBasis[0][1] = fwd.y;   camBasis[1][1] = right.y; camBasis[2][1] = up.y;
+            camBasis[0][2] = fwd.z;   camBasis[1][2] = right.z; camBasis[2][2] = up.z;
+        }
+        camRotRad = dRot;
+        const float kFovYHalf = engine::renderer::kCameraFovYDeg * 0.5f * (float)M_PI / 180.0f;
+        const float focal = (float)targetHeight * 0.5f / std::tan(kFovYHalf);
+        static const float kMotionResetPx = [] {
+            if (const char* e = getenv("ENGINE_AO_MOTION_RESET")) {
+                return (float)atof(e);
+            }
+            return 0.1f;
+        }();
+        const float rotThreshold  = kMotionResetPx / std::max(focal, 1.0f);
+        const float transThreshold = kMotionResetPx * engine::renderer::kCameraNear / std::max(focal, 1.0f);
+        camMoved = !havePrevFwd ? true
+                                : (dRot >= rotThreshold || lastDEyeMag >= transThreshold);
+    }
     {
         MapHelper<HLSL::CameraAttribs> cb(ctx, cameraCB, MAP_WRITE, MAP_FLAG_DISCARD);
         cb[0] = camAttribs[0];
         cb[1] = camAttribs[1];
+    }
+}
+
+bool taaCameraMoved(void) {
+    return camMoved;
+}
+
+f32 taaCameraRotationRad(void) {
+    return camRotRad;
+}
+
+f32 taaPrevEyeDeltaMag(void) {
+    return lastDEyeMag;
+}
+
+void taaCameraBasis(f32 fwd[3], f32 right[3], f32 up[3]) {
+    for (int c = 0; c < 3; c++) {
+        fwd[c]   = camBasis[c][0];
+        right[c] = camBasis[c][1];
+        up[c]    = camBasis[c][2];
     }
 }
 
@@ -1680,6 +1757,57 @@ static void taaDumpTexR8Png(IDeviceContext* ctx, ITexture* tex, const char* path
     stbi_write_png(path, (int)w, (int)h, 4, px.data(), (int)w * 4);
 }
 
+static void taaDumpDepthR8Png(IDeviceContext* ctx, ITexture* tex, const char* path) {
+    if (!tex) {
+        return;
+    }
+    RefCntAutoPtr<ITexture> staging;
+    {
+        TextureDesc desc = tex->GetDesc();
+        desc.Name = "taaStageDumpStagingDepth";
+        desc.Usage = USAGE_STAGING;
+        desc.BindFlags = BIND_NONE;
+        desc.CPUAccessFlags = CPU_ACCESS_READ;
+        device->CreateTexture(desc, nullptr, &staging);
+        if (!staging) {
+            return;
+        }
+    }
+    {
+        CopyTextureAttribs copy{tex, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                staging, RESOURCE_STATE_TRANSITION_MODE_TRANSITION};
+        ctx->CopyTexture(copy);
+        ctx->WaitForIdle();
+    }
+    MappedTextureSubresource mapped;
+    ctx->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_NONE, nullptr, mapped);
+    if (!mapped.pData) {
+        return;
+    }
+    const u32 w = tex->GetDesc().Width;
+    const u32 h = tex->GetDesc().Height;
+    const f32 nearP = engine::renderer::kCameraNear;
+    const f32 farP  = engine::renderer::kCameraFar;
+    std::vector<u8> px((size_t)w * h * 4);
+    for (u32 y = 0; y < h; y++) {
+        const u8* src = (const u8*)mapped.pData + (size_t)y * mapped.Stride;
+        u8* row = &px[(size_t)y * w * 4];
+        for (u32 x = 0; x < w; x++) {
+            f32 d = 0.0f;
+            memcpy(&d, src + (size_t)x * 4, sizeof(d));
+            const f32 z  = nearP * farP / std::max(farP - d * (farP - nearP), 1e-6f);
+            const f32 enc = std::min(1.0f, 3.0f / std::max(z, 0.03f));
+            const u8 v = (u8)(std::min(1.0f, enc) * 255.0f + 0.5f);
+            row[(size_t)x * 4 + 0] = v;
+            row[(size_t)x * 4 + 1] = v;
+            row[(size_t)x * 4 + 2] = v;
+            row[(size_t)x * 4 + 3] = 255;
+        }
+    }
+    ctx->UnmapTextureSubresource(staging, 0, 0);
+    stbi_write_png(path, (int)w, (int)h, 4, px.data(), (int)w * 4);
+}
+
 void taaStageDump(IDeviceContext* ctx) {
     const char* dir = taaStageDumpDir();
     if (!dir) {
@@ -1710,6 +1838,26 @@ void taaStageDump(IDeviceContext* ctx) {
     if (ITextureView* aoSRV = ssaoAOSRV()) {
         snprintf(path, sizeof(path), "%s/%u_ssao.png", dir, frameIdx);
         taaDumpTexR8Png(ctx, aoSRV->GetTexture(), path);
+    }
+    {
+        const u32 curr = frameIdx & 1;
+        ITexture* depthTexCurr = taaDepthSRV((int)curr) ? taaDepthSRV((int)curr)->GetTexture() : nullptr;
+        snprintf(path, sizeof(path), "%s/%u_depth.png", dir, frameIdx);
+        taaDumpDepthR8Png(ctx, depthTexCurr, path);
+        snprintf(path, sizeof(path), "%s/%u_moved.txt", dir, frameIdx);
+        if (FILE* f = fopen(path, "w")) {
+            f32 fwd[3], right[3], up[3];
+            taaCameraBasis(fwd, right, up);
+            fprintf(f,
+                    "moved %d dEyeMag %.6f dRot %.6f dEye %.6f %.6f %.6f "
+                    "fwd %.6f %.6f %.6f right %.6f %.6f %.6f up %.6f %.6f %.6f\n",
+                    taaCameraMoved() ? 1 : 0, (double)lastDEyeMag, (double)camRotRad,
+                    (double)lastDEye[0], (double)lastDEye[1], (double)lastDEye[2],
+                    (double)fwd[0], (double)fwd[1], (double)fwd[2],
+                    (double)right[0], (double)right[1], (double)right[2],
+                    (double)up[0], (double)up[1], (double)up[2]);
+            fclose(f);
+        }
     }
     if (taaOn) {
         snprintf(path, sizeof(path), "%s/%u_world.png", dir, frameIdx);

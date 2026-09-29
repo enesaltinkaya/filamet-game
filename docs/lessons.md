@@ -141,6 +141,11 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 - Screenshot runs and renderdoc runs see different cameras/world states (automated gate skips camera-db restore for SCREENSHOT but not RENDERDOC_CAPTURE) — A/B render-state changes only via renderdoc + pixel history/high-pass metrics
 - DiligentFX .fxh edits need the cpp-thirdparty rebuild (shaders_inc embedded at FX build time) AND a shadercache bust (cache key has no source hash); glslang rejects mutable static globals and stale PSOs run on silently
 
+
+## 2026-09-29 — entries
+
+- "AO ghosts when the camera moves" is DiligentFX SSAO temporal accumulation by design: `SSAO_ComputeTemporalAccumulation.fx` reprojects the AO history with the OBJECT motion vectors only (`GetClosestMotionVectors` — zero for static terrain/props), so camera motion never reprojects it; α = 1/history with `SSAO_MAX_HISTORY_LENGTH 16` keeps ~94% stale screen-space AO every frame → occlusion trails ~16 frames. The shader's own comment says it: "Higher values reduce noise for the price of increased ghosting". Fix = per-frame `ResetAccumulation` while the camera moves (eye-translation-at-near-depth + view-rotation, both converted to px/frame, `ENGINE_AO_MOTION_RESET` default 0.1, 0 = ghost baseline); static frames keep accumulating so the half-res AO stays denoised. Diagnostic fingerprint: AO maps bit-identical with `ENGINE_SSAO_NO_HISTORY` on the same motion sequence; on a 1 m/s dolly the AO-vs-no-history delta tracks the dolly speed (0.39→0.17 MAD as the turnaround decelerates); `ENGINE_SSAO_RESET_TRACE` + per-frame `_moved.txt` sidecar (`ENGINE_STAGE_DUMP` burst now writes `N_depth.png` + `N_moved.txt` with dEye/dRot/camera basis). Distinct from the 2026-09-28 GTAO smear entry — that one was spatial and camera-static.
+
 ## Filament era (archive) — [entries](lessons-filament-archive.md)
 
 - (2026-09-04) Filament `doubleSided` flips the normal on back faces, blacking out thin up-normal vegetation (grass cards); and never mipmap sparse alpha-cutout grass textures
