@@ -5,6 +5,7 @@
 #include <SDL.h>
 
 #include <cstdlib>
+#include <cstdio>
 
 namespace engine {
     Window window = {};
@@ -62,6 +63,16 @@ namespace engine {
                 bounds.h > 0) {
                 width  = (u32)(bounds.w * 0.75f);
                 height = (u32)(width / 1.77f);
+            }
+        }
+
+        static const char* winEnv = getenv("ENGINE_WINDOW");
+        if (winEnv != nullptr && winEnv[0] != 0) {
+            unsigned w = 0, h = 0;
+            if (sscanf(winEnv, "%ux%u", &w, &h) == 2 && w >= 320 && h >= 240) {
+                width  = w;
+                height = h;
+                utils::info("window: ENGINE_WINDOW override %ux%u", width, height);
             }
         }
 

@@ -163,3 +163,4 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 - (2026-09) Filament buffer uploads are zero-copy: the source storage must outlive the command
 - (2026-09) Filament emissive is photometric (nits): 0..1 debug colours are invisible
 - (2026-09-04) Filament material.worldPosition is camera-shifted (camera_at_origin): never write absolute world coords
+- Shadow flicker: localise on the cascade-COVERAGE map first (`ENGINE_SPLAT_SHADOW_DEBUG=1`) — if the whole frame is the far cascade, band/quant/snap knobs cannot cause what the player sees; burst-screenshot A/B with `ENGINE_SHADOW_MODE=0` separates shadow swing from view-dependent lighting

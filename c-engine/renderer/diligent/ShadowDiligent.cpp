@@ -100,7 +100,16 @@ namespace engine::renderer::diligent {
             return v;
         }();
         static const bool shadowTraceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
-        bool shadowTraceWanted(u64 f) { return f == 1u || (f >= 50u && f <= 1000u && f % 50u == 0u); }
+        static const u64 shadowTraceStride = [] {
+            if (const char* e = getenv("ENGINE_SHADOW_TRACE_STRIDE")) {
+                const unsigned long v = strtoul(e, nullptr, 10);
+                if (v >= 1ul && v <= 1000ul) return (u64)v;
+            }
+            return 50ul;
+        }();
+        bool shadowTraceWanted(u64 f) {
+            return f == 1u || (f >= shadowTraceStride && f <= 1000u && f % shadowTraceStride == 0u);
+        }
         u64 shadowTraceFrame = 0;
         Diligent::float4x4 casterW2LP[8];
 
@@ -274,11 +283,13 @@ namespace engine::renderer::diligent {
             }
             int bandActive = 0;
 
+            static const bool noSnap = getenv("ENGINE_SHADOW_NO_SNAP") != nullptr;
+
             ShadowMapManager::DistributeCascadeInfo dist;
             dist.pCameraView                      = &view;
             dist.pCameraProj                      = &padProj;
             dist.pLightDir                         = &dir;
-            dist.SnapCascades                      = true;
+            dist.SnapCascades                      = !noSnap;
             dist.StabilizeExtents                  = true;
             dist.EqualizeExtents                   = true;
             dist.fPartitioningFactor               = 0.95f;
@@ -301,7 +312,16 @@ namespace engine::renderer::diligent {
                 float uniformZ   = focusBand + (tier.distanceM - focusBand) * power;
                 maxZ = dist.fPartitioningFactor * (logZ - uniformZ) + uniformZ;
             };
-            dist.AdjustCascadeCenter = [&](int, const Diligent::float4x4& w2l, float tx, float ty, float& cx, float& cy) {
+            dist.AdjustCascadeCenter = [&](int cascadeIndex, const Diligent::float4x4& w2l, float tx, float ty, float& cx, float& cy) {
+                if (noSnap) return;
+                static const float c1OffsetTexels = [] {
+                    if (const char* e = getenv("ENGINE_SHADOW_C1_TEXEL_OFFSET")) return (float)atof(e);
+                    return 0.0f;
+                }();
+                if (cascadeIndex == 1) {
+                    cx += c1OffsetTexels * tx;
+                    cy += c1OffsetTexels * ty;
+                }
                 const double ox = -(an[0] * (double)w2l._11 + an[1] * (double)w2l._21 + an[2] * (double)w2l._31);
                 const double oy = -(an[0] * (double)w2l._12 + an[1] * (double)w2l._22 + an[2] * (double)w2l._32);
                 cx = (float)((double)std::round(((double)cx - ox) / (double)tx) * (double)tx + ox);
@@ -674,23 +694,29 @@ namespace engine::renderer::diligent {
                 char line[768];
                 int off = snprintf(line,
                                    sizeof(line),
-                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f fbox %.1f",
+                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f fbox %.1f pbr %d camZ %.2f",
                                    (unsigned long long)shadowTraceFrame,
                                    passReady ? 1 : 0,
                                    curMode,
                                    (double)farPadS,
                                    (double)focusBand,
-                                   (double)focusBoxDebug);
+                                   (double)focusBoxDebug,
+                                   pbrSlice,
+                                   (double)camZ);
                 for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
                     off += snprintf(line + off,
                                     sizeof(line) - off,
-                                    " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f",
+                                    " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f s.xy %.5f %.5f cxy %.5f %.5f",
                                     c,
                                     (double)sa.Cascades[c].f4LightSpaceScale.z,
                                     (double)sa.Cascades[c].f4LightSpaceScaledBias.z,
                                     (double)sa.fCascadeCamSpaceZEnd[c],
                                     (double)casterW2LP[c]._33,
-                                    (double)casterW2LP[c]._43);
+                                    (double)casterW2LP[c]._43,
+                                    (double)sa.Cascades[c].f4LightSpaceScale.x,
+                                    (double)sa.Cascades[c].f4LightSpaceScale.y,
+                                    (double)casterW2LP[c]._41,
+                                    (double)casterW2LP[c]._42);
                     if (c == 0)
                         off += snprintf(line + off, sizeof(line) - off,
                                         " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f"

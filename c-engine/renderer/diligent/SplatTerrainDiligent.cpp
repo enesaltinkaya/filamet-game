@@ -2211,9 +2211,16 @@ void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
     splatShadowCasterFrameNo++;
     {
         static const bool traceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
+        static const u64 traceStride = [] {
+            if (const char* e = getenv("ENGINE_SHADOW_TRACE_STRIDE")) {
+                const unsigned long v = strtoul(e, nullptr, 10);
+                if (v >= 1ul && v <= 1000ul) return (u64)v;
+            }
+            return 50ul;
+        }();
         if (traceOn) {
             const u64 f = shadowDiligentTraceFrame();
-            if (f == 1 || (f >= 50 && f <= 1000 && f % 50 == 0))
+            if (f == 1 || (f >= traceStride && f <= 1000u && f % traceStride == 0))
                 utils::info(
                     "shadow trace: f%llu caster cascade %d — %zu/%zu chunks drawn",
                     (unsigned long long)f,
