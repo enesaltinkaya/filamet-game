@@ -198,7 +198,7 @@ namespace engine::renderer::diligent {
             sa.iFixedFilterSize             = tier.pcfFilterSize;
             sa.fFilterWorldSize             = 0.0f;
             sa.fCascadeTransitionRegion     = 0.1f;
-            sa.fReceiverPlaneDepthBiasClamp = 10.0f;
+            sa.fReceiverPlaneDepthBiasClamp = 16.0f;
             sa.iMaxAnisotropy               = 4;
             sa.fVSMBias                     = 1e-4f;
             sa.fEVSMPositiveExponent        = 40.0f;
@@ -317,16 +317,21 @@ namespace engine::renderer::diligent {
                 casterW2LP[c]._43 *= farPadS;
             }
 
-            // Fixed receiver depth bias (the Shadows sample's policy): the
-            // receivers subtract it verbatim in NDC depth. The per-texel NDC
-            // depth step of a coplanar caster is ~constant across cascades
-            // (z-scale shrinks as the world texel grows), so ONE scalar covers
-            // all cascades — but it must clear the PCF tap footprint's slope
-            // noise: the Shadows-sample ~1-texel 0.0025·zScale left a periodic
-            // wedge lattice on the flat ground quad
-            // (docs/lessons/2026-09-26.md). ~6 texels of cascade-0 depth clears
-            // every cascade (world-space clearance grows on deeper cascades —
-            // accepted; shadow offset stays sub-meter).
+            // Receiver depth bias policy: the PCF receivers multiply the
+            // receiver-plane depth slope (dDepth per atlas texel) by this
+            // texel count per tap instead of subtracting a fixed NDC depth.
+            // The per-texel NDC depth step of a coplanar caster is
+            // ~constant across cascades (z-scale shrinks as the world texel
+            // grows), so ONE scalar covers all cascades. A FIXED bias of the
+            // same size cleared the coplanar wedge lattice on the flat ground
+            // quad (docs/lessons/2026-09-26.md) but lifted every cast shadow
+            // off the receiver by that depth along the light — the visible
+            // gap at wall/box bases (peter-panning). The slope-scaled form
+            // cancels the coplanar depth ramp exactly (lattice-free) and
+            // vanishes on faces with no depth slope toward the light, so
+            // wall-base contact shadows stay attached. The clamp must clear
+            // the resulting slope scale (fReceiverPlaneDepthBiasClamp).
+            // ~12.5 texels of cascade-0 depth clears every cascade.
             static const float fixedBiasScale = [] {
                 float v = 1.0f;
                 if (const char* env = getenv("ENGINE_SHADOW_FIXED_BIAS_SCALE")) {

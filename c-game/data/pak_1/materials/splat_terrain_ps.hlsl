@@ -686,7 +686,9 @@ float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, fl
     rcvBiasUV /= sign(det) * max(abs(det), 1e-10);
     float2 biasClampUV = abs(float2(sc.z / (sc.x * 0.5), sc.z / (sc.y * -0.5))) * sBiasParams.x;
     rcvBiasUV = clamp(rcvBiasUV, -biasClampUV, biasClampUV);
-    float lightDepth = cascadeNdc.z - sBiasParams.y;
+    float slopeScale = sBiasParams.y / max(sc.z * 0.5 * f4ShadowMapDim.x, 1e-20);
+    float lightDepth = cascadeNdc.z;
+    rcvBiasUV *= slopeScale;
     if (shadowMode < 1.5)
         return filterShadowPCF3(cascadeUV, float(cascade), lightDepth, rcvBiasUV);
     if (shadowMode < 2.5)
