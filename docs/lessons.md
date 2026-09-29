@@ -4,6 +4,11 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
+
+## 2026-09-29 — [entries](lessons/2026-09-29.md)
+
+- Wall shadow detaches from its base and flashes while the camera dollies: the caster `SlopeScaledDepthBias` 2.0 (with `DepthBiasClamp` unbounded) erodes the shadow edge onto the receiver's view-dependent flip threshold — the pop is in the PRE-TAA render, the atlas is stable in texel space, and only `ENGINE_SHADOW_SLOPE_BIAS` moves it; default 2.0 → 0.5 (beauty flash 74 px → 4 px, mask detach mean 316 → 27)
+
 ## 2026-09-28 — [entries](lessons/2026-09-28.md)
 
 - "Ghosty AO" is a GTAO spatial smear at 1.0 world radius, not temporal history (the `ENGINE_SSAO_NO_HISTORY` A/B keeps the same contact blob; judge on the AO stage dump, not sRGB) — fixed by defaulting to VBAO (`ssaoAlgorithm` 2): contact dark area 0.262 -> 0.176

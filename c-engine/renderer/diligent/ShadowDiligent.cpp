@@ -1399,7 +1399,7 @@ namespace engine::renderer::diligent {
 
     void shadowDiligentCasterBias(float& slopeBias, float& constBias, float& biasClamp) {
         static const float slope = [] {
-            float v = 2.0f;
+            float v = 0.5f;
             if (const char* slopeEnv = getenv("ENGINE_SHADOW_SLOPE_BIAS")) {
                 const float parsed = (float)atof(slopeEnv);
                 if (parsed >= 0.0f && parsed <= 16.0f) v = parsed;
