@@ -85,13 +85,24 @@ static char autoRunEnabled(void) {
     return v;
 }
 
+static int autoJumpPeriod(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char* env = getenv("ENGINE_AUTO_JUMP");
+        v = (env && *env) ? atoi(env) : 0;
+        if (v < 1) v = 0;
+    }
+    return v;
+}
+
 static char automatedRun(void) {
     return (getenv("ENGINE_SCREENSHOT") != nullptr) ||
            (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
            (getenv("ENGINE_NO_PLAYER") != nullptr) ||
            (getenv("ENGINE_RENDERDOC_CAPTURE") != nullptr) ||
            (getenv("ENGINE_STAGE_DUMP") != nullptr) ||
-           (getenv("ENGINE_MV_DUMP") != nullptr);
+           (getenv("ENGINE_MV_DUMP") != nullptr) ||
+           (getenv("ENGINE_AUTO_JUMP") != nullptr);
 }
 
 static struct {
@@ -710,8 +721,15 @@ void PlayerSystem::update() {
     // Jump: grounded + SPACE → vertical velocity. The wrapper keeps the
     // desired Y while grounded, cancels it otherwise, and accumulates
     // gravity in the air itself.
-    if (p.active && input.keys[SDL_SCANCODE_SPACE] &&
-        joltCharacterGetGroundState(p.character) == JOLT_GROUND_STATE_ON_GROUND) {
+    char wantJump = p.active && input.keys[SDL_SCANCODE_SPACE];
+    if (p.active && autoJumpPeriod()) {
+        static int jumpTick = 0;
+        if (++jumpTick >= autoJumpPeriod()) {
+            jumpTick = 0;
+            wantJump = 1;
+        }
+    }
+    if (wantJump && joltCharacterGetGroundState(p.character) == JOLT_GROUND_STATE_ON_GROUND) {
         desiredVel[1] = JUMP_SPEED;
     }
 
@@ -775,8 +793,11 @@ void PlayerSystem::postUpdate() {
     // The old engine suppressed these periodic saves while ENGINE_AUTO_RUN
     // was running (the test character runs around and must not clobber the
     // parked state). Automated runs too: the menu-enter takeover makes the
-    // orbit live there, so both rows would be overwritten by the run.
-    if (p.autoRun || automatedRun()) return;
+    // orbit live there, so both rows would be overwritten by the run. An
+    // ENGINE_TELEPORT run is the same hazard in interactive form — it parks
+    // the character somewhere off the parked setup, and the 1 Hz save follows
+    // her there (the parked rows are the user's, not the run's).
+    if (p.autoRun || automatedRun() || teleportSpawn()) return;
 
     if (now > lastSave + 1000.0) {
         lastSave = now;
