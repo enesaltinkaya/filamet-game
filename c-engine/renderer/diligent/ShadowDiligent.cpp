@@ -319,19 +319,24 @@ namespace engine::renderer::diligent {
 
             // Receiver depth bias policy: the PCF receivers multiply the
             // receiver-plane depth slope (dDepth per atlas texel) by this
-            // texel count per tap instead of subtracting a fixed NDC depth.
-            // The per-texel NDC depth step of a coplanar caster is
-            // ~constant across cascades (z-scale shrinks as the world texel
-            // grows), so ONE scalar covers all cascades. A FIXED bias of the
-            // same size cleared the coplanar wedge lattice on the flat ground
-            // quad (docs/lessons/2026-09-26.md) but lifted every cast shadow
-            // off the receiver by that depth along the light — the visible
-            // gap at wall/box bases (peter-panning). The slope-scaled form
-            // cancels the coplanar depth ramp exactly (lattice-free) and
+            // TEXEL COUNT per tap instead of subtracting a fixed NDC depth.
+            // The Witness bias (Shadows.fxh ComputeReceiverPlaneDepthBias,
+            // scale 1) cancels a coplanar receiver's depth ramp exactly, so
+            // the count is the margin above that ramp: 1 = the reference,
+            // >1 clears a bumpy caster's self-shadow. A FIXED NDC bias of the
+            // same world size cleared the coplanar wedge lattice on the flat
+            // ground quad (docs/lessons/2026-09-26.md) but lifted every cast
+            // shadow off the receiver by that depth along the light — the
+            // visible gap at wall/box bases (peter-panning). The slope-scaled
+            // form cancels the coplanar ramp exactly (lattice-free) and
             // vanishes on faces with no depth slope toward the light, so
             // wall-base contact shadows stay attached. The clamp must clear
             // the resulting slope scale (fReceiverPlaneDepthBiasClamp).
-            // ~12.5 texels of cascade-0 depth clears every cascade.
+            // Scale 1 = the Witness reference: measured here it clears the
+            // terrain's coplanar self-shadow (cascade-0 attenuation 0.70 ->
+            // 1.0, the cascade-0 box's luminance step 10.5 -> 2.2) while the
+            // player's own shadow stays. Above ~4 the margin starts eroding
+            // cast shadows (cube 89 -> 62 -> 136 at 32 = peter-panning).
             static const float fixedBiasScale = [] {
                 float v = 1.0f;
                 if (const char* env = getenv("ENGINE_SHADOW_FIXED_BIAS_SCALE")) {
@@ -340,8 +345,7 @@ namespace engine::renderer::diligent {
                 }
                 return v;
             }();
-            sa.fFixedDepthBias = fixedBiasScale *
-                    (tier.resolution >= 2048 ? 0.06f : 0.12f) * sa.Cascades[0].f4LightSpaceScale.z * farPadS;
+            sa.fFixedDepthBias = fixedBiasScale;
             for (int c = 0; c < sa.iNumCascades; c++) {
                 sa.Cascades[c].f4LightSpaceScale.z *= farPadS;
                 sa.Cascades[c].f4LightSpaceScaledBias.z *= farPadS;
@@ -571,7 +575,14 @@ namespace engine::renderer::diligent {
             if (cascade >= sa.iNumCascades) cascade = sa.iNumCascades - 1;
             pbrW2L   = casterW2LP[cascade];
             pbrSlice = cascade;
-            pbrBias  = sa.fFixedDepthBias;
+            // The player's single-slice receiver (PBR_Shading.fxh's stock path)
+            // has NO receiver-plane slope term: it subtracts a FIXED NDC depth
+            // (PBRShadowMapInfo.Padding0) to stop the character self-shadowing,
+            // so it keeps the fixed-bias form normalized by the light-space z
+            // scale of the cascade it landed in — NOT the PCF receivers' texel
+            // count in sa.fFixedDepthBias (1.0 NDC would light the whole body).
+            // Cascades[].f4LightSpaceScale.z already carries farPadS here.
+            pbrBias = (tier.resolution >= 2048 ? 0.06f : 0.12f) * sa.Cascades[cascade].f4LightSpaceScale.z;
             pbrReady = true;
 
             // One-shot CPU dump of the distributed cascade math (debug).
