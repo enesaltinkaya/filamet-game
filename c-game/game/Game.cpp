@@ -27,7 +27,7 @@
 
 namespace game {
 
-    static bool worldLoaded     = false;
+    static bool worldLoaded = false;
 
     static bool loadTimingOn() {
         static const bool on = [] {
@@ -35,6 +35,64 @@ namespace game {
             return e && e[0] && e[0] != '0';
         }();
         return on;
+    }
+
+    static const f32 dollyDistance      = 15.0f;
+    static const double dollyLegSeconds = 1.0;
+
+    static f32 dollyBase[3]   = {};
+    static f32 dollyFacing[3] = {};
+    static f32 dollyEye[3]    = {};
+    static double dollyTime   = 0.0;
+    static bool dollyAnchored = false;
+
+    static char dollyEnabled(void) {
+        static const char enabled = [] {
+            const char* value = getenv("ENGINE_CAMERA_DOLLY");
+            return (value != nullptr && value[0] != 0 && value[0] != '0') ? 1 : 0;
+        }();
+        return enabled;
+    }
+
+    static void updateCameraDolly(void) {
+        if (!dollyEnabled()) return;
+        if (gameStateCurrent() != STATE_PLAYING) return;
+        if (engine::flyingCameraFlying() || engine::playerMode()) return;
+
+        f32 pos[3], facing[3];
+        engine::renderer::rendererCameraGet(pos, facing);
+        const f32 facingLength =
+            std::sqrt(facing[0] * facing[0] + facing[1] * facing[1] + facing[2] * facing[2]);
+        if (facingLength < 1e-6f) return;
+
+        if (!dollyAnchored || std::fabs(pos[0] - dollyEye[0]) > 1e-4f ||
+            std::fabs(pos[1] - dollyEye[1]) > 1e-4f || std::fabs(pos[2] - dollyEye[2]) > 1e-4f) {
+            const f32 inverse = 1.0f / facingLength;
+            for (int i = 0; i < 3; i++) {
+                dollyBase[i]   = pos[i];
+                dollyEye[i]    = pos[i];
+                dollyFacing[i] = facing[i] * inverse;
+            }
+            dollyTime     = 0.0;
+            dollyAnchored = true;
+            utils::info("game: camera dolly %.0f m back and forth, %.0f s per leg",
+                        dollyDistance,
+                        dollyLegSeconds);
+        }
+        dollyTime += (double)utils::timer.dt;
+
+        const double cycle = 2.0 * dollyLegSeconds;
+        const double phase = std::fmod(dollyTime, cycle) / cycle;
+        const f32 travel   = (f32)(0.5 * (1.0 - std::cos(2.0 * M_PI * phase))) * dollyDistance;
+        dollyEye[0]        = dollyBase[0] - dollyFacing[0] * travel;
+        dollyEye[1]        = dollyBase[1] - dollyFacing[1] * travel;
+        dollyEye[2]        = dollyBase[2] - dollyFacing[2] * travel;
+
+        const f32 target[3] = {dollyEye[0] + dollyFacing[0] * 100.0f,
+                               dollyEye[1] + dollyFacing[1] * 100.0f,
+                               dollyEye[2] + dollyFacing[2] * 100.0f};
+        const f32 up[3]     = {0.0f, 1.0f, 0.0f};
+        engine::renderer::rendererCameraLookAt(dollyEye, target, up);
     }
 
     GameSystem::GameSystem() : System("Game") {}
@@ -61,10 +119,10 @@ namespace game {
     }
 
     void GameSystem::loadWorld() {
-        const bool lt = loadTimingOn();
+        const bool lt        = loadTimingOn();
         const double ltStart = lt ? utils::nanos() : 0.0;
-        double ltPrev = ltStart;
-        auto ltLog = [&](const char* phase) {
+        double ltPrev        = ltStart;
+        auto ltLog           = [&](const char* phase) {
             if (!lt) return;
             const double now = utils::nanos();
             utils::info("load timing: %s %.1f ms", phase, (now - ltPrev) / MILLION);
@@ -97,14 +155,15 @@ namespace game {
         // swaps the character pak model (asset validation); ENGINE_NO_ANIM
         // skips the animation source.
         const char* gltfModelPath = "models/eve.zstd";
-        const char* gltfModelEnv = getenv("ENGINE_GLTF_MODEL");
+        const char* gltfModelEnv  = getenv("ENGINE_GLTF_MODEL");
         if (gltfModelEnv && gltfModelEnv[0]) {
             gltfModelPath = gltfModelEnv;
         }
-        const char* animPath = getenv("ENGINE_NO_ANIM") ? nullptr : "models/animations.zstd";
-        const char* prewarmPaths[4] = {
-                "models/terrain/oghuzlands.zstd", "models/test2.zstd", gltfModelPath,
-                animPath ? animPath : "models/terrain/oghuzlands.zstd"};
+        const char* animPath        = getenv("ENGINE_NO_ANIM") ? nullptr : "models/animations.zstd";
+        const char* prewarmPaths[4] = {"models/terrain/oghuzlands.zstd",
+                                       "models/test2.zstd",
+                                       gltfModelPath,
+                                       animPath ? animPath : "models/terrain/oghuzlands.zstd"};
         engine::gltf::gltfModelBytesPrewarmLaunch(prewarmPaths, 4);
         engine::gltf::gltfTextureCachePrewarm();
         engine::gltf::gltfModelBytesPrewarmWait();
@@ -112,18 +171,14 @@ namespace game {
         // The splat CPU parse (the terrain GLB's 2nd, jansson pass) overlaps
         // the serial model loads below; splatTerrainLoad waits + uploads.
         engine::gltf::splatTerrainParseLaunch("models/terrain/oghuzlands.zstd");
-        const bool terrainUp =
-                engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
+        const bool terrainUp = engine::gltf::gltfSceneLoad("models/terrain/oghuzlands.zstd");
         ltLog("terrain");
-        const bool propsUp = terrainUp &&
-                engine::gltf::gltfPropsLoad("models/test2.zstd");
+        const bool propsUp = terrainUp && engine::gltf::gltfPropsLoad("models/test2.zstd");
         ltLog("props");
-        const bool charUp = propsUp &&
-                engine::gltf::gltfLoad(gltfModelPath);
+        const bool charUp = propsUp && engine::gltf::gltfLoad(gltfModelPath);
         ltLog("character");
-        const bool animUp = charUp &&
-                (animPath == nullptr ||
-                 engine::gltf::gltfLoadAnimations(animPath));
+        const bool animUp =
+            charUp && (animPath == nullptr || engine::gltf::gltfLoadAnimations(animPath));
         ltLog("animations");
         engine::physicsTerrainSidecarSet("models/terrain/oghuzlands.jolt.zstd");
         engine::physicsPropsSidecarSet("models/test2.jolt.zstd");
@@ -212,9 +267,12 @@ namespace game {
         // in pauseMenu.lua). ENGINE_NO_RMLUI: no menu to show — ignore ESC.
         if (engine::rmluiDisabled()) return;
         if (engine::input.pressed == SDL_SCANCODE_ESCAPE)
-            utils::debug("ESC-DEBUG preUpdate sees esc press (state=%d pause=%d settings=%d) frame=%llu",
-                         (int)gameStateCurrent(), (int)pauseMenuGuiIsShowing(), (int)settingsGuiIsShowing(),
-                         (unsigned long long)utils::timer.frameCounter);
+            utils::debug(
+                "ESC-DEBUG preUpdate sees esc press (state=%d pause=%d settings=%d) frame=%llu",
+                (int)gameStateCurrent(),
+                (int)pauseMenuGuiIsShowing(),
+                (int)settingsGuiIsShowing(),
+                (unsigned long long)utils::timer.frameCounter);
         if (gameStateCurrent() == STATE_PLAYING && !engine::flyingCameraFlying() &&
             engine::input.pressed == SDL_SCANCODE_ESCAPE) {
             // Guarded like the old engine: while the pause document or the
@@ -233,8 +291,7 @@ namespace game {
         engine::ecsSystemRemoveDeferred(&engine::physicsSystem);
         // A settings panel left open over the in-game menu must not ride
         // along into the main menu (the same guard as enterWorld).
-        if (settingsGuiIsShowing())
-            engine::guiManagerRemoveGuiNextFrame(&settingsGui);
+        if (settingsGuiIsShowing()) engine::guiManagerRemoveGuiNextFrame(&settingsGui);
         engine::guiManagerAddGuiNextFrame(&mainMenuGui);
         engine::guiManagerRemoveGuiNextFrame(&cameraGui);
         engine::guiManagerRemoveGuiNextFrame(&playerGui);
@@ -257,8 +314,9 @@ namespace game {
     }
 
     void GameSystem::update() {
+        updateCameraDolly();
         engine::gltf::gltfUpdate(utils::timer.dt);
     }
 
     GameSystem gameSystem;
-}
+}  // namespace game

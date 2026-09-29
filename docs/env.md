@@ -40,6 +40,7 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | Var                   | Value                               | Effect                                                                                                  |
 | --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `ENGINE_TELEPORT`     | `x,y,z`                             | Override the spawn position (world metres, f32).                                                        |
+| `ENGINE_CAMERA_DOLLY` | truthy                              | From wherever the camera sits when the world comes up, dolly straight backwards (opposite the look direction) 30 m over 3 s, then back to the start over 3 s, looping. Turnarounds are smooth (velocity hits zero at both ends); the orientation never changes. Parks the player (the scripted camera owns the view) — pair with `ENGINE_SCREENSHOT_FRAME` / `ENGINE_DEBUG_CAM` to inspect a frame that has actually moved. |
 | `ENGINE_AUTO_RUN`     | truthy                              | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
 | `ENGINE_TPOSE`        | truthy                              | Always play the character T-pose (inspect hook).                                                        |
 | `ENGINE_NO_ANIM`      | any value                           | Skip loading/playing the character animation clips.                                                     |
