@@ -33,7 +33,7 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | --------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `ENGINE_RENDERDOC_CAPTURE`        | —                                                     | Arm the app-side capture.                                                                   |
 | `ENGINE_RENDERDOC_CAPTURE_FRAMES` | 30                                                    | Frame at which the capture is triggered.                                                    |
-| `ENGINE_RENDERDOC_DIR`            | `/tmp/RenderDoc/c-game`                               | Capture filename prefix; files land at `<dir>_frameN.rdc`.                                  |
+| `ENGINE_RENDERDOC_DIR`            | `/tmp2/RenderDoc/c-game`                              | Capture filename prefix; files land at `<dir>_frameN.rdc`.                                  |
 | `ENGINE_RENDERDOC_LIB`            | `/home/enes/Apps/renderdoc/build/lib/librenderdoc.so` | `librenderdoc.so` path for the `dlopen` (an already-loaded `LD_PRELOAD` copy is preferred). |
 
 ## Camera / player

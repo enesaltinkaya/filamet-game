@@ -4,7 +4,7 @@
 Subcommands:
   list    show passes (debug-label groups) and their output render targets
   dump    extract pass output images (PNG) to disk
-  latest  print the newest .rdc in /tmp/RenderDoc
+  latest  print the newest .rdc in the capture dir
   clean   delete old .rdc captures (~1 GB each)
 
 Examples:
@@ -24,8 +24,15 @@ import re
 import sys
 
 RD_LIB = "/home/enes/Apps/renderdoc/build/lib"
-CAPTURE_DIR = "/tmp/RenderDoc"
-DEFAULT_OUTDIR = "/tmp/rdc-dump"
+
+
+def _capture_dir():
+    prefix = os.environ.get("ENGINE_RENDERDOC_DIR", "/tmp2/RenderDoc/c-game")
+    return os.path.dirname(prefix) or "/tmp2/RenderDoc"
+
+
+CAPTURE_DIR = _capture_dir()
+DEFAULT_OUTDIR = "/tmp2/rdc-dump"
 
 
 def latest_capture(directory=CAPTURE_DIR):
@@ -34,7 +41,8 @@ def latest_capture(directory=CAPTURE_DIR):
         sys.exit(
             "no .rdc files in %s — capture one first: "
             "ENGINE_RENDERDOC_CAPTURE=1 ENGINE_RENDERDOC_CAPTURE_FRAMES=300 "
-            "ENGINE_LOG_TIMEOUT=120000 ./scripts/run.sh renderdoc"
+            "ENGINE_RENDERDOC_DIR=/tmp2/RenderDoc/c-game ENGINE_LOG_TIMEOUT=120000 "
+            "./scripts/run.sh renderdoc"
             % directory
         )
     return max(files, key=os.path.getmtime)

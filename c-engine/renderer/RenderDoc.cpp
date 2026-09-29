@@ -15,8 +15,8 @@ namespace engine::renderer {
 static RENDERDOC_API_1_1_2* rdocApi = nullptr;
 
 static const char* kDefaultLib = "/home/enes/Apps/renderdoc/build/lib/librenderdoc.so";
-// template prefix — captures land at /tmp/RenderDoc/c-game_<date>_<time>_frameN.rdc
-static const char* kDefaultCaptureTemplate = "/tmp/RenderDoc/c-game";
+// template prefix — captures land at /tmp2/RenderDoc/c-game_<date>_<time>_frameN.rdc
+static const char* kDefaultCaptureTemplate = "/tmp2/RenderDoc/c-game";
 
 void* renderDocInit(void) {
     if (rdocApi) {

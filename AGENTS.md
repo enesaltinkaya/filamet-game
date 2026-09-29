@@ -33,7 +33,23 @@ Set TERM env variable is to run the game.
 
 `ENGINE_SCREENSHOT=path` (env var) makes the engine capture one frame and save it as a JPEG (quality 90, via stb_image_write in c-engine/renderer/Renderer.cpp) a few frames after startup, for automated runs. One-shot — only the first capture is written.
 
-Example: `ENGINE_SCREENSHOT=/tmp/shot.jpg ./build/c-game/c-game` — save screenshots to `/tmp/` to keep the project folder uncluttered.
+Example: `ENGINE_SCREENSHOT=/tmp2/shot.jpg ./build/c-game/c-game` — save screenshots to `/tmp2/` to keep the project folder uncluttered.
+
+### Scratch files go to /tmp2, never /tmp
+
+`/tmp` is a tmpfs (RAM disk, 31 GB). Large captures in there push the system
+into swap and slow the whole machine. Use **`/tmp2`** (real disk) for every
+artifact you write: screenshots, `.rdc` captures, `renderdoccmd thumb` output,
+Python replay dumps, logs, temp images. Never write artifacts to `/tmp`.
+
+```bash
+mkdir -p /tmp2                                  # ensure it exists
+ENGINE_SCREENSHOT=/tmp2/shot.jpg ./build/c-game/c-game   # no default screenshot path
+```
+
+`.rdc` captures already default to `/tmp2/RenderDoc/c-game_frameN.rdc`
+(`ENGINE_RENDERDOC_DIR` overrides the prefix); `scripts/rdc.py` reads that same
+directory and dumps PNGs to `/tmp2/rdc-dump/`.
 
 ### RenderDoc (frame capture & inspection)
 
@@ -43,10 +59,10 @@ the layer+preload setup, the Python replay module, and `scripts/rdc.py`
 (headless pass-output dumper: `scripts/rdc.py list`, `scripts/rdc.py dump <eid|--last>`).
 
 ```bash
-# Headless capture; .rdc lands in /tmp/RenderDoc/ (~400 MB each, clean up old ones)
+# Headless capture; .rdc lands in /tmp2/RenderDoc/ (~400 MB each — never /tmp, it's tmpfs)
 ENGINE_RENDERDOC_CAPTURE=1 ENGINE_RENDERDOC_CAPTURE_FRAMES=300 \
 ./scripts/run.sh renderdoc      # exits on its own after the capture fires
-qrenderdoc /tmp/RenderDoc/c-game_frame300.rdc           # GUI
+qrenderdoc /tmp2/RenderDoc/c-game_frame300.rdc         # GUI
 PYTHONPATH=/home/enes/Apps/renderdoc/build/lib python3 <script>  # headless replay API
 ```
 

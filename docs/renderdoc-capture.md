@@ -89,14 +89,14 @@ On success you'll see in the console:
 
 ```
 renderdoc: using preloaded /home/enes/Apps/renderdoc/build/lib/librenderdoc.so
-renderdoc: api ready, captures land at /tmp/RenderDoc/c-game_<...>_frameN.rdc
+renderdoc: api ready, captures land at /tmp2/RenderDoc/c-game_<...>_frameN.rdc
 renderdoc: TriggerCapture
 ```
 
-The capture file lands in `/tmp/RenderDoc/`:
+The capture file lands in `/tmp2/RenderDoc/`:
 
 ```
-/tmp/RenderDoc/c-game_frame300.rdc   (~400 MB)
+/tmp2/RenderDoc/c-game_frame300.rdc   (~400 MB)
 ```
 
 (`ENGINE_RENDERDOC_DIR` overrides the filename prefix. Old captures pile
@@ -117,11 +117,11 @@ triggers a capture.
 ### GUI
 
 ```bash
-qrenderdoc /tmp/RenderDoc/c-game_frame300.rdc
+qrenderdoc /tmp2/RenderDoc/c-game_frame300.rdc
 ```
 
 Draw calls, pipeline state, textures, buffers, shader sources, GPU counters.
-`renderdoccmd thumb --out=/tmp/t.jpg <capture>` renders the backbuffer
+`renderdoccmd thumb --out=/tmp2/t.jpg <capture>` renders the backbuffer
 headlessly (quick validity check of a capture).
 
 ### Headless (Python replay API)
@@ -140,7 +140,7 @@ sys.path.insert(0, "/home/enes/Apps/renderdoc/build/lib")
 import renderdoc as rd
 from collections import Counter
 
-CAP = "/tmp/RenderDoc/c-game_frame300.rdc"
+CAP = "/tmp2/RenderDoc/c-game_frame300.rdc"
 
 rd.InitialiseReplay(rd.GlobalEnvironment(), [])
 cap = rd.OpenCaptureFile()
@@ -178,7 +178,7 @@ ts.mip = 0
 sm = rd.TextureSliceMapping(); sm.first = 0; sm.count = 1
 ss = rd.TextureSampleMapping(); ss.first = 0; ss.count = 1
 ts.slice, ts.sample, ts.destType = sm, ss, rd.FileType.PNG
-print("save:", ctrl.SaveTexture(ts, "/tmp/rdc_lastout.png"))
+print("save:", ctrl.SaveTexture(ts, "/tmp2/rdc_lastout.png"))
 
 ctrl.Shutdown()
 cap.Shutdown()
@@ -202,8 +202,8 @@ scripts/rdc.py dump --all                     # every pass group's color output
 scripts/rdc.py clean --keep 1 --dry-run       # .rdc files are ~400 MB+ each
 ```
 
-It defaults to the newest `.rdc` in `/tmp/RenderDoc`; dumps land in
-`/tmp/rdc-dump/`.
+It defaults to the newest `.rdc` in `/tmp2/RenderDoc` (honors `ENGINE_RENDERDOC_DIR`);
+dumps land in `/tmp2/rdc-dump/`.
 
 **Pass labels:** the engine wraps its passes in `Diligent::ScopedDebugGroup`
 (`DiligentRenderer.cpp draw()`): `shadow`, `player`, `taa_resolve` (the
@@ -271,7 +271,7 @@ the old map world's `terrain`/`props` passes were removed 2026-09-10 with it):
 | -------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------- |
 | `ENGINE_RENDERDOC_CAPTURE=1`                 | game (debug, Linux) | arm the in-process `TriggerCapture()`                                                          |
 | `ENGINE_RENDERDOC_CAPTURE_FRAMES=N`          | game                | frame at which the trigger fires (default 30)                                                  |
-| `ENGINE_RENDERDOC_DIR=/prefix`               | game                | capture filename prefix (default `/tmp/RenderDoc/c-game`)                                      |
+| `ENGINE_RENDERDOC_DIR=/prefix`               | game                | capture filename prefix (default `/tmp2/RenderDoc/c-game`)                                     |
 | `ENGINE_RENDERDOC_LIB=/path/librenderdoc.so` | game                | override which lib to `dlopen` for the API                                                     |
 | `LD_PRELOAD=.../build/lib/librenderdoc.so`   | dynamic loader      | map RenderDoc early (set by `run.sh renderdoc`)                                                |
 | `ENABLE_VULKAN_RENDERDOC_CAPTURE=1`          | Vulkan loader       | load the implicit capture layer (**required for hooks**)                                       |
@@ -283,7 +283,7 @@ the old map world's `terrain`/`props` passes were removed 2026-09-10 with it):
 | Symptom                                                                           | Cause / fix                                                                                                                                                                                                                   |
 | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `renderdoc: not present`                                                          | Lib not mapped — run via `./scripts/run.sh renderdoc` (or set `LD_PRELOAD` yourself)                                                                                                                                          |
-| `renderdoc: api ready` + `TriggerCapture` but no `.rdc` appears                   | Layer not active: `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` missing; or the trigger frame landed after process exit; check `/tmp/RenderDoc` and `RenderDoc_app_*.log` there                                                         |
+| `renderdoc: api ready` + `TriggerCapture` but no `.rdc` appears                   | Layer not active: `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` missing; or the trigger frame landed after process exit; check `/tmp2/RenderDoc` and `RenderDoc_app_*.log` there                                                         |
 | `diligent: Required extension VK_KHR_wayland_surface is not available` + segfault | Update of the Diligent checkout lost the wayland-define strip — re-run `cpp-thirdparty/diligent/build.sh`; also make sure the run went through `run.sh renderdoc` (`SDL_VIDEO_BACKEND=x11`). See `docs/lessons/2026-09-07.md` |
 | Capture has 0 draw calls                                                          | Triggered during asset loading — raise `ENGINE_RENDERDOC_CAPTURE_FRAMES`                                                                                                                                                      |
 | `qrenderdoc` not found                                                            | `~/.local/bin` symlink missing — recreate from `build/bin/`                                                                                                                                                                   |
