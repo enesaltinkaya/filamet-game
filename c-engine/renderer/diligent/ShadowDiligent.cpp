@@ -53,6 +53,10 @@
  * Any change re-creates the shadow map and bumps the generation counter the
  * geometry passes poll to rebuild their sampling pipelines (the sampling
  * macros are compile-time).
+ *  - The world filter footprint (ShadowMapAttribs.fFilterWorldSize, 0 = the
+ *    legacy fixed-texel kernel) is applied to the pre-blurred VSM/EVSM atlases;
+ *    PCF keeps radius 1 texel, since a wide PCF disc needs far more taps than
+ *    the receivers have (docs/env.md, lessons 2026-09-30).
  */
 
 namespace engine::renderer::diligent {
@@ -231,13 +235,14 @@ namespace engine::renderer::diligent {
         // building's shadow while the player runs. Measured at the parked building
         // (attenuation maps, ring sweep focusHalf 6 m -> 9 m as the sweep proxy):
         // deviation from a single-cascade reference in the boundary band 4.29 -> 3.08
-        // gray p99 34.7 -> 23.0, and the sweep delta 0.51 -> 0.12 gray (p99 8.0 ->
-        // 1.3). Plateau 0.02-0.08 m; 0.15 m over-blurs (0.28 gray). Beauty shadow-edge
-        // gradient 10.17 -> 10.46 (no sharpness cost; the variance-floor normalization
-        // tightens the EVSM falloff). 0.04 m = the sun's penumbra at ~4 m of caster
-        // height. 0 = the legacy fixed-texel kernel. Dolly shadow-edge residual
-        // (parallax-compensated attenuation map, 0.035 m/frame): 0.04 = 6.84 gray,
-        // 0.08 = 5.14, 0.12 = 4.10, with beauty shadow-edge gradient -0.2 %.
+        // gray p99 34.7 -> 23.0, and the sweep delta 0.51 -> 0.12 gray.
+        // PCF (mode 1) has no pre-blurred atlas: the footprint lands on the receiver's
+        // PCF tap radius, and 8 Poisson taps cannot average a coarse-texel disc — the
+        // cascade-0 box printed as concentric rings centered on the player (measured
+        // 0.04 m..1.0 m on the lawn, and the 8-texel cap version split 47 mm vs 120 mm
+        // penumbrae across the box faces). PCF runs the fixed-texel kernel unless the
+        // env var is set explicitly.
+        const bool filterWorldSizeSet = getenv("ENGINE_SHADOW_FILTER_WORLD") != nullptr;
         const float filterWorldSize = [] {
             float v = 0.12f;
             if (const char* env = getenv("ENGINE_SHADOW_FILTER_WORLD")) {
@@ -246,6 +251,9 @@ namespace engine::renderer::diligent {
             }
             return v;
         }();
+        float receiverFilterWorldSize(int mode) {
+            return (mode == 1 && !filterWorldSizeSet) ? 0.0f : filterWorldSize;
+        }
         // Cascade-blend dither amplitude: breaks the blend band's iso-lines into
         // per-pixel noise so TAA/spatial AA blurs the boundary instead of showing a
         // coherent line. Rides in ShadowMapAttribs.bVisualizeShadowing (bit-copied
@@ -359,8 +367,9 @@ namespace engine::renderer::diligent {
                 passReady = true;
                 generation++;
                 char filterDesc[32];
-                if (filterWorldSize > 0.0f && mode >= 2)
-                    snprintf(filterDesc, sizeof(filterDesc), "%.1f cm world", (double)filterWorldSize * 100.0);
+                const float fwSize = receiverFilterWorldSize(mode);
+                if (fwSize > 0.0f)
+                    snprintf(filterDesc, sizeof(filterDesc), "%.1f cm world", (double)fwSize * 100.0);
                 else
                     snprintf(filterDesc, sizeof(filterDesc), "%dx%d texel", tier.pcfFilterSize, tier.pcfFilterSize);
                 utils::info("shadow: mode %d quality %d (res %u, %u cascades, %.0f m, filter %s)",
@@ -386,8 +395,9 @@ namespace engine::renderer::diligent {
             Diligent::ShadowMapAttribs& sa  = lightAttribs.ShadowAttribs;
             sa.iNumCascades                 = (int)tier.cascades;
             sa.fNumCascades                 = (float)tier.cascades;
-            sa.iFixedFilterSize = (filterWorldSize > 0.0f && mode >= 2) ? 0 : tier.pcfFilterSize;
-            sa.fFilterWorldSize = (filterWorldSize > 0.0f && mode >= 2) ? filterWorldSize : 0.0f;
+            const float fwSize            = receiverFilterWorldSize(curMode);
+            sa.iFixedFilterSize           = fwSize > 0.0f ? 0 : tier.pcfFilterSize;
+            sa.fFilterWorldSize           = fwSize;
             sa.fCascadeTransitionRegion     = transitionRegion;
             sa.fReceiverPlaneDepthBiasClamp = 16.0f;
             sa.iMaxAnisotropy               = 4;
@@ -1702,6 +1712,10 @@ namespace engine::renderer::diligent {
         return passReady ? farPadS : 1.0f;
     }
 
+    float shadowDiligentFilterWorldSize(void) {
+        return filterWorldSize;
+    }
+
     u64 shadowDiligentTraceFrame(void) {
         return shadowTraceFrame;
     }
@@ -1718,10 +1732,6 @@ namespace engine::renderer::diligent {
     Diligent::ITextureView* shadowDiligentShadowDepthSRV(void) {
         if (!passReady) return nullptr;
         return mgr.GetSRV();
-    }
-
-    Diligent::ISampler* shadowDiligentShadowSampler(void) {
-        return curMode == 1 ? cmpSampler : filterableSampler;
     }
 
     void shadowDiligentCasterBias(float& slopeBias, float& constBias, float& biasClamp) {

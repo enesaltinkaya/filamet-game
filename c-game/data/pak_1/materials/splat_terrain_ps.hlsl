@@ -486,48 +486,51 @@ float3 schlickReflection(float VdotH, float3 Reflectance0, float3 Reflectance90)
     return Reflectance0 + (Reflectance90 - Reflectance0) * pow(clamp(1.0 - VdotH, 0.0, 1.0), 5.0);
 }
 
-// The Witness 3x3 fixed PCF (PCF.fxh FilterShadowMapFixedPCF,
-// PCF_FILTER_SIZE 3) over the cascade depth array. rcvBias is the
-// receiver-plane depth slope (dDepth per texel, u and v) — per tap the
-// depth is offset by dot(tapOffset, rcvBias) so a grazing receiver plane
-// stays lit without any caster rasterizer bias (the Shadows sample's
-// FractionalSamplingError + receiver-plane bias policy).
-// tapScale spreads the four taps over tapScale texels: the caller scales it to
-// the frame's world filter radius so every cascade filters the same world area
-// (with the bias slope divided by the same factor, keeping the bias margin a
-// fixed world distance).
-float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias, float tapScale)
+// The PCF (mode 1) receive: 8 Poisson taps, radius tapScale texels, rotated
+// per atlas texel. The Witness 4-tap grid (FilterShadowMapFixedPCF) is anchored
+// to the atlas texel grid: its bilinear weights make the response piecewise
+// linear with derivative kinks at texel boundaries, so a shadow edge sweeping
+// across the kernel prints concentric contour rings, and the ring period is a
+// function of the cascade's texel size — the cascade-0 box faces then separate
+// two differently-textured shadow fields (measured 20x-amplified on the lawn:
+// rings inside the box, a dot grid outside; the straight "box around the
+// player"). Rotation kills the anchoring and 8 taps keep the disc dense at any
+// radius, so the shadow texture is the kernel's, not the cascade's. tapScale 1
+// = the legacy fixed-texel kernel; the world-normalized footprint scales it.
+// Bias: rcvBias (dDepth per texel) divided by the same radius, so the bias
+// margin stays a fixed world distance.
+float filterShadowPCFPoisson8(float2 uv, float slice, float lightDepth, float2 rcvBias, float tapScale)
 {
     float4 dims;
     g_ShadowMap.GetDimensions(dims.x, dims.y, dims.z);
-    float2 px     = uv * dims.xy;
-    float2 baseUV = floor(px + 0.5) - 0.5;
-    float  s      = (px.x + 0.5) - (baseUV.x + 0.5);
-    float  t      = (px.y + 0.5) - (baseUV.y + 0.5);
-    float2 texel  = 1.0 / dims.xy;
-    rcvBias *= texel / tapScale;
-    baseUV *= texel;
+    float2 texel = 1.0 / dims.xy;
+    float2 bias  = rcvBias * texel / tapScale;
 
-    float uw0 = (3.0 - 2.0 * s);
-    float uw1 = (1.0 + 2.0 * s);
-    float u0  = (2.0 - s) / uw0 - 1.0;
-    float u1  = s / uw1 + 1.0;
-    float vw0 = (3.0 - 2.0 * t);
-    float vw1 = (1.0 + 2.0 * t);
-    float v0  = (2.0 - t) / vw0 - 1.0;
-    float v1  = t / vw1 + 1.0;
+    const float2 poisson[8] =
+    {
+        float2( 0.9362,  0.5513),
+        float2(-0.4554,  0.9537),
+        float2( 0.6568, -0.8001),
+        float2( 0.8798, -0.5202),
+        float2(-0.8181,  0.2479),
+        float2(-0.1008, -0.8778),
+        float2(-0.2477,  0.3971),
+        float2( 0.8349,  0.4302)
+    };
 
+    float ang = frac(dot(floor(uv * dims.xy), float2(0.61803399, 0.37171347))) * 6.2831853;
+    float2 c  = float2(cos(ang), sin(ang));
     const float DepthClamp = 1e-8;
     float sum = 0.0;
-    float2 k0 = float2(u0, v0) * tapScale;
-    float2 k1 = float2(u1, v0) * tapScale;
-    float2 k2 = float2(u0, v1) * tapScale;
-    float2 k3 = float2(u1, v1) * tapScale;
-    sum += uw0 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k0 * texel, slice), max(lightDepth + dot(k0, rcvBias), DepthClamp));
-    sum += uw1 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k1 * texel, slice), max(lightDepth + dot(k1, rcvBias), DepthClamp));
-    sum += uw0 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k2 * texel, slice), max(lightDepth + dot(k2, rcvBias), DepthClamp));
-    sum += uw1 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k3 * texel, slice), max(lightDepth + dot(k3, rcvBias), DepthClamp));
-    return sum / 16.0;
+    for (int i = 0; i < 8; ++i)
+    {
+        float2 r = float2(poisson[i].x * c.x - poisson[i].y * c.y,
+                          poisson[i].x * c.y + poisson[i].y * c.x) * tapScale;
+        sum += g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler,
+               float3(uv + r * texel, slice),
+               max(lightDepth + dot(r, bias), DepthClamp));
+    }
+    return sum / 8.0;
 }
 
 // The VSM (mode 2) receive: the filterable atlas stores (R = mean depth,
@@ -718,16 +721,28 @@ float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, fl
     // almost nothing to fade between.
     float tapScale = 1.0;
     float varScale = 1.0;
+    float texelWorld = 0.0;
     if (fFilterWorldSize > 0.0)
     {
         float4 fdims;
         g_ShadowMap.GetDimensions(fdims.x, fdims.y, fdims.z);
-        float texelWorld = 2.0 / (sc.x * fdims.x);
-        tapScale = clamp(fFilterWorldSize / texelWorld, 0.1, 8.0);
-        varScale = clamp(sc.z / cascadeAttribs[0].z, 0.01, 1.0);
+        texelWorld = 2.0 / (sc.x * fdims.x);
+        tapScale   = clamp(fFilterWorldSize / texelWorld, 0.1, 8.0);
+        varScale   = clamp(sc.z / cascadeAttribs[0].z, 0.01, 1.0);
     }
     if (shadowMode < 1.5)
-        return filterShadowPCF3(cascadeUV, float(cascade), lightDepth, rcvBiasUV, max(tapScale, 1.0));
+    {
+        // PCF: the rotated-Poisson kernel above. Default radius 1 texel (the
+        // engine sends fFilterWorldSize 0 for PCF: a wide PCF disc needs ~4x the
+        // taps it has — at the 0.12 m footprint the fine cascade's 20-texel disc
+        // printed wide rings). ENGINE_SHADOW_FILTER_WORLD opts into the world
+        // footprint, uncapped as the moments modes are (their 8-texel cap is a
+        // cost choice on a pre-blurred atlas; capping here left the fine cascade
+        // filtering a SMALLER world disc than the coarse one — 47 mm vs 120 mm —
+        // and the box faces split two penumbra widths).
+        float ts = texelWorld > 0.0 ? clamp(fFilterWorldSize / texelWorld, 1.0, 24.0) : 1.0;
+        return filterShadowPCFPoisson8(cascadeUV, float(cascade), lightDepth, rcvBiasUV, ts);
+    }
     if (shadowMode < 2.5)
         return filterShadowVSM(cascadeUV, float(cascade), lightDepth, tapScale, varScale);
     float2 dbgTapUV2;
@@ -914,20 +929,22 @@ PSOutput main(PSSplatIn In)
                 dbgCascade = cascade;
                 dbgRaw     = att;
             }
-            // Cascade blend (DiligentFX Shadows.fxh GetNextCascadeBlendAmount
-            // parity): lerp toward the next (coarser) cascade over the last
-            // fCascadeTransitionRegion of the cascade's z-range AND over the same
-            // distance to its box edges — FX folds fMinDistToMargin into the same
-            // max(), which is what stops the projected box edge from rendering as a
-            // straight line across the shadow. smoothstep removes the derivative
-            // kink at the band edges (the eye reads a kink as a line), and
-            // ENGINE_SHADOW_BLEND_DITHER breaks the band's iso-lines into per-pixel
-            // noise for the AA/TAA to average.
+            // Cascade blend: cross-fade into the next (coarser) cascade over
+            // the last fCascadeTransitionRegion of the cascade's z-range OR of
+            // its distance to a box face, whichever is shorter. DiligentFX's
+            // GetNextCascadeBlendAmount maxes the two distances, which is right
+            // for its StabilizeExtents CUBES (an XY-face crossing is a z-far
+            // crossing there); the player-anchored ring boxes are not cubes, so
+            // their XY faces are crossed at a large z distance and a max()
+            // leaves them as a hard straight box edge around the player.
+            // smoothstep removes the derivative kink at the band edges (the eye
+            // reads a kink as a line), and ENGINE_SHADOW_BLEND_DITHER breaks the
+            // band's iso-lines into per-pixel noise for the AA/TAA to average.
             if (cascade + 1 < int(sNumCascades.y))
             {
                 float zstart = cascadeAttribs[cascade * 4 + 2].x;
                 float dist   = saturate((zend - viewZ) / max(zend - zstart, 1e-6));
-                float blend  = saturate(1.0 - max(dist, margin) / max(sBiasParams.z, 1e-6));
+                float blend  = saturate(1.0 - min(dist, margin) / max(sBiasParams.z, 1e-6));
                 blend = blend * blend * (3.0 - 2.0 * blend);
                 if (sNumCascades.w > 0.0)
                 {

@@ -83,31 +83,32 @@ struct PbrPropsShadowAttribs {
     Diligent::float4   cascades[32];  // [4i]=LightSpaceScale [4i+1]=ScaledBias [4i+2]=StartEndZ
     int                numCascades;
     float              mode;
-    float              pad[2];
-    Diligent::float4   biasParams;    // x=ReceiverPlaneDepthBiasClamp y=FixedDepthBias z=CascadeTransitionRegion
+    float              tierDistance;
+    float              blendDither;
+    Diligent::float4   biasParams;
+    Diligent::float4   tail;  // x = world-space filter footprint (m)
 };
-static_assert(sizeof(PbrPropsShadowAttribs) == 608, "cbPbrPropsShadow mirror drift");
+static_assert(sizeof(PbrPropsShadowAttribs) == 624, "cbPbrPropsShadow mirror drift");
 static RefCntAutoPtr<IBuffer> propsShadowCB;
-static RefCntAutoPtr<IBuffer> propsShadowGateCB;  // zeroed: numCascades 0 = single-slice path (the player)
+static RefCntAutoPtr<IBuffer> propsShadowGateCB;  // the player's cascade set: numCascades 1 = the CPU-picked slice, 0 = single-slice fallback
 static RefCntAutoPtr<ITexture> iblIrradiance;
 static RefCntAutoPtr<ITexture> iblPrefiltered;
 static GLTF_PBR_Renderer::ModelResourceBindings modelBindings;
 static bool bindingsValid = false;
 static Uint32 sceneIndex = 0;
 
-// CSM receive for the player: on while the shadow pass is ready in PCF (1)
-// or EVSM2 (3) mode — the two filtering techniques the PBR shader implements.
-// The filterable VSM/EVSM atlas stores variance, not depth — comparison
-// sampling on it is wrong, so PCF keeps the depth atlas and EVSM2 samples the
-// moments atlas through the filterable slot.
+// CSM receive for the player + props: on for every shadow mode. The PBR
+// receivers walk the shared cascade set with PCF on the RAW DEPTH atlas in all
+// modes (see cbPbrPropsShadow in PBR_Shading.fxh); the moments atlas is only
+// used by the terrain receiver, so the receive gate is the depth atlas, not the
+// mode. ENGINE_PBR_NO_RECEIVE is the A/B switch.
 static bool pbrShadowsOn(void) {
     using namespace engine::renderer::diligent;
     if (getenv("ENGINE_PBR_NO_RECEIVE")) {
         return false;
     }
     const int mode = shadowDiligentMode();
-    return shadowDiligentActive() && (mode == 1 || mode == 3) &&
-           shadowDiligentShadowSRV() != nullptr;
+    return shadowDiligentActive() && mode >= 1 && shadowDiligentShadowDepthSRV() != nullptr;
 }
 
 static BoundBox localBounds;
@@ -1620,8 +1621,11 @@ static void fillFrameAttribsInner(IDeviceContext* ctx, const float4x4& proj,
     }
 
     // Props multi-cascade receive data: the shared CSM cascade set the props
-    // walk per pixel (see cbPbrPropsShadow in PBR_Shading.fxh). The player's
-    // SRBs bind the zeroed gate buffer instead and keep the single-slice path.
+    // walk per pixel (see cbPbrPropsShadow in PBR_Shading.fxh). The player's SRBs
+    // bind the gate buffer, which carries the ONE cascade the CPU picked for her
+    // (numCascades 1) — she runs the same walk, so she gets the rotated-Poisson
+    // kernel, the box-face blend and the tier fade in every shadow mode instead
+    // of the single-slice path.
     if (propsShadowCB) {
         const HLSL::LightAttribs* la = static_cast<const HLSL::LightAttribs*>(
                 engine::renderer::diligent::shadowDiligentLightAttribs());
@@ -1634,6 +1638,10 @@ static void fillFrameAttribsInner(IDeviceContext* ctx, const float4x4& proj,
         }
         props->numCascades = la->ShadowAttribs.iNumCascades;
         props->mode        = (float)engine::renderer::diligent::shadowDiligentMode();
+        props->tierDistance = engine::renderer::diligent::shadowDiligentTierDistance();
+        f32 blendDither = 0.0f;
+        std::memcpy(&blendDither, &la->ShadowAttribs.bVisualizeShadowing, sizeof(blendDither));
+        props->blendDither = blendDither;
         static const f32 propsShadowDbg = [] {
             const char* v = getenv("ENGINE_PBR_PROPS_SHADOW_DBG");
             return v ? (f32)atoi(v) : 0.0f;
@@ -1641,6 +1649,31 @@ static void fillFrameAttribsInner(IDeviceContext* ctx, const float4x4& proj,
         props->biasParams  = Diligent::float4{la->ShadowAttribs.fReceiverPlaneDepthBiasClamp,
                                               la->ShadowAttribs.fFixedDepthBias,
                                               la->ShadowAttribs.fCascadeTransitionRegion, propsShadowDbg};
+        props->tail        = Diligent::float4{
+            la->ShadowAttribs.fFilterWorldSize > 0.0f && props->mode < 1.5f
+                ? la->ShadowAttribs.fFilterWorldSize : 0.0f,
+            0.0f, 0.0f, 0.0f};
+        // The player's gate: the CPU-picked cascade as a one-cascade set, so
+        // her receiver runs the same walk as the props. Zeroed (numCascades 0)
+        // while the pass has no cascades — she then falls back to the
+        // single-slice path.
+        {
+            MapHelper<PbrPropsShadowAttribs> gate(context, propsShadowGateCB, MAP_WRITE, MAP_FLAG_DISCARD);
+            memset(&*gate, 0, sizeof(PbrPropsShadowAttribs));
+            const int gateSlice = engine::renderer::diligent::shadowDiligentPbrSlice();
+            if (la->ShadowAttribs.iNumCascades > 0 && gateSlice >= 0 && gateSlice < la->ShadowAttribs.iNumCascades) {
+                gate->worldToLightView = la->ShadowAttribs.mWorldToLightView;
+                gate->cascades[0] = la->ShadowAttribs.Cascades[gateSlice].f4LightSpaceScale;
+                gate->cascades[1] = la->ShadowAttribs.Cascades[gateSlice].f4LightSpaceScaledBias;
+                gate->cascades[2] = la->ShadowAttribs.Cascades[gateSlice].f4StartEndZ;
+                gate->numCascades  = 1;
+                gate->mode         = props->mode;
+                gate->tierDistance = props->tierDistance;
+                gate->blendDither  = props->blendDither;
+                gate->biasParams   = props->biasParams;
+                gate->tail         = props->tail;
+            }
+        }
     }
 }
 

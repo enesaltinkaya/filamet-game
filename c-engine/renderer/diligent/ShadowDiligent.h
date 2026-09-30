@@ -60,6 +60,7 @@ int  shadowDiligentPcfFilterSize(void);
 // cbuffers) — it is the effective receiver cutoff.
 float shadowDiligentTierDistance(void);
 float shadowDiligentFarPadS(void);
+float shadowDiligentFilterWorldSize(void);
 u64 shadowDiligentTraceFrame(void);
 
 // Master LightAttribs (ShadowMapAttribs included; matrices transposed for
@@ -71,10 +72,6 @@ Diligent::ITextureView* shadowDiligentShadowSRV(void);
 // The raw cascade depth atlas SRV regardless of mode (the PBR pass keeps it
 // bound in the comparison slot while the EVSM branch is compiled in).
 Diligent::ITextureView* shadowDiligentShadowDepthSRV(void);
-// The sampler matching shadowDiligentShadowSRV (comparison for PCF, linear
-// for the filterable modes) — bound into the passes' PRS as the
-// g_tex2DShadowMap_sampler / g_tex2DFilterableShadowMap_sampler static.
-Diligent::ISampler* shadowDiligentShadowSampler(void);
 
 // Caster-side hardware rasterizer depth bias for the depth-pass PSOs
 // (SlopeScaledDepthBias / DepthBias / DepthBiasClamp, in the graphics-API

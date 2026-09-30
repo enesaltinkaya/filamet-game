@@ -10,10 +10,10 @@
 #include "logger/Logger.h"
 #include "platform/Platform.h"
 
-#include <cstdio>
+#include <algorithm>
 #include <cstdlib>
-#include <cstring>
-#include <string>
+#include <filesystem>
+#include <vector>
 
 namespace engine::renderer::diligent {
 
@@ -75,6 +75,45 @@ std::string cachePath(Diligent::IRenderDevice* dev, u64 hash) {
     return dir + utils::platform.seperator + file;
 }
 
+// The FX shaders are compiled through the DiligentFX source factory, whose
+// sources are embedded at build time; a shader's own file is only the top of its
+// include chain (PBR_PixelShader.fx pulls PBR_Shading.fxh etc.). Hashing the
+// top-level file alone serves stale SPIR-V for every edit below it — measured:
+// a props-receiver PCF kernel change left 91 % of the frame's pixels untouched
+// with the cache on, and changed them with the cache off.
+// Hash the EMBEDDED blobs (DiligentFX/shaders_inc/*.h, the File2String output
+// that the FX source factory serves): the key then tracks exactly the bytes the
+// compiler sees. Keying on the raw Shaders/ tree is actively wrong — an edit
+// that has not been rebuilt moves the key while the compiled bytes are still
+// the old ones, so the stale SPIR-V gets stored under the new key and survives
+// the rebuild (measured: a props-receiver change stayed invisible for three
+// runs with the cache on and appeared the moment the cache was bypassed).
+u64 includeTreeFingerprint(void) {
+    static const u64 fp = [] {
+        const char* root = getenv("DILIGENT_FX_SHADER_INC_DIR");
+        if (root == nullptr)
+            root = "/home/enes/Projects/c/cpp-thirdparty/diligent/git/build-linux/DiligentFX/shaders_inc";
+        std::error_code ec;
+        std::vector<std::string> files;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+            if (!entry.is_regular_file())
+                continue;
+            const std::string p = entry.path().string();
+            if (!p.empty() && p.back() == 'h')
+                files.push_back(p);
+        }
+        std::sort(files.begin(), files.end());
+        u64 h = 1469598103934665603ULL;
+        for (const std::string& f : files) {
+            h = fnv1a(f.c_str(), f.size(), h);
+            const std::string body = readWhole(f.c_str());
+            h = fnv1a(body.data(), body.size(), h);
+        }
+        return h;
+    }();
+    return fp;
+}
+
 }
 
 Diligent::IShader* shaderCacheCreate(Diligent::IRenderDevice* dev,
@@ -124,6 +163,17 @@ Diligent::IShader* shaderCacheCreate(Diligent::IRenderDevice* dev,
         }
     }
     hash = fnv1a(key.data(), key.size(), hash);
+    // Unconditional: the glTF PBR pass feeds the FX sources as ci.Source with
+    // no stream factory, and a pak shader can gain includes later — keying the
+    // fingerprint on the factory left the props pixel shaders serving stale
+    // SPIR-V through two kernel changes (mode 3 with the cache on measured the
+    // player's shadow at 2.014 gray, with the cache off 13.762).
+    const u64 tree = includeTreeFingerprint();
+    hash = fnv1a(&tree, sizeof(tree), hash);
+    static const bool keyTrace = getenv("ENGINE_SHADER_CACHE_TRACE") != nullptr;
+    if (keyTrace)
+        utils::info("shaderCache: key %s tree=%llu keyBytes=%zu src=%d", name,
+                    (unsigned long long)tree, key.size(), ci.Source != nullptr ? 1 : 0);
 
     const std::string path = cachePath(dev, hash);
     const bool cacheEnabled = keyValid && getenv("ENGINE_NO_SHADER_CACHE") == nullptr;
