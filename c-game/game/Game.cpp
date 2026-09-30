@@ -85,7 +85,19 @@ namespace game {
                         dollyDistance,
                         dollyLegSeconds);
         }
-        dollyTime += (double)utils::timer.dt;
+        // ENGINE_CAMERA_DOLLY_FRAME_DT: advance the dolly by a FIXED dt per
+        // frame (seconds/frame, e.g. 0.0154 = the 65 fps dolly step at the
+        // default leg). Wall-clock dt makes the pose lattice fps-dependent,
+        // so screenshot runs of two builds never share a pose and the TAA
+        // A/B floor (~3 gray) swamps the effect being measured.
+        static const double frameDt = [] {
+            if (const char* e = getenv("ENGINE_CAMERA_DOLLY_FRAME_DT")) {
+                const double v = atof(e);
+                return v > 0.0 ? v : 0.0;
+            }
+            return 0.0;
+        }();
+        dollyTime += frameDt > 0.0 ? frameDt : (double)utils::timer.dt;
 
         const double cycle = 2.0 * dollyLegSeconds;
         const double phase = std::fmod(dollyTime, cycle) / cycle;

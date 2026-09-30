@@ -42,8 +42,9 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | Var                   | Value                               | Effect                                                                                                  |
 | --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `ENGINE_TELEPORT`     | `x,y,z`                             | Override the spawn position (world metres, f32).                                                        |
-| `ENGINE_CAMERA_DOLLY` | truthy                              | From wherever the camera sits when the world comes up, dolly straight backwards (opposite the look direction) 30 m over 3 s, then back to the start over 3 s, looping. Turnarounds are smooth (velocity hits zero at both ends); the orientation never changes. Parks the player (the scripted camera owns the view) — pair with `ENGINE_SCREENSHOT_FRAME` / `ENGINE_DEBUG_CAM` to inspect a frame that has actually moved. |
-| `ENGINE_CAMERA_DOLLY_LEG`   | float (s)  | Dolly leg duration (default 1; distance stays 15 m → speed = 15/leg s — e.g. 15 = a 1 m/s dolly for slow-motion A/B). |
+| `ENGINE_CAMERA_DOLLY` | truthy                              | From wherever the camera sits when the world comes up, dolly straight backwards (opposite the look direction) 10 m over one leg, then back to the start over one leg, looping. Turnarounds are smooth (cosine, velocity zero at both ends); the orientation never changes. Parks the player (the scripted camera owns the view) — pair with `ENGINE_SCREENSHOT_FRAME` / `ENGINE_DEBUG_CAM` to inspect a frame that has actually moved. |
+| `ENGINE_CAMERA_DOLLY_LEG`   | float (s)  | Dolly leg duration (default 1.5; distance stays 10 m → speed = 10/leg s — e.g. 30 = a 0.33 m/s dolly for slow-motion A/B). |
+| `ENGINE_CAMERA_DOLLY_FRAME_DT` | float (s/frame) | Advance the dolly by a FIXED dt each frame instead of wall-clock dt (0.0154 reproduces the 65 fps step at the default leg). Wall-clock dt ties the pose lattice to fps, so two runs never share a pose and temporal A/B measures ~3 gray of phase noise; with a fixed dt and `ENGINE_SCREENSHOT_BURST_STRIDE`, runs are pose-identical and TAA/jitter deltas become resolvable. |
 | `ENGINE_AUTO_RUN`     | truthy                              | Auto-run forward from spawn; the third-person camera follows (the camera-follow test). Any W/S cancels. |
 | `ENGINE_AUTO_JUMP`  | int (fixed ticks)                   | Fire a jump every N ticks (60 = 1 s) — the character-controller jump/air-state test. Needs player mode: pair with `ENGINE_AUTO_RUN=1` in automated runs. Implies the state-db write gate (see `automatedRun()`).                                       |
 | `ENGINE_TPOSE`        | truthy                              | Always play the character T-pose (inspect hook).                                                        |
@@ -68,6 +69,11 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | `ENGINE_AO_MOTION_RESET`    | float (px/frame) | Camera-motion threshold for the SSAO history reset (eye translation at near-plane depth + view rotation, converted to screen pixels). Default 0.1; 0 = never reset (keep history while the camera moves — the ghost baseline). |
 | `ENGINE_SSAO_RESET_TRACE`   | any value | Log each SSAO accumulation-reset state change (ACTIVE/off) with this frame's dEye + dRot. |
 | `ENGINE_SSAO_NO_HISTORY`    | any value | Force the SSAO accumulation reset every frame (single-frame AO — the ghost-free ground truth). |
+| `ENGINE_TAA_MOTION_PX`          | float (px/frame) | Jitter-gate cutoff: at this image displacement of a point at `ENGINE_TAA_MOTION_Z` depth the TAA Halton jitter is fully faded out (linear fade starting at 0.25× the value). Default 2. Above it the frame renders unjittered: with no history to dither, the jitter only shimmers contrast edges. `ENGINE_TAA_MOTION_JITTER_OFF=1` disables the gate. |
+| `ENGINE_TAA_MOTION_Z`           | float (m)        | Reference depth of the jitter gate's px/frame measure (the near field). Default 12. |
+| `ENGINE_TAA_MOTION_VECTOR_DIFF` | float            | DiligentFX `TAA_MOTION_VECTOR_DIFF_FACTOR`: per-pixel-motion scale that kills TAA's history alpha (`alpha *= saturate(1 - |mv_uv| * factor)`). Library default 256 = the history dies near 1 px/frame of flow, i.e. in any camera move. Tuning knob only: measured across dolly speeds, 4-256 stay inside the A/B noise floor. |
+| `ENGINE_JITTER_SCALE`           | float            | TAA sub-pixel jitter amplitude (default 0.25 px; 0 = no jitter). |
+| `ENGINE_FX_SHADER_DEFINES`      | `NAME=VAL;...` | Extra HLSL defines appended to every DiligentFX post-FX shader compile — the channel `ENGINE_TAA_MOTION_VECTOR_DIFF` writes through; set it directly to override the engine default. |
 
 ## Shadow (cascades)
 
@@ -76,11 +82,12 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | `ENGINE_SHADOW_FOCUS_BOX`  | `0`       | Disable the player-focused cascade-0 re-fit (A/B: stock slice-sized cascade 0).                                                      |
 | `ENGINE_SHADOW_FOCUS_HALF` | float (m) | Override the focus-box half-extent (4–40 m; default auto: caster height / tan(sun elevation) + focus margin, clamped 6–32 m).         |
 | `ENGINE_SHADOW_SLOPE_BIAS` | float     | Shadow-caster `SlopeScaledDepthBias` (all casters, all cascades). Default 0.5; 2.0 = the old stock value (wall-base shadows detach and flash while the camera moves). |
-| `ENGINE_SHADOW_TRACE`      | frameN    | One-shot trace line: band, focus box, cascade z rows, texel sizes, player light NDC.                                                 |
+| `ENGINE_SHADOW_TRACE`      | frameN    | One-shot trace line: band, focus box, cascade z rows, texel sizes, player light NDC, cascade ring radius (`R`), player screen position (`px`/`py`). |
 | `ENGINE_SHADOW_TRACE_STRIDE` | frames   | Trace cadence (1–1000, default 50): `1` = every frame, for per-frame cascade/caster traces.                                        |
 | `ENGINE_SHADOW_NO_SNAP`    | any       | Disable cascade texel snapping (manager `SnapCascades` + the anchor-relative centre snap) — cascade centres go bit-constant.       |
 | `ENGINE_SHADOW_C1_TEXEL_OFFSET` | float | Shift cascade 1's box centre by N texels (A/B: how much a cascade-1 grid shift is worth on screen).                              |
 | `ENGINE_SHADOW_ORACLE`     | frameN    | One-shot caster-vs-receiver matrix consistency check (pass/fail per point/cascade).                                                  |
+| `ENGINE_SHADOW_RINGS`      | `0`       | Disable player-anchored cascade rings (PCF): cascade k = cube centered on the player with radius `focusHalf·(tierDist/focusHalf)^(k/(N-1))`, z-gate = player view-Z + radius. Default on; `0` = stock camera-frustum distribution. |
 
 ## IBL
 

@@ -670,20 +670,15 @@ float3 rotateAroundY(float3 d, float2 rot)
     return float3(rot.x * d.x + rot.y * d.z, d.y, -rot.y * d.x + rot.x * d.z);
 }
 
-float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, float3 ddxLV, float3 ddyLV)
+float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, float3 nLight)
 {
     float3 sc = cascadeAttribs[cascade * 4].xyz;
     float3 cascadeNdc = lightViewPos * sc + cascadeAttribs[cascade * 4 + 1].xyz;
     float2 cascadeUV  = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
     if (cascadeUV.x < 0.0 || cascadeUV.x > 1.0 || cascadeUV.y < 0.0 || cascadeUV.y > 1.0)
         return -1.0;
-    float3 ddxUVZ = float3(ddxLV.x * sc.x, ddxLV.y * sc.y, ddxLV.z * sc.z) * float3(0.5, -0.5, 1.0);
-    float3 ddyUVZ = float3(ddyLV.x * sc.x, ddyLV.y * sc.y, ddyLV.z * sc.z) * float3(0.5, -0.5, 1.0);
-    float2 rcvBiasUV;
-    rcvBiasUV.x = ddyUVZ.y * ddxUVZ.z - ddxUVZ.y * ddyUVZ.z;
-    rcvBiasUV.y = -ddyUVZ.x * ddxUVZ.z + ddxUVZ.x * ddyUVZ.z;
-    float det = (ddxUVZ.x * ddyUVZ.y) - (ddxUVZ.y * ddyUVZ.x);
-    rcvBiasUV /= sign(det) * max(abs(det), 1e-10);
+    float nz = abs(nLight.z) < 1e-6 ? (nLight.z < 0.0 ? -1e-6 : 1e-6) : nLight.z;
+    float2 rcvBiasUV = float2(-2.0 * sc.z * nLight.x / (nz * sc.x), 2.0 * sc.z * nLight.y / (nz * sc.y));
     float2 biasClampUV = abs(float2(sc.z / (sc.x * 0.5), sc.z / (sc.y * -0.5))) * sBiasParams.x;
     rcvBiasUV = clamp(rcvBiasUV, -biasClampUV, biasClampUV);
     float slopeScale = sBiasParams.y;
@@ -856,14 +851,13 @@ PSOutput main(PSSplatIn In)
     {
         float viewZ         = In.ViewZ;
         float3 lightViewPos = mul(float4(In.AnchoredPos, 1.0), mWorldToLightView).xyz;
-        float3 ddxLV = ddx(lightViewPos);
-        float3 ddyLV = ddy(lightViewPos);
+        float3 nLight = mul(float4(N, 0.0), mWorldToLightView).xyz;
         for (int cascade = 0; cascade < int(sNumCascades.y); ++cascade)
         {
             float zend = f4CascadeCamSpaceZEnd[cascade / 4][cascade % 4];
             if (viewZ > zend)
                 continue;
-            float att = filterShadowCascade(cascade, shadowMode, lightViewPos, ddxLV, ddyLV);
+            float att = filterShadowCascade(cascade, shadowMode, lightViewPos, nLight);
             dbgZ = viewZ * 0.0025;
             dbgCascade = cascade;
             dbgRaw = att;
@@ -883,7 +877,7 @@ PSOutput main(PSSplatIn In)
                 float blend  = saturate(1.0 - dist / max(sBiasParams.z, 1e-6));
                 if (blend > 0.0)
                 {
-                    float attNext = filterShadowCascade(cascade + 1, shadowMode, lightViewPos, ddxLV, ddyLV);
+                    float attNext = filterShadowCascade(cascade + 1, shadowMode, lightViewPos, nLight);
                     if (attNext >= 0.0)
                         att = lerp(att, attNext, blend);
                 }

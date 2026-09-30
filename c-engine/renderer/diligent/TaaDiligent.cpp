@@ -76,6 +76,8 @@ static u32 targetHeight = 0;
 
 static bool taaOn = false;
 static float taaWeight = 0.9f; // settings.taaWeight → TemporalStabilityFactor
+static float lastMotionPx = 0.0f;
+static bool gateLogged = false;
 
 // [0] = this frame, [1] = previous frame (raw row-major storage; the
 // PostFX shaders get them through a PackMatrixRowMajor PostFXContext).
@@ -1119,7 +1121,21 @@ void taaInit(void) {
     if (!device) {
         return;
     }
-    havePrevEye = false;
+    // DiligentFX TAA's history rejection is per-pixel-motion based
+    // (alpha *= saturate(1 - |mv_uv| * TAA_MOTION_VECTOR_DIFF_FACTOR); the
+    // library's 256 kills the history near 1 px/frame of flow). Measured
+    // across ENGINE_CAMERA_DOLLY speeds, lowering it neither helps nor hurts
+    // past the ~2 gray A/B noise floor, so the library value ships.
+    // ENGINE_TAA_MOTION_VECTOR_DIFF retunes it for experiments through the
+    // post-FX define channel (ENGINE_FX_SHADER_DEFINES).
+    if (getenv("ENGINE_FX_SHADER_DEFINES") == nullptr) {
+        if (const char* e = getenv("ENGINE_TAA_MOTION_VECTOR_DIFF")) {
+            char taaDefs[64];
+            snprintf(taaDefs, sizeof(taaDefs), "TAA_MOTION_VECTOR_DIFF_FACTOR=%.1f",
+                     (double)atof(e));
+            setenv("ENGINE_FX_SHADER_DEFINES", taaDefs, 1);
+        }
+    }
     mvDumpPath = getenv("ENGINE_MV_DUMP");
     if (const char* s = getenv("ENGINE_MV_DUMP_FRAME")) {
         mvDumpFrame = (u32)atoi(s);
@@ -1313,6 +1329,13 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
 
     // Jitter this frame's projection (TAA picks the Halton phase for the
     // CURRENT frame — PrepareResources above stamped the frame index).
+    // Velocity gate: the accumulator's trust is a function of per-pixel
+    // motion (TemporalAntiAliasing MotionFactor), so past a few pixels of
+    // camera flow per frame there is no history left to dither - the jitter
+    // then only shimmers every contrast edge. Measure this frame's image
+    // displacement in pixels at reference depth (translation / z + rotation)
+    // * focal, fade the jitter out over [0.25 * ENGINE_TAA_MOTION_PX,
+    // ENGINE_TAA_MOTION_PX], and render unjittered above it.
     static const float jitterScale = [] {
         if (const char* env = getenv("ENGINE_JITTER_SCALE")) {
             const float v = (float)atof(env);
@@ -1320,8 +1343,36 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
         }
         return 0.25f;
     }();
+    static const float motionZ = [] {
+        if (const char* env = getenv("ENGINE_TAA_MOTION_Z")) {
+            const float v = (float)atof(env);
+            return v < 1.0f ? 1.0f : v;
+        }
+        return 12.0f;
+    }();
+    static const float motionPx = [] {
+        if (const char* env = getenv("ENGINE_TAA_MOTION_PX")) {
+            const float v = (float)atof(env);
+            return v < 0.001f ? 0.001f : v;
+        }
+        return 2.0f;
+    }();
+    static const bool motionGateOff = getenv("ENGINE_TAA_MOTION_JITTER_OFF") != nullptr;
+    const float motionFocal = (float)targetHeight * 0.5f /
+                              std::tan(engine::renderer::kCameraFovYDeg * 0.5f * (float)M_PI / 180.0f);
+    lastMotionPx = (lastDEyeMag / motionZ + camRotRad) * motionFocal;
+    float motionJitterScale = 1.0f;
+    if (!motionGateOff) {
+        const float knee = motionPx * 0.25f;
+        motionJitterScale = std::min(1.0f, std::max(0.0f, (motionPx - lastMotionPx) / (motionPx - knee)));
+    }
+    if (!gateLogged && motionJitterScale == 0.0f) {
+        gateLogged = true;
+        utils::info("taa: motion-jitter gate closed at %.2f px/frame (%.2f m at %.1f m depth)",
+                    (double)lastMotionPx, (double)lastDEyeMag, (double)motionZ);
+    }
     float2 jitterOffset = taaOn ? taaJitterOffset(frameIdx, targetWidth, targetHeight) : float2{0.0f, 0.0f};
-    jitterOffset *= jitterScale;
+    jitterOffset *= jitterScale * motionJitterScale;
     currJitter = jitterOffset;
     if (getenv("ENGINE_JITTER_DUMP")) {
         utils::info("jit: frame %u (%+.6f, %+.6f) NDC", frameIdx, currJitter.x, currJitter.y);
@@ -1493,6 +1544,10 @@ f32 taaCameraRotationRad(void) {
 
 f32 taaPrevEyeDeltaMag(void) {
     return lastDEyeMag;
+}
+
+f32 taaCameraMotionPx(void) {
+    return lastMotionPx;
 }
 
 void taaCameraBasis(f32 fwd[3], f32 right[3], f32 up[3]) {
@@ -1904,7 +1959,11 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
 
         HLSL::TemporalAntiAliasingAttribs attribs{};
         attribs.TemporalStabilityFactor = taaWeight;
-        attribs.ResetAccumulation = 0;  // frame-index continuity handles resets
+        // Reset only through frame-index continuity (size/quality changes).
+        // A camera-velocity reset — the AO ghost fix's control law — measures
+        // WORSE here: at 8 and 14 cm/frame of dolly the reprojected history
+        // beats its own reset by 2-4 gray (the variance clamp handles ghosts).
+        attribs.ResetAccumulation = 0;
         attribs.SkipRejection = 0;
 
         TemporalAntiAliasing::RenderAttributes ra;

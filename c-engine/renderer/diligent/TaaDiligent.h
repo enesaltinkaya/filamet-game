@@ -82,6 +82,13 @@ f32 taaCameraRotationRad(void);
 // Last measured per-frame eye translation magnitude (metres).
 f32 taaPrevEyeDeltaMag(void);
 
+// Per-frame image displacement in pixels of a world point at the jitter
+// gate's reference depth: (eye translation / ENGINE_TAA_MOTION_Z + view
+// rotation) * focal. The gate fades the sub-pixel Halton offset out over
+// [0.25 * ENGINE_TAA_MOTION_PX, ENGINE_TAA_MOTION_PX]: 0 px/frame = full
+// jitter, >= ENGINE_TAA_MOTION_PX = unjittered frame.
+f32 taaCameraMotionPx(void);
+
 // This frame's camera world axes (unit vectors): forward, right =
 // fwd × up, up. For the stage dump's per-pixel camera-flow computation.
 void taaCameraBasis(f32 fwd[3], f32 right[3], f32 up[3]);

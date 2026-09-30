@@ -5,6 +5,7 @@
 #include "renderer/Renderer.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/SplatTerrainDiligent.h"
+#include "renderer/diligent/TaaDiligent.h"
 #include "ecs/system/player/Player.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
@@ -99,6 +100,25 @@ namespace engine::renderer::diligent {
             }
             return v;
         }();
+        const float transitionRegion = [] {
+            float v = 0.1f;
+            if (const char* padEnv = getenv("ENGINE_SHADOW_TRANSITION")) {
+                const float parsed = (float)atof(padEnv);
+                if (parsed > 0.0f && parsed <= 1.0f) v = parsed;
+            }
+            return v;
+        }();
+        const u32 cascadeOverride = [] {
+            if (const char* env = getenv("ENGINE_SHADOW_CASCADES")) {
+                const long v = strtol(env, nullptr, 10);
+                if (v >= 1 && v <= 4) return (u32)v;
+            }
+            return 0u;
+        }();
+        const bool focusBandOn = [] {
+            const char* env = getenv("ENGINE_SHADOW_FOCUS_BAND");
+            return !(env && env[0] == '0');
+        }();
         static const bool shadowTraceOn = getenv("ENGINE_SHADOW_TRACE") != nullptr;
         static const u64 shadowTraceStride = [] {
             if (const char* e = getenv("ENGINE_SHADOW_TRACE_STRIDE")) {
@@ -176,8 +196,8 @@ namespace engine::renderer::diligent {
                 if (!device || initFailed) return;
                 createSamplers();
                 if (initFailed) return;
-                const ShadowQualityTier& tier =
-                    kQualityTiers[quality < 0 ? 0 : (quality > 2 ? 2 : quality)];
+                ShadowQualityTier tier = kQualityTiers[quality < 0 ? 0 : (quality > 2 ? 2 : quality)];
+                if (cascadeOverride) tier.cascades = cascadeOverride;
                 if (!createShadowMap(mode, tier)) return;
                 passReady = true;
                 generation++;
@@ -192,8 +212,9 @@ namespace engine::renderer::diligent {
             }
             if (!passReady) return;
 
-            const int cq = curQuality < 0 ? 0 : (curQuality > 2 ? 2 : curQuality);
-            const ShadowQualityTier& tier = kQualityTiers[cq];
+            const int cq = curQuality < 0 ? 0 : (quality > 2 ? 2 : quality);
+            ShadowQualityTier tier = kQualityTiers[cq];
+            if (cascadeOverride) tier.cascades = cascadeOverride;
 
             memset(&lightAttribs, 0, sizeof(lightAttribs));
             const f32* sunDir = diligentSunDirection();
@@ -206,7 +227,7 @@ namespace engine::renderer::diligent {
             sa.fNumCascades                 = (float)tier.cascades;
             sa.iFixedFilterSize             = tier.pcfFilterSize;
             sa.fFilterWorldSize             = 0.0f;
-            sa.fCascadeTransitionRegion     = 0.1f;
+            sa.fCascadeTransitionRegion     = transitionRegion;
             sa.fReceiverPlaneDepthBiasClamp = 16.0f;
             sa.iMaxAnisotropy               = 4;
             sa.fVSMBias                     = 1e-4f;
@@ -249,6 +270,7 @@ namespace engine::renderer::diligent {
             if (hasPlayer) diligentWorldAnchor(an);
             float focusBand = 0.0f;
             float focusCamZDebug = 0.0f;
+            float ringDebug[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
             float focusBoxDebug = 0.0f;
             double pposTrace[3] = {ppos[0], ppos[1], ppos[2]};
             double anTrace[3] = {an[0], an[1], an[2]};
@@ -266,7 +288,7 @@ namespace engine::renderer::diligent {
                 const float rz = (f32)(ppos[2] - an[2]);
                 const float focusCamZ = view._13 * rx + view._23 * ry + view._33 * rz;
                 focusCamZDebug = focusCamZ;
-                if (focusCamZ <= tier.distanceM) {
+                if (focusBandOn && focusCamZ <= tier.distanceM) {
                     focusBand = focusCamZ + focusMargin;
                     if (focusBand > tier.distanceM * 0.8f) focusBand = tier.distanceM * 0.8f;
                     if (focusBand < 0.0f) focusBand = 0.0f;
@@ -383,17 +405,24 @@ namespace engine::renderer::diligent {
                 }
                 return v;
             }();
-            if (hasPlayer && !focusBoxOff && focusCamZDebug > 0.0f &&
+            float focusHalf = focusHalfEnv;
+            if (focusHalf <= 0.0f) {
+                const float up   = dir.y < 0.0f ? -dir.y : 0.0f;
+                const float elev = asinf(up < 1.0f ? up : 1.0f);
+                const float tanE = tanf(elev < 0.1745f ? 0.1745f : elev);
+                focusHalf = 2.0f / tanE + focusMargin;
+            }
+            if (focusHalf < 6.0f) focusHalf = 6.0f;
+            if (focusHalf > 32.0f) focusHalf = 32.0f;
+            static const bool ringsOn = [] {
+                const char* env = getenv("ENGINE_SHADOW_RINGS");
+                return !(env && env[0] == '0');
+            }();
+            const bool ringsActive = ringsOn && curMode == 1 && hasPlayer &&
+                                     focusCamZDebug > 0.0f && focusCamZDebug <= tier.distanceM;
+            if (hasPlayer && !focusBoxOff && !ringsActive && focusCamZDebug > 0.0f &&
                 focusCamZDebug <= sa.fCascadeCamSpaceZEnd[0]) {
-                float half = focusHalfEnv;
-                if (half <= 0.0f) {
-                    const float up   = dir.y < 0.0f ? -dir.y : 0.0f;
-                    const float elev = asinf(up < 1.0f ? up : 1.0f);
-                    const float tanE = tanf(elev < 0.1745f ? 0.1745f : elev);
-                    half = 2.0f / tanE + focusMargin;
-                }
-                if (half < 6.0f) half = 6.0f;
-                if (half > 32.0f) half = 32.0f;
+                const float half  = focusHalf;
                 const float texel = 2.0f * half / (f32)sa.f4ShadowMapDim.x;
                 const double prx = ppos[0] - an[0];
                 const double pry = ppos[1] - an[1];
@@ -421,6 +450,71 @@ namespace engine::renderer::diligent {
                 m._32 = sx * w2l._23;
                 m._42 = by;
                 focusBoxDebug = half;
+            }
+
+            // Player-anchored cascade rings (PCF): every cascade becomes a cube
+            // centered on the PLAYER's snapped light-space position, radii on a
+            // ladder from the focus radius out to the tier distance, view-Z gate =
+            // player view-Z + radius. The stock distribution derives each cascade
+            // box from the camera frustum (StabilizeExtents bounding sphere), so
+            // box center and radius grow with the camera-to-player distance: a
+            // world-fixed caster's texel footprint, atlas alignment and cascade
+            // assignment all shift as the camera dollies — measured on the parked
+            // building: its shadow field swings ~24 gray over a 10 m dolly (~13
+            // gray/m) with cascade-boundary crossings of ~44x resolution. Anchored
+            // to the player, cascade assignment and texel scale are functions of
+            // player-relative geometry only, so camera motion changes nothing in
+            // the shadow field and the on-screen cascade content changes only with
+            // the view.
+            if (ringsActive) {
+                const Diligent::float4x4& w2l = sa.mWorldToLightView;
+                const double prx              = ppos[0] - an[0];
+                const double pry              = ppos[1] - an[1];
+                const double prz              = ppos[2] - an[2];
+                const double plx              = prx * (double)w2l._11 + pry * (double)w2l._12 + prz * (double)w2l._13 + (double)w2l._14;
+                const double ply              = prx * (double)w2l._21 + pry * (double)w2l._22 + prz * (double)w2l._23 + (double)w2l._24;
+                const double plz              = prx * (double)w2l._31 + pry * (double)w2l._32 + prz * (double)w2l._33 + (double)w2l._34;
+                const int n                   = sa.iNumCascades;
+                float prevRadius              = 0.0f;
+                for (int c = 0; c < n; c++) {
+                    const float power  = n > 1 ? (float)c / (float)(n - 1) : 1.0f;
+                    const float radius = focusHalf * powf(tier.distanceM / focusHalf, power);
+                    const float texel  = 2.0f * radius / (f32)sa.f4ShadowMapDim.x;
+                    const float clx    = (float)(std::round(plx / (double)texel) * (double)texel);
+                    const float cly    = (float)(std::round(ply / (double)texel) * (double)texel);
+                    const float s      = 1.0f / radius;
+                    const float sz     = 0.5f / radius;
+                    const float bx     = (float)(-clx * (double)s);
+                    const float by     = (float)(-cly * (double)s);
+                    const float bz     = 0.5f - (float)(plz * (double)sz);
+                    const float zStart = c == 0 ? engine::renderer::kCameraNear : focusCamZDebug + prevRadius;
+                    const float zEnd   = focusCamZDebug + radius;
+                    auto& ca           = sa.Cascades[c];
+                    ca.f4LightSpaceScale      = {s, s, sz, 0.0f};
+                    ca.f4LightSpaceScaledBias = {bx, by, bz, 0.0f};
+                    ca.f4StartEndZ            = {zStart, zEnd, 0.0f, 0.0f};
+                    ca.f4MarginProjSpace      = {0.0f, 0.0f, 0.0f, 0.0f};
+                    sa.fCascadeCamSpaceZEnd[c] = zEnd;
+                    ringDebug[c]             = radius;
+                    Diligent::float4x4& m    = casterW2LP[c];
+                    m._11 = s * w2l._11;
+                    m._21 = s * w2l._12;
+                    m._31 = s * w2l._13;
+                    m._41 = bx;
+                    m._12 = s * w2l._21;
+                    m._22 = s * w2l._22;
+                    m._32 = s * w2l._23;
+                    m._42 = by;
+                    m._13 = sz * w2l._31;
+                    m._23 = sz * w2l._32;
+                    m._33 = sz * w2l._33;
+                    m._43 = bz;
+                    m._14 = 0.0f;
+                    m._24 = 0.0f;
+                    m._34 = 0.0f;
+                    m._44 = 1.0f;
+                    prevRadius = radius;
+                }
             }
 
             // ENGINE_SHADOW_ORACLE=frameN: one-shot CPU check that the caster
@@ -691,10 +785,16 @@ namespace engine::renderer::diligent {
                 const double ply = prx * (double)view._12 + pry * (double)view._22 + prz * (double)view._32;
                 const double pndcX = plx * (double)sa.Cascades[0].f4LightSpaceScale.x + (double)sa.Cascades[0].f4LightSpaceScaledBias.x;
                 const double pndcY = ply * (double)sa.Cascades[0].f4LightSpaceScale.y + (double)sa.Cascades[0].f4LightSpaceScaledBias.y;
-                char line[768];
+                const double pvz = prx * (double)view._13 + pry * (double)view._23 + prz * (double)view._33;
+                const double pd  = pvz < 0.0 ? -pvz : pvz;
+                const double pscreenX =
+                    pd > 1e-4 ? 0.5 + 0.5 * (plx * (double)proj._11 / pd) : 0.5;
+                const double pscreenY =
+                    pd > 1e-4 ? 0.5 - 0.5 * (ply * (double)proj._22 / pd) : 0.5;
+                char line[900];
                 int off = snprintf(line,
                                    sizeof(line),
-                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f fbox %.1f pbr %d camZ %.2f",
+                                   "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f fbox %.1f pbr %d camZ %.2f ring %.1f mpx %.1f",
                                    (unsigned long long)shadowTraceFrame,
                                    passReady ? 1 : 0,
                                    curMode,
@@ -702,11 +802,13 @@ namespace engine::renderer::diligent {
                                    (double)focusBand,
                                    (double)focusBoxDebug,
                                    pbrSlice,
-                                   (double)camZ);
+                                   (double)camZ,
+                                   (double)focusHalf,
+                                   (double)taaCameraMotionPx());
                 for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
                     off += snprintf(line + off,
                                     sizeof(line) - off,
-                                    " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f s.xy %.5f %.5f cxy %.5f %.5f",
+                                    " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f s.xy %.5f %.5f cxy %.5f %.5f R %.1f",
                                     c,
                                     (double)sa.Cascades[c].f4LightSpaceScale.z,
                                     (double)sa.Cascades[c].f4LightSpaceScaledBias.z,
@@ -716,11 +818,12 @@ namespace engine::renderer::diligent {
                                     (double)sa.Cascades[c].f4LightSpaceScale.x,
                                     (double)sa.Cascades[c].f4LightSpaceScale.y,
                                     (double)casterW2LP[c]._41,
-                                    (double)casterW2LP[c]._42);
+                                    (double)casterW2LP[c]._42,
+                                    (double)ringDebug[c]);
                     if (c == 0)
                         off += snprintf(line + off, sizeof(line) - off,
                                         " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f"
-                                        " scx %.5f scy %.5f tx %.5f ty %.5f c0x %.4f c0y %.4f pndc %.4f %.4f",
+                                        " scx %.5f scy %.5f tx %.5f ty %.5f c0x %.4f c0y %.4f pndc %.4f %.4f px %.3f py %.3f",
                                         (double)focusCamZDebug,
                                         (double)view._13, (double)view._23, (double)view._33,
                                         pposTrace[0], pposTrace[1], pposTrace[2],
@@ -732,7 +835,9 @@ namespace engine::renderer::diligent {
                                         (double)casterW2LP[0]._41,
                                         (double)casterW2LP[0]._42,
                                         pndcX,
-                                        pndcY);
+                                        pndcY,
+                                        pscreenX,
+                                        pscreenY);
                 }
                 utils::info("%s", line);
             }
