@@ -28,9 +28,10 @@ namespace engine {
 // mesh bodies (the pre-baked Jolt sidecar the physics system restores on
 // world load — see PhysicsSystem terrain sidecar); prop collision lands
 // with the props pass.
-// The character position is the FEET position (the shape is offset up by
-// half its height inside the wrapper); the model is placed there and the
-// orbit camera targets the capsule centre (feet + 0.70 m).
+// The character position is the FEET position (the wrapper converts to
+// Jolt's centre-of-mass position — the capsule centre, feet + 0.70 m — at
+// its API boundary); the model is placed there and the orbit camera targets
+// the capsule centre (feet + 0.70 m).
 class PlayerSystem final : public System {
 public:
     PlayerSystem();
