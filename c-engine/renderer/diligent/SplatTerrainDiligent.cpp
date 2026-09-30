@@ -545,38 +545,59 @@ static SplatTerrainParse splatTerrainParse(const char* pakPath) {
             }
         }
         bool badIndex = false;
-        for (size_t i = 0; i < idx.count; i++) {
-            const u8* s = idx.data + i * idx.stride;
-            if (idx.componentType == CT_U16) {
-                rc.indices[i] = (u16)rdI16(s);
-            } else if (idx.componentType == CT_F32) {
-                const f32 f = rdF32(s);
-                if (f < 0.5f || f > 65535.5f || std::truncf(f) != f) {
-                    utils::warn("splatTerrain: node %zu — f32 index %g out of u16 range", ni,
-                            (double)f);
+        std::vector<u16> validIdx;
+        validIdx.reserve(idx.count);
+        size_t droppedTris = 0;
+        for (size_t i = 0; i + 2 < idx.count; i += 3) {
+            u16 tri[3] = {0, 0, 0};
+            bool triOk = true;
+            for (int j = 0; j < 3; j++) {
+                const u8* s = idx.data + (i + (size_t)j) * idx.stride;
+                if (idx.componentType == CT_U16) {
+                    tri[j] = (u16)rdI16(s);
+                } else if (idx.componentType == CT_F32) {
+                    const f32 f = rdF32(s);
+                    if (f < 0.5f || f > 65535.5f || std::truncf(f) != f) {
+                        utils::warn("splatTerrain: node %zu — f32 index %g out of u16 range", ni,
+                                    (double)f);
+                        badIndex = true;
+                        break;
+                    }
+                    tri[j] = (u16)f;
+                } else if (idx.componentType == CT_I32) {
+                    i32 s32;
+                    std::memcpy(&s32, s, 4);
+                    if (s32 < 0 || s32 > 65535) {
+                        utils::warn("splatTerrain: node %zu — i32 index %d out of u16 range", ni, s32);
+                        badIndex = true;
+                        break;
+                    }
+                    tri[j] = (u16)s32;
+                } else {
+                    utils::warn("splatTerrain: node %zu — unsupported index componentType %d", ni,
+                                idx.componentType);
                     badIndex = true;
                     break;
                 }
-                rc.indices[i] = (u16)f;
-            } else if (idx.componentType == CT_I32) {
-                i32 s32;
-                std::memcpy(&s32, s, 4);
-                if (s32 < 0 || s32 > 65535) {
-                    utils::warn("splatTerrain: node %zu — i32 index %d out of u16 range", ni, s32);
-                    badIndex = true;
-                    break;
-                }
-                rc.indices[i] = (u16)s32;
-            } else {
-                utils::warn("splatTerrain: node %zu — unsupported index componentType %d", ni,
-                        idx.componentType);
-                badIndex = true;
-                break;
+                if (tri[j] >= pos.count) triOk = false;
             }
+            if (badIndex) break;
+            if (!triOk) {
+                droppedTris++;
+                continue;
+            }
+            validIdx.push_back(tri[0]);
+            validIdx.push_back(tri[1]);
+            validIdx.push_back(tri[2]);
         }
         if (badIndex) {
             continue;
         }
+        if (droppedTris) {
+            utils::warn("splatTerrain: node %zu — dropped %zu triangles with out-of-range indices",
+                        ni, droppedTris);
+        }
+        rc.indices = std::move(validIdx);
         raw.push_back(std::move(rc));
         totalVerts += raw.back().verts.size();
         totalTris += raw.back().indices.size() / 3;
@@ -2195,7 +2216,10 @@ void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
     ctx->SetPipelineState(splatShadowCasterPipeline);
     ctx->CommitShaderResources(splatShadowCasterSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     size_t drawn = 0;
-    for (const SplatChunk& ch : t->chunks) {
+    int drawnIds[64] = {};
+    size_t drawnCount = 0;
+    for (size_t ci = 0; ci < t->chunks.size(); ++ci) {
+        const SplatChunk& ch = t->chunks[ci];
         if (!casterNoCull && !splatShadowCasterChunkVisible(lightViewProjRowMajor,
                 ch.aabbMin, ch.aabbMax, anchor, ndcMinZ, margin)) {
             continue;
@@ -2207,6 +2231,7 @@ void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
         ctx->DrawIndexed(DrawIndexedAttribs{
                 (Uint32)ch.indexCount, VT_UINT16, DRAW_FLAG_NONE, 1, 0, 0, 0});
         drawn++;
+        if (drawnCount < 64) drawnIds[drawnCount++] = (int)ci;
     }
     splatShadowCasterFrameNo++;
     {
@@ -2218,15 +2243,26 @@ void splatTerrainShadowDrawDiligent(Diligent::IDeviceContext* ctx,
             }
             return 50ul;
         }();
+        static const bool idsOn = getenv("ENGINE_SHADOW_CASTER_IDS") != nullptr;
         if (traceOn) {
             const u64 f = shadowDiligentTraceFrame();
-            if (f == 1 || (f >= traceStride && f <= 1000u && f % traceStride == 0))
+            if (f == 1 || (f >= traceStride && f <= 1000u && f % traceStride == 0)) {
                 utils::info(
                     "shadow trace: f%llu caster cascade %d — %zu/%zu chunks drawn",
                     (unsigned long long)f,
                     cascadeIndex,
                     drawn,
                     t->chunks.size());
+                if (idsOn) {
+                    char ids[256] = {};
+                    int off = snprintf(ids, sizeof(ids), "shadow trace: f%llu caster cascade %d ids:",
+                                        (unsigned long long)f, cascadeIndex);
+                    for (size_t i = 0; i < drawnCount && off < (int)sizeof(ids) - 8; ++i) {
+                        off += snprintf(ids + off, sizeof(ids) - off, " %d", drawnIds[i]);
+                    }
+                    utils::info("%s", ids);
+                }
+            }
         }
     }
     if (getenv("ENGINE_SHADOW_CASTER_PROBE") || splatShadowCasterFrameNo == 1 || splatShadowCasterFrameNo % 300 == 0) {
