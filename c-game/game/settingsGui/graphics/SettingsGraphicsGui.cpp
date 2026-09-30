@@ -23,6 +23,7 @@ static void* model    = nullptr;
 // renderer::GraphicsSettings at startup; keep the two mappings in sync.
 static char  taaEnabled            = 0;
 static float taaWeightPercent      = 90.0f;  // TAA temporal blend weight, % (50..95)
+static float taaGhostPercent       = 50.0f;  // TAA anti-ghost strength, % (0..100)
 static float casStrengthPercent    = 100.0f; // RCAS sharpening, % (0..150; 100 = AMD max)
 static float renderScalePercent    = 100.0f;  // render resolution scale, % (50..200)
 static int   shadowsMode           = 1;       // PCF (UI is on/off: 0=off, 1=PCF; VSM/EVSM stay implemented, hidden)
@@ -68,6 +69,7 @@ static char taaLabelText[16];
 static void syncLabels(void);
 static int renderScaleChange(void* _);
 static int taaWeightChange(void* _);
+static int taaGhostChange(void* _);
 static int casStrengthChange(void* _);
 static int ssaoRadiusChange(void* _);
 static int ssaoIntensityChange(void* _);
@@ -95,6 +97,7 @@ static void applyRenderer(void) {
     auto g          = engine::renderer::rendererGraphicsSettings();
     g.taa           = taaEnabled != 0;
     g.taaWeight     = taaWeightPercent / 100.0f;
+    g.taaGhost      = taaGhostPercent / 100.0f;
     g.casStrength   = casStrengthPercent / 100.0f;
     g.renderScale   = renderScalePercent / 100.0f;
     g.shadowMode    = shadowsMode;
@@ -156,6 +159,7 @@ static void applySliderChanges(void) {
     applyRenderer();
     persistDouble("renderScale", renderScalePercent / 100.0);
     persistDouble("taaWeight", taaWeightPercent / 100.0);
+    persistDouble("taaGhost", taaGhostPercent / 100.0);
     persistDouble("casStrength", casStrengthPercent / 100.0);
     persistDouble("ssaoRadius", ssaoRadius);
     persistDouble("ssaoIntensity", ssaoIntensity);
@@ -173,7 +177,7 @@ static char autotestWireClose = 0;
 void SettingsGraphicsGui::added() {
     engine::luaRegisterFunction("renderScaleChange", renderScaleChange);
     engine::luaRegisterFunction("taaWeightChange", taaWeightChange);
-    engine::luaRegisterFunction("casStrengthChange", casStrengthChange);
+    engine::luaRegisterFunction("taaGhostChange", taaGhostChange);
     engine::luaRegisterFunction("graphicsClose", graphicsClose);
     engine::luaRegisterFunction("toggleShadows", toggleShadows);
     engine::luaRegisterFunction("toggleShadowsPrev", toggleShadowsPrev);
@@ -195,6 +199,7 @@ void SettingsGraphicsGui::added() {
     // GUI write the same keys.
     taaEnabled           = (char)utils::settingsGetBool("taaEnabled");
     taaWeightPercent     = (float)(utils::settingsGetDouble("taaWeight") * 100.0);
+    taaGhostPercent      = (float)(utils::settingsGetDouble("taaGhost") * 100.0);
     casStrengthPercent   = (float)(utils::settingsGetDouble("casStrength") * 100.0);
     renderScalePercent   = (float)(utils::settingsGetDouble("renderScale") * 100.0);
     shadowsMode          = utils::settingsGetInt("shadowMode");
@@ -219,6 +224,7 @@ void SettingsGraphicsGui::added() {
     model = rmlCreateModel("graphics");
     rmlBindFloat(model, "renderScalePercent", &renderScalePercent);
     rmlBindFloat(model, "taaWeightPercent", &taaWeightPercent);
+    rmlBindFloat(model, "taaGhostPercent", &taaGhostPercent);
     rmlBindFloat(model, "casStrengthPercent", &casStrengthPercent);
     rmlBindFloat(model, "ssaoRadius", &ssaoRadius);
     rmlBindFloat(model, "ssaoIntensity", &ssaoIntensity);
@@ -259,6 +265,7 @@ void SettingsGraphicsGui::added() {
             while (ssrEnabled) toggleSsr(nullptr);
             renderScalePercent  = 130.0f;
             taaWeightPercent    = 85.0f;
+            taaGhostPercent     = 60.0f;
             casStrengthPercent  = 75.0f;
             dirtyScale = dirtyAA = 1;
             lastChange        = 0.0;  // settle on the first update()
@@ -444,6 +451,11 @@ int renderScaleChange(void* _) {
 }
 
 int taaWeightChange(void* _) {
+    markSliderDirty(&dirtyAA);
+    return 0;
+}
+
+int taaGhostChange(void* _) {
     markSliderDirty(&dirtyAA);
     return 0;
 }

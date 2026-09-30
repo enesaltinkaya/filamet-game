@@ -76,6 +76,7 @@ static u32 targetHeight = 0;
 
 static bool taaOn = false;
 static float taaWeight = 0.9f; // settings.taaWeight → TemporalStabilityFactor
+static float taaGhost = 0.0f; // settings.taaGhost -> velocity knee / clamp box / depth rejection
 static float lastMotionPx = 0.0f;
 static bool gateLogged = false;
 
@@ -1206,10 +1207,20 @@ void taaDestroy(void) {
     postFXContext.reset();
 }
 
-void taaSettingsApply(bool enabled, float stabilityFactor, float cas, float scale) {
+static float envFloat(const char* name, float fallback, float lo, float hi) {
+    const char* e = getenv(name);
+    if (e == nullptr) {
+        return fallback;
+    }
+    const float v = (float)atof(e);
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+void taaSettingsApply(bool enabled, float stabilityFactor, float cas, float scale, float ghost) {
     taaOn = enabled;
     taaWeight = stabilityFactor;
     casStrength = cas;
+    taaGhost = envFloat("ENGINE_TAA_GHOST", ghost, 0.0f, 1.0f);
     // Offscreen chain size changes on the next frame (the targetWidth/Height
     // comparison in taaFrameBegin recreates the targets); TAA history drops
     // with them and the frame-index continuity check resets the accumulator.
@@ -2019,6 +2030,13 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
 
         HLSL::TemporalAntiAliasingAttribs attribs{};
         attribs.TemporalStabilityFactor = taaWeight;
+        const float kneeEnd  = taaGhost > 0.0f ? envFloat("ENGINE_TAA_VELOCITY_KNEE", 102.0f - 98.0f * taaGhost, 0.0f, 512.0f) : 0.0f;
+        const float gammaMax = taaGhost > 0.0f ? envFloat("ENGINE_TAA_GAMMA_MAX", 2.5f - 1.5f * taaGhost, 0.0f, 8.0f) : 0.0f;
+        const float depthThr = taaGhost > 0.0f ? envFloat("ENGINE_TAA_DEPTH_THRESHOLD", 0.9f + 0.07f * taaGhost, 0.0f, 0.999f) : 0.0f;
+        attribs.VelocityKneeStartPx = kneeEnd > 0.0f ? envFloat("ENGINE_TAA_VELOCITY_KNEE_START", kneeEnd * 0.25f, 0.0f, 512.0f) : 0.0f;
+        attribs.VelocityKneeEndPx = kneeEnd;
+        attribs.VarianceGammaMax = gammaMax;
+        attribs.DepthRejectionThreshold = depthThr;
         // Reset only through frame-index continuity (size/quality changes).
         // A camera-velocity reset — the AO ghost fix's control law — measures
         // WORSE here: at 8 and 14 cm/frame of dolly the reprojected history

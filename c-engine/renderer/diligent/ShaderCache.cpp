@@ -170,6 +170,11 @@ Diligent::IShader* shaderCacheCreate(Diligent::IRenderDevice* dev,
     // player's shadow at 2.014 gray, with the cache off 13.762).
     const u64 tree = includeTreeFingerprint();
     hash = fnv1a(&tree, sizeof(tree), hash);
+    // The engine's GetPSMainSource hands the FX a generated PS output struct +
+    // footer (a memory-include, not a file), so no hashed input changes when it
+    // is edited. Bump this whenever those generated strings change.
+    static const u64 generatedSourceRevision = 0x51A70001ULL;
+    hash = fnv1a(&generatedSourceRevision, sizeof(generatedSourceRevision), hash);
     static const bool keyTrace = getenv("ENGINE_SHADER_CACHE_TRACE") != nullptr;
     if (keyTrace)
         utils::info("shaderCache: key %s tree=%llu keyBytes=%zu src=%d", name,

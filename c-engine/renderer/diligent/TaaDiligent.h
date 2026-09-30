@@ -43,11 +43,18 @@ void taaDestroy(void);
 // it on the first real frame).
 void taaWarmup(void);
 
-// applyGraphicsSettings mapping: taaEnabled/taaWeight/renderScale from the
+// applyGraphicsSettings mapping: taaEnabled/taaWeight/taaGhost/renderScale from the
 // graphics settings. Safe to call any time (also mid-run from the settings
 // page). renderScale sizes the offscreen world chain (the post-world blit
 // upsamples it to the backbuffer); UI passes stay at full resolution.
-void taaSettingsApply(bool enabled, float stabilityFactor, float casStrength, float renderScale);
+// ghost 0..1 shapes the history weight against per-pixel velocity: the knee
+// where the weight dies out moves from 102 px/frame (0) to 4 px/frame (1), the
+// neighborhood clamp box from 2.5x stddev (0) to 1.0x (1), and the depth
+// disocclusion threshold from 0.9 (0) to 0.97 (1). ENGINE_TAA_VELOCITY_KNEE,
+// ENGINE_TAA_VELOCITY_KNEE_START, ENGINE_TAA_GAMMA_MAX and
+// ENGINE_TAA_DEPTH_THRESHOLD override each term directly (px/frame / x stddev /
+// relative-depth weight).
+void taaSettingsApply(bool enabled, float stabilityFactor, float casStrength, float renderScale, float ghost);
 
 bool taaEnabled(void);
 

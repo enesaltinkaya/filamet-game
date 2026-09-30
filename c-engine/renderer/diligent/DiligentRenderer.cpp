@@ -867,11 +867,11 @@ namespace engine::renderer::diligent {
             (void)density;
         }
 
-        // The graphics settings page's AA section: TAA enable + history weight.
-        // Other settings have no diligent equivalent yet (RenderBackend default
-        // no-op documents the contract).
+        // The graphics settings page's AA section: TAA enable + history weight
+        // + anti-ghost. Other settings have no diligent equivalent yet
+        // (RenderBackend default no-op documents the contract).
         void applyGraphicsSettings(const GraphicsSettings& s) override {
-            taaSettingsApply(s.taa, s.taaWeight, s.casStrength, s.renderScale);
+            taaSettingsApply(s.taa, s.taaWeight, s.casStrength, s.renderScale, s.taaGhost);
             ssaoSettingsApply(s.ssao, s.ssaoRadius, s.ssaoAlgorithm, s.ssaoIntensity);
             ssrSettingsApply(s.ssr, s.ssrStrength);
             bloomSettingsApply(s.bloom);

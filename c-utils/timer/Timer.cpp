@@ -1,6 +1,7 @@
 #include "Timer.h"
 #include "Utils.h"
 #include "logger/Logger.h"
+#include <cstdlib>
 
 #define UPS 60.
 
@@ -47,6 +48,24 @@ void timerBegin(void) {
 }
 
 void timerUpdate(FnVoid update) {
+    static const int pinnedTicks = [] {
+        const char* e = getenv("ENGINE_TICKS_PER_FRAME");
+        return e ? atoi(e) : 0;
+    }();
+    if (pinnedTicks > 0) {
+        // Deterministic pose lattice for temporal A/B runs: the dump/stage-capture
+        // path runs ~6 fps, so the wall-clock accumulator hands every frame 10+
+        // ticks — per-frame motion (and every velocity-driven law keyed on it,
+        // TAA included) scales with fps. N ticks per frame + a cleared
+        // accumulator makes a frame advance exactly N * (1/UPS) of simulation,
+        // the same lattice in every run at any fps.
+        for (int i = 0; i < pinnedTicks; i++) {
+            update();
+        }
+        timer.accumulator = 0.0;
+        timer.alpha = 1.0;
+        return;
+    }
     while (timer.accumulator >= timer.dtNanos) {
         update();
         timer.accumulator -= timer.dtNanos;

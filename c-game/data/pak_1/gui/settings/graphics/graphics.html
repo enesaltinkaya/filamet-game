@@ -40,6 +40,17 @@
                 </button>
 
                 <button class="option">
+                    <div class="label">TAA — Anti-ghost ({{format(taaGhostPercent,0)}}%)</div>
+                    <div class="widget">
+                        <div class="slider">
+                            <p class="leftarrow" onmousedown="sliderArrowStep(event)">&#xe806;</p>
+                            <p class="rightarrow" onmousedown="sliderArrowStep(event)">&#xe808;</p>
+                            <input type="range" min="0" max="100" step="5" data-value="taaGhostPercent" style="tab-index:none;" onchange="taaGhostChange()" />
+                        </div>
+                    </div>
+                </button>
+
+                <button class="option">
                     <div class="label">Sharpening — RCAS ({{format(casStrengthPercent,0)}}%)</div>
                     <div class="widget">
                         <div class="slider">

@@ -240,6 +240,8 @@ static GraphicsSettings graphicsNormalize(GraphicsSettings s) {
     s.renderScale  = (float)((int)(s.renderScale * 20.0f + 0.5f)) / 20.0f;
     if (s.taaWeight < 0.5f) s.taaWeight = 0.5f;
     if (s.taaWeight > 0.95f) s.taaWeight = 0.95f;
+    if (s.taaGhost < 0.0f) s.taaGhost = 0.0f;
+    if (s.taaGhost > 1.0f) s.taaGhost = 1.0f;
     if (s.casStrength < 0.0f) s.casStrength = 0.0f;
     if (s.casStrength > 1.5f) s.casStrength = 1.5f;
     if (s.shadowMode < 0) s.shadowMode = 0;
@@ -275,6 +277,7 @@ void rendererGraphicsLoad(void) {
     s.renderScale   = (float)utils::settingsGetDouble("renderScale");
     s.taa           = utils::settingsGetBool("taaEnabled");
     s.taaWeight     = (float)utils::settingsGetDouble("taaWeight");
+    s.taaGhost      = (float)utils::settingsGetDouble("taaGhost");
     s.casStrength   = (float)utils::settingsGetDouble("casStrength");
     s.msaa          = utils::settingsGetBool("msaaEnabled");
     s.shadowMode    = utils::settingsGetInt("shadowMode");

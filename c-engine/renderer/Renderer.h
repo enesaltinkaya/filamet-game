@@ -12,6 +12,7 @@ struct GraphicsSettings {
     float renderScale = 1.0f;      // render resolution scale 0.5..2 (5% steps, old-engine snapping)
     bool taa = true;
     float taaWeight = 0.9f;        // 0.5..0.95 history weight; higher = calmer but ghostier (old-engine taaWeight)
+    float taaGhost = 0.5f;         // 0..1 TAA anti-ghost: history-weight velocity knee + clamp box + depth rejection (old-engine taaGhost)
     float casStrength = 1.0f;      // 0..1.5 RCAS (Contrast Adaptive Sharpening) strength; 0 = off, 1.0 = AMD reference max, >1.0 amplified (old-engine casStrength)
     bool msaa = false;
     int shadowMode = 3;            // 0 off, 1 PCF, 2 VSM, 3 EVSM2, 4 EVSM4 (settings UI: on/off, On = EVSM2)

@@ -628,12 +628,17 @@ bool gltfInitDiligent(void) {
     // SV_Target1; override it to emit the pixel-shader-computed MotionVector
     // instead (the value RenderPBR.psh computes for the debug view). The
     // output struct mirrors PBR_Renderer::GetPSOutputStruct (protected).
+    // NOTE: SV_Target1 must be written by EVERY PBR pipeline. GLTF_PBR_Renderer
+    // builds its PSO flags as (vertexAttribs | materialFlags | fixedList) &
+    // RenderInfo.Flags, and ENABLE_CUSTOM_DATA_OUTPUT is not in that fixed list,
+    // so the intersection drops it and the flag never reaches this callback.
+    // Gating the motion output on it left the whole glTF world pass (terrain,
+    // props, character) writing nothing to the motion target: TAA reprojected
+    // zero velocity everywhere and the running character ghosted.
     rendererCI.GetPSMainSource = [](PBR_Renderer::PSO_FLAGS flags) {
         GLTF_PBR_Renderer::CreateInfo::PSMainSourceInfo src;
-        src.OutputStruct = "struct PSOutput\n{\n    float4 Color      : SV_Target0;\n";
-        if ((flags & PBR_Renderer::PSO_FLAG_ENABLE_CUSTOM_DATA_OUTPUT) != 0) {
-            src.OutputStruct += "    float4 CustomData : SV_Target1;\n";
-        }
+        src.OutputStruct = "struct PSOutput\n{\n    float4 Color      : SV_Target0;\n"
+                           "    float4 CustomData : SV_Target1;\n";
         if ((flags & PBR_Renderer::PSO_FLAG_COMPUTE_MOTION_VECTORS) != 0) {
             src.OutputStruct += "    float4 WorldNormal : SV_Target2;\n";
         }
@@ -645,11 +650,9 @@ bool gltfInitDiligent(void) {
 #else
     PSOut.Color = OutColor;
 #endif
-#if ENABLE_CUSTOM_DATA_OUTPUT
     {
         PSOut.CustomData = float4(MotionVector, 0.0, 0.0);
     }
-#endif
 #if COMPUTE_MOTION_VECTORS
 #if UNSHADED
     PSOut.WorldNormal =
