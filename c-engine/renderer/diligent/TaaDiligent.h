@@ -51,6 +51,11 @@ void taaSettingsApply(bool enabled, float stabilityFactor, float casStrength, fl
 
 bool taaEnabled(void);
 
+// The running frame index (the same counter the jitter phase and the stage
+// dump use) — other passes gate their per-frame dumps on it so dumps from
+// different passes share frame numbers.
+u32 taaFrameIndex(void);
+
 // Window resize: drop the offscreen targets (recreated next frame) and let
 // the TAA's frame-index continuity check reset the history automatically.
 void taaOnResized(void);
@@ -89,8 +94,9 @@ f32 taaPrevEyeDeltaMag(void);
 // jitter, >= ENGINE_TAA_MOTION_PX = unjittered frame.
 f32 taaCameraMotionPx(void);
 
-// This frame's camera world axes (unit vectors): forward, right =
-// fwd × up, up. For the stage dump's per-pixel camera-flow computation.
+// This frame's camera world axes (unit vectors, the view matrix's columns):
+// forward = col 3, right = col 1, up = fwd x right. For the stage dump's
+// per-pixel camera-flow computation.
 void taaCameraBasis(f32 fwd[3], f32 right[3], f32 up[3]);
 
 // The PREVIOUS frame's camera attribs (raw row-major storage — consumers

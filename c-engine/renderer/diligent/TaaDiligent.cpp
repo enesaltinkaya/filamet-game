@@ -1223,6 +1223,10 @@ bool taaEnabled(void) {
     return taaOn;
 }
 
+u32 taaFrameIndex(void) {
+    return frameIdx;
+}
+
 void taaOnResized(void) {
     destroyTargets();
 }
@@ -1503,13 +1507,13 @@ void taaFrameBegin(IDeviceContext* ctx, const float4x4& view, float4x4& proj) {
             havePrevFwd = true;
         }
         {
-            const float3 up{view._31, view._32, view._33};
-            const float3 right{fwd.y * up.z - fwd.z * up.y,
-                               fwd.z * up.x - fwd.x * up.z,
-                               fwd.x * up.y - fwd.y * up.x};
-            camBasis[0][0] = fwd.x;   camBasis[1][0] = right.x; camBasis[2][0] = up.x;
-            camBasis[0][1] = fwd.y;   camBasis[1][1] = right.y; camBasis[2][1] = up.y;
-            camBasis[0][2] = fwd.z;   camBasis[1][2] = right.z; camBasis[2][2] = up.z;
+            const float3 axisRight{view._11, view._21, view._31};
+            const float3 axisUp{fwd.y * axisRight.z - fwd.z * axisRight.y,
+                                fwd.z * axisRight.x - fwd.x * axisRight.z,
+                                fwd.x * axisRight.y - fwd.y * axisRight.x};
+            camBasis[0][0] = fwd.x;    camBasis[1][0] = axisRight.x; camBasis[2][0] = axisUp.x;
+            camBasis[0][1] = fwd.y;    camBasis[1][1] = axisRight.y; camBasis[2][1] = axisUp.y;
+            camBasis[0][2] = fwd.z;    camBasis[1][2] = axisRight.z; camBasis[2][2] = axisUp.z;
         }
         camRotRad = dRot;
         const float kFovYHalf = engine::renderer::kCameraFovYDeg * 0.5f * (float)M_PI / 180.0f;
@@ -1550,9 +1554,9 @@ f32 taaCameraMotionPx(void) {
 
 void taaCameraBasis(f32 fwd[3], f32 right[3], f32 up[3]) {
     for (int c = 0; c < 3; c++) {
-        fwd[c]   = camBasis[c][0];
-        right[c] = camBasis[c][1];
-        up[c]    = camBasis[c][2];
+        fwd[c]   = camBasis[0][c];
+        right[c] = camBasis[1][c];
+        up[c]    = camBasis[2][c];
     }
 }
 
@@ -1861,6 +1865,56 @@ static void taaDumpDepthR8Png(IDeviceContext* ctx, ITexture* tex, const char* pa
     stbi_write_png(path, (int)w, (int)h, 4, px.data(), (int)w * 4);
 }
 
+static void taaDumpDepthRawF32(IDeviceContext* ctx, ITexture* tex, const char* path) {
+    if (!tex) {
+        return;
+    }
+    RefCntAutoPtr<ITexture> staging;
+    {
+        TextureDesc desc = tex->GetDesc();
+        desc.Name = "taaStageDumpStagingDepthRaw";
+        desc.Usage = USAGE_STAGING;
+        desc.BindFlags = BIND_NONE;
+        desc.CPUAccessFlags = CPU_ACCESS_READ;
+        device->CreateTexture(desc, nullptr, &staging);
+        if (!staging) {
+            return;
+        }
+    }
+    {
+        CopyTextureAttribs copy{tex, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                staging, RESOURCE_STATE_TRANSITION_MODE_TRANSITION};
+        ctx->CopyTexture(copy);
+        ctx->WaitForIdle();
+    }
+    MappedTextureSubresource mapped;
+    ctx->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_NONE, nullptr, mapped);
+    if (!mapped.pData) {
+        return;
+    }
+    const u32 w = tex->GetDesc().Width;
+    const u32 h = tex->GetDesc().Height;
+    const f32 nearP = engine::renderer::kCameraNear;
+    const f32 farP  = engine::renderer::kCameraFar;
+    std::vector<f32> z((size_t)w * h);
+    for (u32 y = 0; y < h; y++) {
+        const u8* src = (const u8*)mapped.pData + (size_t)y * mapped.Stride;
+        f32* row = &z[(size_t)y * w];
+        for (u32 x = 0; x < w; x++) {
+            f32 d = 0.0f;
+            memcpy(&d, src + (size_t)x * 4, sizeof(d));
+            row[x] = nearP * farP / std::max(farP - d * (farP - nearP), 1e-6f);
+        }
+    }
+    ctx->UnmapTextureSubresource(staging, 0, 0);
+    if (FILE* f = fopen(path, "wb")) {
+        fwrite(&w, sizeof(w), 1, f);
+        fwrite(&h, sizeof(h), 1, f);
+        fwrite(z.data(), sizeof(f32), (size_t)w * h, f);
+        fclose(f);
+    }
+}
+
 void taaStageDump(IDeviceContext* ctx) {
     const char* dir = taaStageDumpDir();
     if (!dir) {
@@ -1897,27 +1951,35 @@ void taaStageDump(IDeviceContext* ctx) {
         ITexture* depthTexCurr = taaDepthSRV((int)curr) ? taaDepthSRV((int)curr)->GetTexture() : nullptr;
         snprintf(path, sizeof(path), "%s/%u_depth.png", dir, frameIdx);
         taaDumpDepthR8Png(ctx, depthTexCurr, path);
+        snprintf(path, sizeof(path), "%s/%u_depth.f32", dir, frameIdx);
+        taaDumpDepthRawF32(ctx, depthTexCurr, path);
         snprintf(path, sizeof(path), "%s/%u_moved.txt", dir, frameIdx);
         if (FILE* f = fopen(path, "w")) {
             f32 fwd[3], right[3], up[3];
             taaCameraBasis(fwd, right, up);
+            f64 eye[3];
+            diligentWorldAnchor(eye);
             fprintf(f,
                     "moved %d dEyeMag %.6f dRot %.6f dEye %.6f %.6f %.6f "
-                    "fwd %.6f %.6f %.6f right %.6f %.6f %.6f up %.6f %.6f %.6f\n",
+                    "fwd %.6f %.6f %.6f right %.6f %.6f %.6f up %.6f %.6f %.6f "
+                    "eye %.6f %.6f %.6f\n",
                     taaCameraMoved() ? 1 : 0, (double)lastDEyeMag, (double)camRotRad,
                     (double)lastDEye[0], (double)lastDEye[1], (double)lastDEye[2],
                     (double)fwd[0], (double)fwd[1], (double)fwd[2],
                     (double)right[0], (double)right[1], (double)right[2],
-                    (double)up[0], (double)up[1], (double)up[2]);
+                    (double)up[0], (double)up[1], (double)up[2],
+                    (double)eye[0], (double)eye[1], (double)eye[2]);
             fclose(f);
         }
     }
-    if (taaOn) {
+    if (sceneColorTex) {
         snprintf(path, sizeof(path), "%s/%u_world.png", dir, frameIdx);
         taaDumpTex16fPng(ctx, sceneColorTex, path);
-        ITextureView* accSRV = taa->GetAccumulatedFrameSRV();
-        snprintf(path, sizeof(path), "%s/%u_accum.png", dir, frameIdx);
-        taaDumpTex16fPng(ctx, accSRV ? accSRV->GetTexture() : nullptr, path);
+        if (taaOn) {
+            ITextureView* accSRV = taa->GetAccumulatedFrameSRV();
+            snprintf(path, sizeof(path), "%s/%u_accum.png", dir, frameIdx);
+            taaDumpTex16fPng(ctx, accSRV ? accSRV->GetTexture() : nullptr, path);
+        }
     }
     remaining--;
 }

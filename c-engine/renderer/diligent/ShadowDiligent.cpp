@@ -92,6 +92,107 @@ namespace engine::renderer::diligent {
         int pbrSlice              = 0;
         float pbrBias             = 0.0f;
         bool pbrReady             = false;
+
+        void shadowAtlasDumpSlice(Diligent::IDeviceContext* ctx, Diligent::ITexture* src, u32 slice, const char* path) {
+            if (!src) {
+                return;
+            }
+            const Diligent::TextureDesc& sd = src->GetDesc();
+            Diligent::TextureDesc stg       = sd;
+            stg.Name                        = "shadowAtlasDumpStaging";
+            stg.Usage                       = Diligent::USAGE_STAGING;
+            stg.BindFlags                   = Diligent::BIND_NONE;
+            stg.CPUAccessFlags              = Diligent::CPU_ACCESS_READ;
+            stg.MipLevels                   = 1;
+            stg.ArraySize                   = 1;
+            stg.Height                      = sd.Height;
+            RefCntAutoPtr<Diligent::ITexture> staging;
+            device->CreateTexture(stg, nullptr, &staging);
+            if (!staging) {
+                return;
+            }
+            Diligent::CopyTextureAttribs cp(
+                src, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                staging, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+            cp.SrcSlice = (Diligent::Uint32)slice;
+            cp.DstSlice = 0;
+            ctx->CopyTexture(cp);
+            ctx->WaitForIdle();
+            Diligent::MappedTextureSubresource mapped;
+            ctx->MapTextureSubresource(staging, 0, 0, Diligent::MAP_READ, Diligent::MAP_FLAG_NONE, nullptr, mapped);
+            if (!mapped.pData) {
+                ctx->UnmapTextureSubresource(staging, 0, 0);
+                return;
+            }
+            u32 channels = 4;
+            switch (sd.Format) {
+                case Diligent::TEX_FORMAT_D32_FLOAT:
+                case Diligent::TEX_FORMAT_R32_FLOAT: channels = 1; break;
+                case Diligent::TEX_FORMAT_RG32_FLOAT: channels = 2; break;
+                default: break;
+            }
+            FILE* f = fopen(path, "wb");
+            if (f) {
+                const u32 w = sd.Width, h = sd.Height, s = 1u;
+                fwrite(&w, sizeof(u32), 1, f);
+                fwrite(&h, sizeof(u32), 1, f);
+                fwrite(&s, sizeof(u32), 1, f);
+                const u32 rowFloats = w * channels;
+                std::vector<float> row(rowFloats);
+                const u8* base = (const u8*)mapped.pData;
+                for (u32 y = 0; y < h; y++) {
+                    memcpy(row.data(), base + (size_t)y * mapped.Stride, rowFloats * sizeof(float));
+                    fwrite(row.data(), sizeof(float), rowFloats, f);
+                }
+                fclose(f);
+            }
+            ctx->UnmapTextureSubresource(staging, 0, 0);
+        }
+
+        void shadowAtlasDumpFrame(Diligent::IDeviceContext* ctx, Diligent::ShadowMapManager& manager, int cascades, int mode) {
+            static const char* dir = getenv("ENGINE_SHADOW_ATLAS_DUMP");
+            if (!dir) {
+                return;
+            }
+            static const u32 start = [] {
+                if (const char* e = getenv("ENGINE_SCREENSHOT_FRAME")) {
+                    const u32 v = (u32)strtoul(e, nullptr, 10);
+                    return v ? v : (u32)120;
+                }
+                return (u32)120;
+            }();
+            static const u32 stride = [] {
+                if (const char* e = getenv("ENGINE_SCREENSHOT_BURST_STRIDE")) {
+                    const u32 v = (u32)strtoul(e, nullptr, 10);
+                    return v ? v : (u32)1;
+                }
+                return (u32)1;
+            }();
+            static u32 remaining = [] {
+                if (const char* e = getenv("ENGINE_SCREENSHOT_BURST")) {
+                    return (u32)strtoul(e, nullptr, 10);
+                }
+                return (u32)0;
+            }();
+            const u32 frame = taaFrameIndex();
+            if (!remaining || frame < start || (frame - start) % stride != 0) {
+                return;
+            }
+            remaining--;
+            char path[600];
+            for (int c = 0; c < cascades; c++) {
+                Diligent::ITextureView* dsv = manager.GetCascadeDSV((u32)c);
+                snprintf(path, sizeof(path), "%s/%u_depth%d.f32", dir, frame, c);
+                shadowAtlasDumpSlice(ctx, dsv ? dsv->GetTexture() : nullptr, (u32)c, path);
+            }
+            if (mode != 1) {
+                Diligent::ITextureView* flt = manager.GetFilterableSRV();
+                for (int c = 0; c < cascades; c++) {
+                    snprintf(path, sizeof(path), "%s/%u_mom%d.f32", dir, frame, c);
+                    shadowAtlasDumpSlice(ctx, flt ? flt->GetTexture() : nullptr, (u32)c, path);
+                }
+            }
+        }
         const float farPadS = [] {
             float v = 1.0f / (1.0f + 1.5f);
             if (const char* padEnv = getenv("ENGINE_SHADOW_FAR_PAD")) {
@@ -101,8 +202,13 @@ namespace engine::renderer::diligent {
             }
             return v;
         }();
+        // Cascade-to-cascade blend band as a fraction of the cascade's z-range.
+        // The band is the only camera-depth-driven term left in the shadow field,
+        // so its width sets the dolly blend-band residual: 0.1 = 13.65 gray,
+        // 0.3 = 11.70, 0.5 = 5.82 (parallax-compensated attenuation map,
+        // 0.035 m/frame, world-anchored ring grid + 0.12 m filter).
         const float transitionRegion = [] {
-            float v = 0.1f;
+            float v = 0.3f;
             if (const char* padEnv = getenv("ENGINE_SHADOW_TRANSITION")) {
                 const float parsed = (float)atof(padEnv);
                 if (parsed > 0.0f && parsed <= 1.0f) v = parsed;
@@ -129,9 +235,11 @@ namespace engine::renderer::diligent {
         // 1.3). Plateau 0.02-0.08 m; 0.15 m over-blurs (0.28 gray). Beauty shadow-edge
         // gradient 10.17 -> 10.46 (no sharpness cost; the variance-floor normalization
         // tightens the EVSM falloff). 0.04 m = the sun's penumbra at ~4 m of caster
-        // height. 0 = the legacy fixed-texel kernel.
+        // height. 0 = the legacy fixed-texel kernel. Dolly shadow-edge residual
+        // (parallax-compensated attenuation map, 0.035 m/frame): 0.04 = 6.84 gray,
+        // 0.08 = 5.14, 0.12 = 4.10, with beauty shadow-edge gradient -0.2 %.
         const float filterWorldSize = [] {
-            float v = 0.04f;
+            float v = 0.12f;
             if (const char* env = getenv("ENGINE_SHADOW_FILTER_WORLD")) {
                 const float parsed = (float)atof(env);
                 if (parsed >= 0.0f && parsed <= 1.0f) v = parsed;
@@ -520,15 +628,25 @@ namespace engine::renderer::diligent {
             // to the player, cascade assignment and texel scale are functions of
             // player-relative geometry only, so camera motion changes nothing in
             // the shadow field and the on-screen cascade content changes only with
-            // the view.
+            // the view. That holds only if the SNAP GRID is world-anchored too:
+            // snapping (playerLight - anchorLight) anchors the grid at the camera,
+            // so every dolly frame re-picks the centre in texel steps and the whole
+            // atlas re-lays (atlas readback: 100 % of depth texels change per frame,
+            // 0 % world-anchored; dolly shadow-edge residual 38.2 -> 2.90 gray).
+            // The centre is snapped in absolute light space and carried to the
+            // matrices as an anchor-relative bias, which keeps the f32 values small.
             if (ringsActive) {
                 const Diligent::float4x4& w2l = sa.mWorldToLightView;
-                const double prx              = ppos[0] - an[0];
-                const double pry              = ppos[1] - an[1];
-                const double prz              = ppos[2] - an[2];
-                const double plx              = prx * (double)w2l._11 + pry * (double)w2l._12 + prz * (double)w2l._13 + (double)w2l._14;
-                const double ply              = prx * (double)w2l._21 + pry * (double)w2l._22 + prz * (double)w2l._23 + (double)w2l._24;
-                const double plz              = prx * (double)w2l._31 + pry * (double)w2l._32 + prz * (double)w2l._33 + (double)w2l._34;
+                const bool worldGrid = [] {
+                    const char* env = getenv("ENGINE_SHADOW_RING_GRID");
+                    return !(env && env[0] == '0');
+                }();
+                const double plx              = ppos[0] * (double)w2l._11 + ppos[1] * (double)w2l._12 + ppos[2] * (double)w2l._13 + (double)w2l._14;
+                const double ply              = ppos[0] * (double)w2l._21 + ppos[1] * (double)w2l._22 + ppos[2] * (double)w2l._23 + (double)w2l._24;
+                const double plz              = ppos[0] * (double)w2l._31 + ppos[1] * (double)w2l._32 + ppos[2] * (double)w2l._33 + (double)w2l._34;
+                const double alx              = an[0] * (double)w2l._11 + an[1] * (double)w2l._12 + an[2] * (double)w2l._13 + (double)w2l._14;
+                const double aly              = an[0] * (double)w2l._21 + an[1] * (double)w2l._22 + an[2] * (double)w2l._23 + (double)w2l._24;
+                const double alz              = an[0] * (double)w2l._31 + an[1] * (double)w2l._32 + an[2] * (double)w2l._33 + (double)w2l._34;
                 const float nearPadFactor = [] {
                     const char* env = getenv("ENGINE_SHADOW_NEAR_PAD");
                     return env ? strtof(env, nullptr) : 3.0f;
@@ -539,15 +657,19 @@ namespace engine::renderer::diligent {
                     const float power  = n > 1 ? (float)c / (float)(n - 1) : 1.0f;
                     const float radius = focusHalf * powf(tier.distanceM / focusHalf, power);
                     const float texel  = 2.0f * radius / (f32)sa.f4ShadowMapDim.x;
-                    const float clx    = (float)(std::round(plx / (double)texel) * (double)texel);
-                    const float cly    = (float)(std::round(ply / (double)texel) * (double)texel);
+                    const double centreRelX = worldGrid
+                            ? (std::round(plx / (double)texel) * (double)texel - alx)
+                            : (std::round((plx - alx) / (double)texel) * (double)texel);
+                    const double centreRelY = worldGrid
+                            ? (std::round(ply / (double)texel) * (double)texel - aly)
+                            : (std::round((ply - aly) / (double)texel) * (double)texel);
                     const float s      = 1.0f / radius;
                     const float nearPad = 2.0f * radius * nearPadFactor;
                     const float zSpan   = 4.0f * radius + nearPad;
                     const float sz      = 1.0f / zSpan;
-                    const float bx     = (float)(-clx * (double)s);
-                    const float by     = (float)(-cly * (double)s);
-                    const float bz      = (float)(-(plz - (2.0f * radius + nearPad)) * (double)sz);
+                    const float bx     = (float)(-centreRelX * (double)s);
+                    const float by     = (float)(-centreRelY * (double)s);
+                    const float bz      = (float)(-(plz - (2.0f * radius + nearPad) - alz) * (double)sz);
                     const float zStart = c == 0 ? engine::renderer::kCameraNear : focusCamZDebug + prevRadius;
                     const float zEnd   = focusCamZDebug + radius;
                     auto& ca           = sa.Cascades[c];
@@ -942,6 +1064,8 @@ namespace engine::renderer::diligent {
             if (curMode != 1 /* PCF */) {
                 mgr.ConvertToFilterable(ctx, lightAttribs.ShadowAttribs);
             }
+
+            shadowAtlasDumpFrame(ctx, mgr, lightAttribs.ShadowAttribs.iNumCascades, curMode);
 
             // ENGINE_SHADOW_READBACK=frameN: one-shot readback of cascade 0's depth
             // (min/max/zero-fraction) — verifies the cascade pass actually writes
