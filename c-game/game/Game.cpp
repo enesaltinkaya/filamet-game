@@ -52,16 +52,47 @@ namespace game {
     static double dollyTime   = 0.0;
     static bool dollyAnchored = false;
 
-    static char dollyEnabled(void) {
-        static const char enabled = [] {
-            const char* value = getenv("ENGINE_CAMERA_DOLLY");
-            return (value != nullptr && value[0] != 0 && value[0] != '0') ? 1 : 0;
-        }();
-        return enabled;
-    }
+    static char dollyOn = [] {
+        const char* value = getenv("ENGINE_CAMERA_DOLLY");
+        return (value != nullptr && value[0] != 0 && value[0] != '0') ? 1 : 0;
+    }();
+    static char dollyGaveUpPlayer = 0;
 
+    static void dollySet(char on) {
+        if (dollyOn == on) return;
+        if (on) {
+            if (engine::flyingCameraFlying()) {
+                utils::info("game: camera dolly: V ignored while flying (ESC ends the fly first)");
+                return;
+            }
+            dollyOn             = 1;
+            dollyGaveUpPlayer   = engine::playerMode() ? 1 : 0;
+            if (dollyGaveUpPlayer) engine::playerModeSet(0);
+            dollyAnchored       = false;
+            dollyTime           = 0.0;
+            utils::info("game: camera dolly ON — anchored at the current camera, %.0f m per leg (V off, C back to the player)",
+                        dollyDistance);
+            return;
+        }
+        const char restored = dollyAnchored;
+        dollyOn             = 0;
+        dollyAnchored       = false;
+        dollyTime           = 0.0;
+        if (restored) {
+            const f32 target[3] = {dollyBase[0] + dollyFacing[0] * 100.0f,
+                                   dollyBase[1] + dollyFacing[1] * 100.0f,
+                                   dollyBase[2] + dollyFacing[2] * 100.0f};
+            const f32 up[3]     = {0.0f, 1.0f, 0.0f};
+            engine::renderer::rendererCameraLookAt(dollyBase, target, up);
+        }
+        utils::info("game: camera dolly OFF%s", restored ? " — camera back at the anchor" : "");
+        if (dollyGaveUpPlayer) {
+            dollyGaveUpPlayer = 0;
+            engine::playerModeSet(1);
+        }
+    }
     static void updateCameraDolly(void) {
-        if (!dollyEnabled()) return;
+        if (!dollyOn) return;
         if (gameStateCurrent() != STATE_PLAYING) return;
         if (engine::flyingCameraFlying() || engine::playerMode()) return;
 
@@ -278,6 +309,17 @@ namespace game {
     }
 
     void GameSystem::preUpdate() {
+        if (gameStateCurrent() == STATE_PLAYING && engine::input.pressed == SDL_SCANCODE_V &&
+            !pauseMenuGuiIsShowing() && !settingsGuiIsShowing())
+            dollySet(!dollyOn);
+        if (dollyOn && engine::playerMode()) {
+            dollyOn           = 0;
+            dollyAnchored     = false;
+            dollyTime         = 0.0;
+            dollyGaveUpPlayer = 0;
+            utils::info("game: camera dolly OFF — player mode owns the camera");
+        }
+
         // In the world and not flying: ESC opens the in-game menu — a
         // separate document from the main menu (the old engine's pauseMenu).
         // Its MAIN MENU button returns to the main menu; ESC while it is

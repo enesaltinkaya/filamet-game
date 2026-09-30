@@ -11,6 +11,10 @@ namespace engine {
 //          F) hands control back to the player — while flying the player
 //          sticks to the camera (parked just below the eye, old engine's
 //          playerFollowFlyingCamera), so it lands where the fly ended
+//   V      camera dolly (game/Game.cpp): the scripted camera dollies back and
+//          forth from its pose at the press; it takes the view from player
+//          mode, C hands the view back (which ends the dolly), V off restores
+//          the anchor pose
 //   WASD   run (4 m/s; SHIFT walks at 2 m/s), camera-relative
 //   SPACE  jump (4 m/s impulse)
 //   wheel  orbit distance (1.5–20 m)
@@ -48,6 +52,12 @@ void playerSetSpawn(f32 x, f32 y, f32 z);
 char playerTeleportTo(f32 x, f32 y, f32 z);
 
 char playerMode(void);  // 1 while player mode owns input + camera
+
+// Toggle player mode from outside the system (the camera dolly's view
+// handoff). Turning it on re-syncs the orbit to the live camera and drops the
+// third-person follow smoothing, so taking the view back from the dolly (or
+// any scripted camera) starts from wherever the camera ended up.
+void playerModeSet(char on);
 
 // Live feet position (world metres, double precision — Jolt is double
 // internally). Returns false when no player body is in the world (not

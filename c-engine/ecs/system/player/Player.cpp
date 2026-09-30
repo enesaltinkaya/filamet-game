@@ -268,6 +268,14 @@ static void playerSetActive(char on) {
     }
 }
 
+void playerModeSet(char on) {
+    playerSetActive(on);
+    if (on) {
+        p.tpSmoothDist   = -1.0f;
+        p.skyPitchOffset = 0.0f;
+    }
+}
+
 // Cursor show/hide on drag transitions (the old engine's behaviour —
 // windowSystemHideCursor on press / ShowCursor on release): the cursor is
 // shown normally while idle; pressing LMB or RMB enters relative mouse mode
