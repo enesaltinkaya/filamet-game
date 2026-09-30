@@ -6,6 +6,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 
 ## 2026-09-30 — [entries](lessons/2026-09-30.md)
+- A `MAP_FLAG_DISCARD` cbuffer upload must write EVERY slot the shader reads (DISCARD = fresh dynamic-ring memory): unwritten cascade slots 8..31 of `cbPbrPropsShadow` left the player-detail-map gate `g_PropsCascades[12].w` garbage, so an unbound `g_ShadowDetail` printed period-2 full-frame shadow flips (consecutive-frame 7.15 gray vs N vs N+2 0.2; `vkUpdateDescriptorSets` validation error names the variable). Fix: memset the mirror + bind a 1x1 all-far D32 dummy SRV. Incident: "strong flicker on the white wall, gone when shadows are toggled"
 
 - Terrain TAA motion vectors must include the jitter delta; subtracting it leaves history misaligned (static 59.98 -> 2.12 gray) and the library factor 256 makes the correct total-MV convention useless. Engine default factor is now 16.
 - Blue-cube shadow-edge shimmer: PCF 3x3 hard taps = 22.92 gray on the shadow mask; EVSM2 moments + player-anchored rings = 19.91 gray and 2.88 vs 3.24 ms GPU at quality 1. `Shadows: On` now means EVSM2.
