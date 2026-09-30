@@ -164,6 +164,10 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 - TAA jitter is pure shimmer once camera flow kills the history (DiligentFX `TAA_MOTION_VECTOR_DIFF_FACTOR` 256 → alpha 0 at ~2.8 px/frame): gate the jitter on px/frame (`ENGINE_TAA_MOTION_PX` default 2, trace `mpx`) — dolly building flicker 34.2 → 20.8-23.5 gray, neutral below 4 px/frame, static untouched. Measured-rejected: velocity `ResetAccumulation` (+2-4 gray), lowering the factor (inside the floor; kept as `ENGINE_TAA_MOTION_VECTOR_DIFF` via the new `ENGINE_FX_SHADER_DEFINES` post-FX define channel)
 - Camera-dolly temporal A/B needs a pose-identical lattice: wall-clock dt → ~3 gray floor (control pair 20.62 vs 24.35); `ENGINE_CAMERA_DOLLY_FRAME_DT=0.0154` + burst stride 8 → control pair 0.06 gray. PNG burst at stride 1 runs ~6 fps = 12× real-time flow (`mpx` 87 px/frame) — never measure TAA there
 
+## 2026-09-30 — [entries](lessons/2026-09-30.md)
+
+- Ring cascade z windows centered on the player clip tall sun-side terrain at the cascade near plane: the cross-section quad lands at depth 0 and occludes everything behind it in the map → a hard straight box-edged "triangle" shadow on far terrain. Fix: dilate each cascade's light-space z window on the near side (`nearPad = 2·radius·ENGINE_SHADOW_NEAR_PAD`, default 3) so casters that can cast into the cascade sit fully inside the window; caster culling follows automatically (it tests the caster matrix). Fingerprint: RenderDoc shadow atlas shows a flat depth≈0 region at the map corner fed by the FIRST caster draw of that slice (bisect per-draw probe at the corner texel).
+
 ## Filament era (archive) — [entries](lessons-filament-archive.md)
 
 - (2026-09-04) Filament `doubleSided` flips the normal on back faces, blacking out thin up-normal vegetation (grass cards); and never mipmap sparse alpha-cutout grass textures

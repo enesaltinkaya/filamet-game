@@ -474,6 +474,10 @@ namespace engine::renderer::diligent {
                 const double plx              = prx * (double)w2l._11 + pry * (double)w2l._12 + prz * (double)w2l._13 + (double)w2l._14;
                 const double ply              = prx * (double)w2l._21 + pry * (double)w2l._22 + prz * (double)w2l._23 + (double)w2l._24;
                 const double plz              = prx * (double)w2l._31 + pry * (double)w2l._32 + prz * (double)w2l._33 + (double)w2l._34;
+                const float nearPadFactor = [] {
+                    const char* env = getenv("ENGINE_SHADOW_NEAR_PAD");
+                    return env ? strtof(env, nullptr) : 3.0f;
+                }();
                 const int n                   = sa.iNumCascades;
                 float prevRadius              = 0.0f;
                 for (int c = 0; c < n; c++) {
@@ -483,10 +487,12 @@ namespace engine::renderer::diligent {
                     const float clx    = (float)(std::round(plx / (double)texel) * (double)texel);
                     const float cly    = (float)(std::round(ply / (double)texel) * (double)texel);
                     const float s      = 1.0f / radius;
-                    const float sz     = 0.5f / radius;
+                    const float nearPad = 2.0f * radius * nearPadFactor;
+                    const float zSpan   = 4.0f * radius + nearPad;
+                    const float sz      = 1.0f / zSpan;
                     const float bx     = (float)(-clx * (double)s);
                     const float by     = (float)(-cly * (double)s);
-                    const float bz     = 0.5f - (float)(plz * (double)sz);
+                    const float bz      = (float)(-(plz - (2.0f * radius + nearPad)) * (double)sz);
                     const float zStart = c == 0 ? engine::renderer::kCameraNear : focusCamZDebug + prevRadius;
                     const float zEnd   = focusCamZDebug + radius;
                     auto& ca           = sa.Cascades[c];
