@@ -91,6 +91,13 @@ struct PbrPropsShadowAttribs {
 static_assert(sizeof(PbrPropsShadowAttribs) == 624, "cbPbrPropsShadow mirror drift");
 static RefCntAutoPtr<IBuffer> propsShadowCB;
 static RefCntAutoPtr<IBuffer> propsShadowGateCB;  // the player's cascade set: numCascades 1 = the CPU-picked slice, 0 = single-slice fallback
+// The props shader's player-detail-map slot (g_ShadowDetail + the
+// g_PropsCascades[12]/[13] box) has no caster on this path: the gate is
+// forced to 0 every frame and this 1x1 all-far depth array keeps the
+// descriptor valid (an unset MUTABLE SRV is a Vulkan descriptor-validation
+// error and a garbage texture sample).
+static RefCntAutoPtr<ITexture> pbrShadowDetailDummy;
+static RefCntAutoPtr<ITextureView> pbrShadowDetailDummySRV;
 static RefCntAutoPtr<ITexture> iblIrradiance;
 static RefCntAutoPtr<ITexture> iblPrefiltered;
 static GLTF_PBR_Renderer::ModelResourceBindings modelBindings;
@@ -216,6 +223,10 @@ static void refreshModelBindings(const char* label, GLTF::Model* m,
                 var->Set(srv);
                 setFilt++;
             }
+        }
+        if (Diligent::IShaderResourceVariable* var =
+                srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_ShadowDetail")) {
+            var->Set(pbrShadowDetailDummySRV);
         }
         // Props walk the shared CSM cascades per pixel; the player keeps the
         // CPU-picked single cascade via the zeroed gate buffer.
@@ -691,6 +702,35 @@ bool gltfInitDiligent(void) {
         // picked cascade path (the props walk the shared CSM set instead).
         MapHelper<PbrPropsShadowAttribs> gate(context, propsShadowGateCB, MAP_WRITE, MAP_FLAG_DISCARD);
         memset(&*gate, 0, sizeof(PbrPropsShadowAttribs));
+    }
+    {
+        TextureDesc d;
+        d.Type      = RESOURCE_DIM_TEX_2D_ARRAY;
+        d.Width     = 1;
+        d.Height    = 1;
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Format    = TEX_FORMAT_D32_FLOAT;
+        d.Usage     = USAGE_IMMUTABLE;
+        d.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
+        d.Name      = "pbr player detail shadow dummy";
+        const f32 farDepth = 1.0f;
+        TextureSubResData subres(&farDepth, sizeof(f32));
+        TextureData data;
+        data.pSubResources   = &subres;
+        data.NumSubresources = 1;
+        data.pContext        = context;
+        device->CreateTexture(d, &data, &pbrShadowDetailDummy);
+        if (!pbrShadowDetailDummy) {
+            utils::warn("gltf: detail shadow dummy creation failed");
+            return false;
+        }
+        pbrShadowDetailDummySRV =
+                pbrShadowDetailDummy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        if (!pbrShadowDetailDummySRV) {
+            utils::warn("gltf: detail shadow dummy view failed");
+            return false;
+        }
     }
 
     utils::info("gltf: initialized (diligent GLTF_PBR_Renderer)");
@@ -1633,6 +1673,13 @@ static void fillFrameAttribsInner(IDeviceContext* ctx, const float4x4& proj,
         const HLSL::LightAttribs* la = static_cast<const HLSL::LightAttribs*>(
                 engine::renderer::diligent::shadowDiligentLightAttribs());
         MapHelper<PbrPropsShadowAttribs> props(ctx, propsShadowCB, MAP_WRITE, MAP_FLAG_DISCARD);
+        // MAP_FLAG_DISCARD lands this frame's write in fresh dynamic-ring
+        // memory, so every slot the shader reads must be written. The cascade
+        // slots past numCascades — the detail-map box at 12/13 among them —
+        // were left unwritten: the gate at 12.w read garbage, the detail pass
+        // ran at random against an unbound texture, and the whole frame's
+        // shadow flipped between the two.
+        memset(&*props, 0, sizeof(PbrPropsShadowAttribs));
         props->worldToLightView = la->ShadowAttribs.mWorldToLightView;
         for (int c = 0; c < la->ShadowAttribs.iNumCascades && c < 8; ++c) {
             props->cascades[c * 4 + 0] = la->ShadowAttribs.Cascades[c].f4LightSpaceScale;
