@@ -9,6 +9,7 @@ New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VU
 
 - Terrain TAA motion vectors must include the jitter delta; subtracting it leaves history misaligned (static 59.98 -> 2.12 gray) and the library factor 256 makes the correct total-MV convention useless. Engine default factor is now 16.
 - Blue-cube shadow-edge shimmer: PCF 3x3 hard taps = 22.92 gray on the shadow mask; EVSM2 moments + player-anchored rings = 19.91 gray and 2.88 vs 3.24 ms GPU at quality 1. `Shadows: On` now means EVSM2.
+- Dolly shadow-edge shimmer after the cascade blend landed is the RAW render, not the blend: TAA OFF edge residual 5.775 gray vs TAA ON 2.006 (2.9x), band width 0.01/0.1/0.3 = 5.761/5.775/5.775 (neutral), blend dither 0.6 = +4%, filter footprint 0.04 -> 0.12 = 4.344 (-25%) for 0.3% sharpness, PCF3 = 12.168 (2x EVSM2, 10x in shadow area). Measure it parallax-compensated — 2.8 px/frame of parallax at 40 m alone reads 35 gray at an edge.
 
 ## 2026-09-29 — [entries](lessons/2026-09-29.md)
 
