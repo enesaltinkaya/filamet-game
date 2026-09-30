@@ -1121,20 +1121,18 @@ void taaInit(void) {
     if (!device) {
         return;
     }
-    // DiligentFX TAA's history rejection is per-pixel-motion based
-    // (alpha *= saturate(1 - |mv_uv| * TAA_MOTION_VECTOR_DIFF_FACTOR); the
-    // library's 256 kills the history near 1 px/frame of flow). Measured
-    // across ENGINE_CAMERA_DOLLY speeds, lowering it neither helps nor hurts
-    // past the ~2 gray A/B noise floor, so the library value ships.
-    // ENGINE_TAA_MOTION_VECTOR_DIFF retunes it for experiments through the
-    // post-FX define channel (ENGINE_FX_SHADER_DEFINES).
-    if (getenv("ENGINE_FX_SHADER_DEFINES") == nullptr) {
+    const float motionFactor = [] {
         if (const char* e = getenv("ENGINE_TAA_MOTION_VECTOR_DIFF")) {
-            char taaDefs[64];
-            snprintf(taaDefs, sizeof(taaDefs), "TAA_MOTION_VECTOR_DIFF_FACTOR=%.1f",
-                     (double)atof(e));
-            setenv("ENGINE_FX_SHADER_DEFINES", taaDefs, 1);
+            const float v = (float)atof(e);
+            if (v > 0.0f) return v;
         }
+        return 16.0f;
+    }();
+    if (getenv("ENGINE_FX_SHADER_DEFINES") == nullptr) {
+        char taaDefs[64];
+        snprintf(taaDefs, sizeof(taaDefs), "TAA_MOTION_VECTOR_DIFF_FACTOR=%.1f",
+                 (double)motionFactor);
+        setenv("ENGINE_FX_SHADER_DEFINES", taaDefs, 1);
     }
     mvDumpPath = getenv("ENGINE_MV_DUMP");
     if (const char* s = getenv("ENGINE_MV_DUMP_FRAME")) {

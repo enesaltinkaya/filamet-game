@@ -41,9 +41,10 @@ void settingsInit(void) {
     templates.push_back((Template{"shadowsDisabled", "boolean", 0.}));
     /* Shadow mode: 0=off 1=PCF 2=VSM 3=EVSM2 4=EVSM4 (the DiligentFX
      * SHADOW_MODE_* filtering techniques). The graphics settings page exposes
-     * only on/off; On = PCF (1). VSM/EVSM2/EVSM4 stay implemented, reachable
-     * via hand-edited files or ENGINE_SHADOW_MODE. */
-    templates.push_back((Template{"shadowMode", "int", 1.}));
+     * only on/off; On = EVSM2 (3), the mode whose filterable moments pass
+     * keeps the cascade edges stable under camera motion. VSM/EVSM4 remain
+     * reachable via hand-edited files or ENGINE_SHADOW_MODE. */
+    templates.push_back((Template{"shadowMode", "int", 3.}));
     /* Shadow quality: 0=low (1024/2 cascades/60m) 1=medium (2048/2/80m)
      * 2=high (2048/3/120m).
      * shadowsDisabled above is the legacy on/off key, kept in sync by the
@@ -116,6 +117,11 @@ void settingsInit(void) {
             readSettingsFile();
             break;
         }
+    }
+
+    if (settingsGetInt("shadowMode") == 1 && !settingsGetBool("shadowsDisabled")) {
+        settingsSetInt("shadowMode", 3);
+        settingsWrite();
     }
 }
 

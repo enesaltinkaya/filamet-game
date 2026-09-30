@@ -5,6 +5,11 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
 
+## 2026-09-30 — [entries](lessons/2026-09-30.md)
+
+- Terrain TAA motion vectors must include the jitter delta; subtracting it leaves history misaligned (static 59.98 -> 2.12 gray) and the library factor 256 makes the correct total-MV convention useless. Engine default factor is now 16.
+- Blue-cube shadow-edge shimmer: PCF 3x3 hard taps = 22.92 gray on the shadow mask; EVSM2 moments + player-anchored rings = 19.91 gray and 2.88 vs 3.24 ms GPU at quality 1. `Shadows: On` now means EVSM2.
+
 ## 2026-09-29 — [entries](lessons/2026-09-29.md)
 
 - Wall shadow detaches from its base and flashes while the camera dollies: the caster `SlopeScaledDepthBias` 2.0 (with `DepthBiasClamp` unbounded) erodes the shadow edge onto the receiver's view-dependent flip threshold — the pop is in the PRE-TAA render, the atlas is stable in texel space, and only `ENGINE_SHADOW_SLOPE_BIAS` moves it; default 2.0 → 0.5 (beauty flash 74 px → 4 px, mask detach mean 316 → 27)

@@ -418,7 +418,7 @@ namespace engine::renderer::diligent {
                 const char* env = getenv("ENGINE_SHADOW_RINGS");
                 return !(env && env[0] == '0');
             }();
-            const bool ringsActive = ringsOn && curMode == 1 && hasPlayer &&
+            const bool ringsActive = ringsOn && curMode != 0 && hasPlayer &&
                                      focusCamZDebug > 0.0f && focusCamZDebug <= tier.distanceM;
             if (hasPlayer && !focusBoxOff && !ringsActive && focusCamZDebug > 0.0f &&
                 focusCamZDebug <= sa.fCascadeCamSpaceZEnd[0]) {
@@ -452,7 +452,7 @@ namespace engine::renderer::diligent {
                 focusBoxDebug = half;
             }
 
-            // Player-anchored cascade rings (PCF): every cascade becomes a cube
+            // Player-anchored cascade rings: every cascade becomes a cube
             // centered on the PLAYER's snapped light-space position, radii on a
             // ladder from the focus radius out to the tier distance, view-Z gate =
             // player view-Z + radius. The stock distribution derives each cascade

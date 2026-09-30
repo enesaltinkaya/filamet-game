@@ -253,7 +253,7 @@ void SettingsGraphicsGui::added() {
             graphicsClose(nullptr);
         } else if (utils::strequals(at, "wire")) {
             while (taaEnabled) toggleTaa(nullptr);
-            while (shadowsMode != 1) toggleShadows(nullptr);
+            while (shadowsMode != 3) toggleShadows(nullptr);
             while (shadowsQuality != 1) toggleShadowQuality(nullptr);
             while (bloomEnabled) toggleBloom(nullptr);
             while (ssrEnabled) toggleSsr(nullptr);
@@ -348,10 +348,10 @@ static void shadowsModeApply(int mode) {
     rmlUpdateDirtyAll(model);
 }
 
-// On/off: off -> PCF (the mode the UI exposes as "On"), any other mode
-// (incl. hidden VSM/EVSM2/EVSM4) -> off.
+// On/off: off -> EVSM2 (the stable filtering mode the UI exposes as "On"),
+// any other mode (incl. hidden PCF/VSM/EVSM4) -> off.
 static int toggleShadows(void* _) {
-    shadowsModeApply(shadowsMode == 0 ? 1 : 0);
+    shadowsModeApply(shadowsMode == 0 ? 3 : 0);
     return 0;
 }
 

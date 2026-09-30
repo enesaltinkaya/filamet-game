@@ -40,7 +40,7 @@
 // Outputs: the world pass renders into the TAA offscreen chain (linear
 // RGBA16F + RG16F motion + RGBA16F normal + D32) — write all three like the
 // PBR pass (GltfDiligent.cpp GetPSMainSource footer) or TAA/SSAO misbehave:
-// Color, CustomData = motion vectors (static terrain: zero), WorldNormal
+// Color, CustomData = motion vectors (total apparent motion), WorldNormal
 // = float4(world normal, roughness — perceptual, the SSR material alpha).
 
 struct PSSplatIn
@@ -969,7 +969,7 @@ PSOutput main(PSSplatIn In)
     Out.Color = float4(IBL, 1.0);
     float2 ndcCurr = (In.Position.xy * cCamViewport.zw - 0.5) * float2(2.0, -2.0);
     float2 ndcPrev = In.PrevClip.xy / max(In.PrevClip.w, 1e-6);
-    Out.MotionVector = (ndcCurr - cCamSensor.zw) - (ndcPrev - pCamSensor.zw);
+    Out.MotionVector = ndcCurr - ndcPrev;
     Out.WorldNormal = float4(N, roughness);
     return Out;
 }
