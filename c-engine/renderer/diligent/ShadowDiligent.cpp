@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -115,6 +116,54 @@ namespace engine::renderer::diligent {
             }
             return 0u;
         }();
+        // World-space shadow filter footprint (metres). With iFixedFilterSize = 0
+        // ShadowMapManager::ConvertToFilterable derives each cascade's atlas blur
+        // radius from fFilterWorldSize and that cascade's light-space scale, so every
+        // cascade filters the SAME world area. With the legacy fixed-texel kernel the
+        // 2-cascade tier (6 m / 80 m rings at 2048) blurs 5.9 mm in cascade 0 and
+        // 78 mm in cascade 1 — the cascade-boundary seam that sweeps across a
+        // building's shadow while the player runs. Measured at the parked building
+        // (attenuation maps, ring sweep focusHalf 6 m -> 9 m as the sweep proxy):
+        // deviation from a single-cascade reference in the boundary band 4.29 -> 3.08
+        // gray p99 34.7 -> 23.0, and the sweep delta 0.51 -> 0.12 gray (p99 8.0 ->
+        // 1.3). Plateau 0.02-0.08 m; 0.15 m over-blurs (0.28 gray). Beauty shadow-edge
+        // gradient 10.17 -> 10.46 (no sharpness cost; the variance-floor normalization
+        // tightens the EVSM falloff). 0.04 m = the sun's penumbra at ~4 m of caster
+        // height. 0 = the legacy fixed-texel kernel.
+        const float filterWorldSize = [] {
+            float v = 0.04f;
+            if (const char* env = getenv("ENGINE_SHADOW_FILTER_WORLD")) {
+                const float parsed = (float)atof(env);
+                if (parsed >= 0.0f && parsed <= 1.0f) v = parsed;
+            }
+            return v;
+        }();
+        // Cascade-blend dither amplitude: breaks the blend band's iso-lines into
+        // per-pixel noise so TAA/spatial AA blurs the boundary instead of showing a
+        // coherent line. Rides in ShadowMapAttribs.bVisualizeShadowing (bit-copied
+        // float; no FX shader consumes that field), mirrored by the splat PS as
+        // sNumCascades.w.
+        const float blendDither = [] {
+            float v = 0.0f;
+            if (const char* env = getenv("ENGINE_SHADOW_BLEND_DITHER")) {
+                const float parsed = (float)atof(env);
+                if (parsed > 0.0f && parsed <= 1.0f) v = parsed;
+            }
+            return v;
+        }();
+        // Cascade composition policy in the terrain receiver: 1 = multiply every
+        // covering cascade (default), 0 = lit-wins (the finest covering cascade is
+        // authoritative, the props receiver's policy). Rides in
+        // ShadowMapAttribs.bVisualizeCascades (bit-copied float, no FX consumer),
+        // mirrored as sNumCascades.z.
+        const float cascadeUnion = [] {
+            float v = 1.0f;
+            if (const char* env = getenv("ENGINE_SHADOW_UNION")) {
+                const float parsed = (float)atof(env);
+                if (parsed >= 0.0f && parsed <= 1.0f) v = parsed;
+            }
+            return v;
+        }();
         const bool focusBandOn = [] {
             const char* env = getenv("ENGINE_SHADOW_FOCUS_BAND");
             return !(env && env[0] == '0');
@@ -201,14 +250,18 @@ namespace engine::renderer::diligent {
                 if (!createShadowMap(mode, tier)) return;
                 passReady = true;
                 generation++;
-                utils::info("shadow: mode %d quality %d (res %u, %u cascades, %.0f m, PCF %dx%d)",
+                char filterDesc[32];
+                if (filterWorldSize > 0.0f && mode >= 2)
+                    snprintf(filterDesc, sizeof(filterDesc), "%.1f cm world", (double)filterWorldSize * 100.0);
+                else
+                    snprintf(filterDesc, sizeof(filterDesc), "%dx%d texel", tier.pcfFilterSize, tier.pcfFilterSize);
+                utils::info("shadow: mode %d quality %d (res %u, %u cascades, %.0f m, filter %s)",
                             mode,
                             quality,
                             tier.resolution,
                             tier.cascades,
                             (double)tier.distanceM,
-                            tier.pcfFilterSize,
-                            tier.pcfFilterSize);
+                            filterDesc);
             }
             if (!passReady) return;
 
@@ -225,8 +278,8 @@ namespace engine::renderer::diligent {
             Diligent::ShadowMapAttribs& sa  = lightAttribs.ShadowAttribs;
             sa.iNumCascades                 = (int)tier.cascades;
             sa.fNumCascades                 = (float)tier.cascades;
-            sa.iFixedFilterSize             = tier.pcfFilterSize;
-            sa.fFilterWorldSize             = 0.0f;
+            sa.iFixedFilterSize = (filterWorldSize > 0.0f && mode >= 2) ? 0 : tier.pcfFilterSize;
+            sa.fFilterWorldSize = (filterWorldSize > 0.0f && mode >= 2) ? filterWorldSize : 0.0f;
             sa.fCascadeTransitionRegion     = transitionRegion;
             sa.fReceiverPlaneDepthBiasClamp = 16.0f;
             sa.iMaxAnisotropy               = 4;
@@ -234,6 +287,8 @@ namespace engine::renderer::diligent {
             sa.fEVSMPositiveExponent        = 40.0f;
             sa.fEVSMNegativeExponent        = 5.0f;
             sa.bIs32BitEVSM                 = 1;
+            std::memcpy(&sa.bVisualizeShadowing, &blendDither, sizeof(blendDither));
+            std::memcpy(&sa.bVisualizeCascades, &cascadeUnion, sizeof(cascadeUnion));
             mgr.SetEVSMFarPadS(farPadS);
 
             // Distribute around the camera anchor: the view is rotation-only, so

@@ -492,7 +492,11 @@ float3 schlickReflection(float VdotH, float3 Reflectance0, float3 Reflectance90)
 // depth is offset by dot(tapOffset, rcvBias) so a grazing receiver plane
 // stays lit without any caster rasterizer bias (the Shadows sample's
 // FractionalSamplingError + receiver-plane bias policy).
-float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias)
+// tapScale spreads the four taps over tapScale texels: the caller scales it to
+// the frame's world filter radius so every cascade filters the same world area
+// (with the bias slope divided by the same factor, keeping the bias margin a
+// fixed world distance).
+float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias, float tapScale)
 {
     float4 dims;
     g_ShadowMap.GetDimensions(dims.x, dims.y, dims.z);
@@ -501,7 +505,7 @@ float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias)
     float  s      = (px.x + 0.5) - (baseUV.x + 0.5);
     float  t      = (px.y + 0.5) - (baseUV.y + 0.5);
     float2 texel  = 1.0 / dims.xy;
-    rcvBias *= texel;
+    rcvBias *= texel / tapScale;
     baseUV *= texel;
 
     float uw0 = (3.0 - 2.0 * s);
@@ -515,10 +519,14 @@ float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias)
 
     const float DepthClamp = 1e-8;
     float sum = 0.0;
-    sum += uw0 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u0, v0) * texel, slice), max(lightDepth + dot(float2(u0, v0), rcvBias), DepthClamp));
-    sum += uw1 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u1, v0) * texel, slice), max(lightDepth + dot(float2(u1, v0), rcvBias), DepthClamp));
-    sum += uw0 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u0, v1) * texel, slice), max(lightDepth + dot(float2(u0, v1), rcvBias), DepthClamp));
-    sum += uw1 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + float2(u1, v1) * texel, slice), max(lightDepth + dot(float2(u1, v1), rcvBias), DepthClamp));
+    float2 k0 = float2(u0, v0) * tapScale;
+    float2 k1 = float2(u1, v0) * tapScale;
+    float2 k2 = float2(u0, v1) * tapScale;
+    float2 k3 = float2(u1, v1) * tapScale;
+    sum += uw0 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k0 * texel, slice), max(lightDepth + dot(k0, rcvBias), DepthClamp));
+    sum += uw1 * vw0 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k1 * texel, slice), max(lightDepth + dot(k1, rcvBias), DepthClamp));
+    sum += uw0 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k2 * texel, slice), max(lightDepth + dot(k2, rcvBias), DepthClamp));
+    sum += uw1 * vw1 * g_ShadowMap.SampleCmpLevelZero(g_ShadowMap_sampler, float3(baseUV + k3 * texel, slice), max(lightDepth + dot(k3, rcvBias), DepthClamp));
     return sum / 16.0;
 }
 
@@ -531,7 +539,12 @@ float filterShadowPCF3(float2 uv, float slice, float lightDepth, float2 rcvBias)
 // depth bias (fFixedDepthBias would double-bias and peter-pan). 8 Poisson
 // taps (unit radius) around the texel, averaged like the PCF3 kernel; the
 // clamp keeps the taps inside the cascade tile.
-float filterShadowVSM(float2 uv, float slice, float lightDepth)
+// tapScale normalizes the tap radius to the frame's world filter size and
+// varScale (cascade0Span/cascadeSpan) normalizes the Chebyshev variance floor:
+// the floor's falloff is a fraction of the cascade's own light-space depth
+// span, so a cascade whose span is 13x the reference bleeds light 13x wider in
+// metres. Both normalizations make the cascades' answers agree at the boundary.
+float filterShadowVSM(float2 uv, float slice, float lightDepth, float tapScale, float varScale)
 {
     float4 dims;
     g_ShadowMapLinear.GetDimensions(dims.x, dims.y, dims.z);
@@ -557,10 +570,10 @@ float filterShadowVSM(float2 uv, float slice, float lightDepth)
     float sum = 0.0;
     for (int i = 0; i < 8; ++i)
     {
-        float2 tUV = (baseUV + float2(s, t) + poisson[i]) * texel;
+        float2 tUV = (baseUV + float2(s, t) + poisson[i] * tapScale) * texel;
         tUV        = clamp(tUV, 0.0, 1.0);
         float2 m   = g_ShadowMapLinear.Sample(g_ShadowMapLinearSampler, float3(tUV, slice)).xy;
-        float  variance = max(m.y - m.x * m.x, sVSMParams.x);
+        float  variance = max(m.y - m.x * m.x, sVSMParams.x * varScale * varScale);
         float  d        = lightDepth - m.x;
         float  p        = (d < 0.0) ? 1.0 : min(variance / (variance + d * d), 1.0);
         if (sVSMParams.y > 0.0)
@@ -606,7 +619,7 @@ float2 warpDepthEVSM(float depth, float farPadS, out float2 exOut)
     return float2(exp(ex.x * d), -exp(-ex.y * d));
 }
 
-float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4, out float pPosOut, out float pNegOut, out float dbgM1, out float2 dbgTapUV)
+float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4, float tapScale, float varScale, out float pPosOut, out float pNegOut, out float dbgM1, out float2 dbgTapUV)
 {
     pPosOut = 1.0;
     pNegOut = 1.0;
@@ -635,16 +648,20 @@ float filterShadowEVSM(float2 uv, float slice, float lightDepth, bool evsm4, out
     lightDepth = max(lightDepth, 0.0);
     float2 exWarp;
     float2 w      = warpDepthEVSM(lightDepth, f4ShadowFade.z, exWarp);
-    float2 minVar = sVSMParams.x * exWarp * w;
+    float2 minVar = sVSMParams.x * exWarp * w * varScale;
 
     float sum = 0.0;
     float sumPos = 0.0;
     float sumNeg = 0.0;
     for (int i = 0; i < 8; ++i)
     {
-        float2 tUV = (baseUV + float2(s, t) + poisson[i]) * texel;
+        float2 tUV = (baseUV + float2(s, t) + poisson[i] * tapScale) * texel;
         tUV        = clamp(tUV, 0.0, 1.0);
-        float4 m  = g_ShadowMapLinear.Sample(g_ShadowMapNearestSampler, float3(tUV, slice));
+        float4 m;
+        if (tapScale < 1.0)
+            m = g_ShadowMapLinear.Sample(g_ShadowMapLinearSampler, float3(tUV, slice));
+        else
+            m = g_ShadowMapLinear.Sample(g_ShadowMapNearestSampler, float3(tUV, slice));
         if (i == 0)
         {
             dbgM1 = m.x;
@@ -670,11 +687,19 @@ float3 rotateAroundY(float3 d, float2 rot)
     return float3(rot.x * d.x + rot.y * d.z, d.y, -rot.y * d.x + rot.x * d.z);
 }
 
-float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, float3 nLight)
+float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, float3 nLight, out float margin)
 {
     float3 sc = cascadeAttribs[cascade * 4].xyz;
     float3 cascadeNdc = lightViewPos * sc + cascadeAttribs[cascade * 4 + 1].xyz;
     float2 cascadeUV  = float2(0.5, 0.5) + float2(0.5, -0.5) * cascadeNdc.xy;
+    // Distance to the cascade box edges in NDC units (FX GetDistanceToCascadeMargin
+    // with zero margins — the ring cascades run with f4MarginProjSpace = 0): 0 at an
+    // edge, 1 at the centre on XY, 0..2 on Z. The main loop folds it into the
+    // transition blend, so pixels leaving a cascade through its XY box edge cross-fade
+    // into the next cascade instead of switching at the projected box edge (the
+    // straight bright seam that sweeps across a building shadow while the player runs).
+    margin = min(min(1.0 - abs(cascadeNdc.x), 1.0 - abs(cascadeNdc.y)),
+                 min(cascadeNdc.z, 1.0 - cascadeNdc.z));
     if (cascadeUV.x < 0.0 || cascadeUV.x > 1.0 || cascadeUV.y < 0.0 || cascadeUV.y > 1.0)
         return -1.0;
     float nz = abs(nLight.z) < 1e-6 ? (nLight.z < 0.0 ? -1e-6 : 1e-6) : nLight.z;
@@ -684,13 +709,30 @@ float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, fl
     float slopeScale = sBiasParams.y;
     float lightDepth = cascadeNdc.z;
     rcvBiasUV *= slopeScale;
+    // World-space filter normalization (ENGINE_SHADOW_FILTER_WORLD): texel size in
+    // metres = NDC [-1,1] (2/sc.x metres) over dims.x texels. Scaling the tap kernel
+    // by worldSize/texelSize makes every cascade filter the same WORLD area, and
+    // scaling the Chebyshev variance floor by the cascade's z span (sc.z, NDC
+    // [-1,1] = 2/sc.z metres) makes its light-bleeding falloff a fixed world
+    // distance — so the cascades agree at their boundary and the blend band has
+    // almost nothing to fade between.
+    float tapScale = 1.0;
+    float varScale = 1.0;
+    if (fFilterWorldSize > 0.0)
+    {
+        float4 fdims;
+        g_ShadowMap.GetDimensions(fdims.x, fdims.y, fdims.z);
+        float texelWorld = 2.0 / (sc.x * fdims.x);
+        tapScale = clamp(fFilterWorldSize / texelWorld, 0.1, 8.0);
+        varScale = clamp(sc.z / cascadeAttribs[0].z, 0.01, 1.0);
+    }
     if (shadowMode < 1.5)
-        return filterShadowPCF3(cascadeUV, float(cascade), lightDepth, rcvBiasUV);
+        return filterShadowPCF3(cascadeUV, float(cascade), lightDepth, rcvBiasUV, max(tapScale, 1.0));
     if (shadowMode < 2.5)
-        return filterShadowVSM(cascadeUV, float(cascade), cascadeNdc.z);
+        return filterShadowVSM(cascadeUV, float(cascade), lightDepth, tapScale, varScale);
     float2 dbgTapUV2;
     float pPos, pNeg, dbgM1v;
-    return filterShadowEVSM(cascadeUV, float(cascade), cascadeNdc.z, shadowMode > 3.5, pPos, pNeg, dbgM1v, dbgTapUV2);
+    return filterShadowEVSM(cascadeUV, float(cascade), lightDepth, shadowMode > 3.5, tapScale, varScale, pPos, pNeg, dbgM1v, dbgTapUV2);
 }
 
 PSOutput main(PSSplatIn In)
@@ -857,32 +899,63 @@ PSOutput main(PSSplatIn In)
             float zend = f4CascadeCamSpaceZEnd[cascade / 4][cascade % 4];
             if (viewZ > zend)
                 continue;
-            float att = filterShadowCascade(cascade, shadowMode, lightViewPos, nLight);
+            float  margin;
+            float  att = filterShadowCascade(cascade, shadowMode, lightViewPos, nLight, margin);
             dbgZ = viewZ * 0.0025;
-            dbgCascade = cascade;
-            dbgRaw = att;
             if (att < 0.0)
                 continue;
+            // ENGINE_SPLAT_SHADOW_DEBUG=1/3 reported the LAST z-covering cascade:
+            // the loop multiplies every covering cascade (the shadow union), so the
+            // coarse cascade overwrote the report and the coverage map showed no
+            // cascade-0 footprint to measure the boundary against. The debug readouts
+            // describe the FINEST covering cascade — the cascade that decides the pixel.
+            if (dbgCascade < 0)
+            {
+                dbgCascade = cascade;
+                dbgRaw     = att;
+            }
             // Cascade blend (DiligentFX Shadows.fxh GetNextCascadeBlendAmount
-            // parity): within the last fCascadeTransitionRegion fraction of the
-            // cascade's z-range, lerp toward the next (coarser) cascade so the
-            // resolution/bias switch is a fade, not a pop. f4StartEndZ.x is
-            // this cascade's near edge (ShadowMapManager.cpp partitioning);
-            // the attNext >= 0 gate stands in for the FX margin guard — no
-            // sampling outside the next cascade's projected extent.
+            // parity): lerp toward the next (coarser) cascade over the last
+            // fCascadeTransitionRegion of the cascade's z-range AND over the same
+            // distance to its box edges — FX folds fMinDistToMargin into the same
+            // max(), which is what stops the projected box edge from rendering as a
+            // straight line across the shadow. smoothstep removes the derivative
+            // kink at the band edges (the eye reads a kink as a line), and
+            // ENGINE_SHADOW_BLEND_DITHER breaks the band's iso-lines into per-pixel
+            // noise for the AA/TAA to average.
             if (cascade + 1 < int(sNumCascades.y))
             {
                 float zstart = cascadeAttribs[cascade * 4 + 2].x;
-                float dist   = (zend - viewZ) / max(zend - zstart, 1e-6);
-                float blend  = saturate(1.0 - dist / max(sBiasParams.z, 1e-6));
+                float dist   = saturate((zend - viewZ) / max(zend - zstart, 1e-6));
+                float blend  = saturate(1.0 - max(dist, margin) / max(sBiasParams.z, 1e-6));
+                blend = blend * blend * (3.0 - 2.0 * blend);
+                if (sNumCascades.w > 0.0)
+                {
+                    float ign = frac(dot(floor(In.Position.xy), float2(0.0647, 0.0833)));
+                    blend = saturate(blend + (ign - 0.5) * sNumCascades.w);
+                }
                 if (blend > 0.0)
                 {
-                    float attNext = filterShadowCascade(cascade + 1, shadowMode, lightViewPos, nLight);
+                    float nextMargin;
+                    float attNext = filterShadowCascade(cascade + 1, shadowMode, lightViewPos, nLight, nextMargin);
                     if (attNext >= 0.0)
                         att = lerp(att, attNext, blend);
                 }
             }
-            Attenuation *= att;
+            // ENGINE_SHADOW_UNION: 1 (default) multiplies every covering cascade
+            // (the camera-frustum-era policy, needed when a cascade's atlas is only
+            // complete for its own focus box). With the player-anchored rings every
+            // cascade casts the full tier, so the FINEST covering cascade is the
+            // whole answer (lit-wins, the props receiver's policy): the union
+            // multiply squares the coarse cascade's value on every blended pixel,
+            // which is a tonal step at the cascade boundary.
+            if (sNumCascades.z > 0.5)
+                Attenuation *= att;
+            else
+            {
+                Attenuation = att;
+                break;
+            }
         }
         float tier = f4ShadowFade.x;
         if (tier > 0.0)
