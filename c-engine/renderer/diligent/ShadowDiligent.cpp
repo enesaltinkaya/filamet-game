@@ -75,9 +75,9 @@ namespace engine::renderer::diligent {
         };
 
         constexpr ShadowQualityTier kQualityTiers[3] = {
-            {1024, 2, 60.0f, 3},
-            {2048, 2, 80.0f, 3},
-            {2048, 3, 120.0f, 5},
+            {1024, 3, 60.0f, 3},
+            {2048, 4, 80.0f, 3},
+            {2048, 5, 120.0f, 5},
         };
 
         constexpr float kReceiverFadeScale[3] = {2.82f, 2.79f, 3.70f};
@@ -222,7 +222,7 @@ namespace engine::renderer::diligent {
         const u32 cascadeOverride = [] {
             if (const char* env = getenv("ENGINE_SHADOW_CASCADES")) {
                 const long v = strtol(env, nullptr, 10);
-                if (v >= 1 && v <= 4) return (u32)v;
+                if (v >= 1 && v <= MAX_CASCADES) return (u32)v;
             }
             return 0u;
         }();
@@ -984,7 +984,7 @@ namespace engine::renderer::diligent {
                     pd > 1e-4 ? 0.5 + 0.5 * (plx * (double)proj._11 / pd) : 0.5;
                 const double pscreenY =
                     pd > 1e-4 ? 0.5 - 0.5 * (ply * (double)proj._22 / pd) : 0.5;
-                char line[900];
+                char line[1800];
                 int off = snprintf(line,
                                    sizeof(line),
                                    "shadow trace: f%llu ready %d mode %d pad %.3f band %.1f fbox %.1f pbr %d camZ %.2f ring %.1f mpx %.1f",
@@ -999,38 +999,41 @@ namespace engine::renderer::diligent {
                                    (double)focusHalf,
                                    (double)taaCameraMotionPx());
                 for (u32 c = 0; c < (u32)sa.iNumCascades; c++) {
-                    off += snprintf(line + off,
-                                    sizeof(line) - off,
-                                    " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f s.xy %.5f %.5f cxy %.5f %.5f R %.1f",
-                                    c,
-                                    (double)sa.Cascades[c].f4LightSpaceScale.z,
-                                    (double)sa.Cascades[c].f4LightSpaceScaledBias.z,
-                                    (double)sa.fCascadeCamSpaceZEnd[c],
-                                    (double)casterW2LP[c]._33,
-                                    (double)casterW2LP[c]._43,
-                                    (double)sa.Cascades[c].f4LightSpaceScale.x,
-                                    (double)sa.Cascades[c].f4LightSpaceScale.y,
-                                    (double)casterW2LP[c]._41,
-                                    (double)casterW2LP[c]._42,
-                                    (double)ringDebug[c]);
-                    if (c == 0)
-                        off += snprintf(line + off, sizeof(line) - off,
-                                        " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f"
-                                        " scx %.5f scy %.5f tx %.5f ty %.5f c0x %.4f c0y %.4f pndc %.4f %.4f px %.3f py %.3f",
-                                        (double)focusCamZDebug,
-                                        (double)view._13, (double)view._23, (double)view._33,
-                                        pposTrace[0], pposTrace[1], pposTrace[2],
-                                        anTrace[0], anTrace[1], anTrace[2],
-                                        (double)sa.Cascades[0].f4LightSpaceScale.x,
-                                        (double)sa.Cascades[0].f4LightSpaceScale.y,
-                                        (double)(sa.Cascades[0].f4LightSpaceScale.x > 0.0f ? 2.0f / sa.Cascades[0].f4LightSpaceScale.x / (f32)sa.f4ShadowMapDim.x : 0.0f),
-                                        (double)(sa.Cascades[0].f4LightSpaceScale.y > 0.0f ? 2.0f / sa.Cascades[0].f4LightSpaceScale.y / (f32)sa.f4ShadowMapDim.y : 0.0f),
-                                        (double)casterW2LP[0]._41,
-                                        (double)casterW2LP[0]._42,
-                                        pndcX,
-                                        pndcY,
-                                        pscreenX,
-                                        pscreenY);
+                    int n = snprintf(line + off,
+                                     sizeof(line) - off,
+                                     " | c%u s.z %.4f b.z %.4f zE %.1f w2lp z %.4f %.4f s.xy %.5f %.5f cxy %.5f %.5f R %.1f",
+                                     c,
+                                     (double)sa.Cascades[c].f4LightSpaceScale.z,
+                                     (double)sa.Cascades[c].f4LightSpaceScaledBias.z,
+                                     (double)sa.fCascadeCamSpaceZEnd[c],
+                                     (double)casterW2LP[c]._33,
+                                     (double)casterW2LP[c]._43,
+                                     (double)sa.Cascades[c].f4LightSpaceScale.x,
+                                     (double)sa.Cascades[c].f4LightSpaceScale.y,
+                                     (double)casterW2LP[c]._41,
+                                     (double)casterW2LP[c]._42,
+                                     (double)ringDebug[c]);
+                    off = std::min(off + (n > 0 ? n : 0), (int)sizeof(line) - 1);
+                    if (c != 0) continue;
+                    n = snprintf(line + off,
+                                 sizeof(line) - off,
+                                 " | fcZ %.2f zrow %.2f %.2f %.2f pp %.1f %.1f %.1f an %.1f %.1f %.1f"
+                                 " scx %.5f scy %.5f tx %.5f ty %.5f c0x %.4f c0y %.4f pndc %.4f %.4f px %.3f py %.3f",
+                                 (double)focusCamZDebug,
+                                 (double)view._13, (double)view._23, (double)view._33,
+                                 pposTrace[0], pposTrace[1], pposTrace[2],
+                                 anTrace[0], anTrace[1], anTrace[2],
+                                 (double)sa.Cascades[0].f4LightSpaceScale.x,
+                                 (double)sa.Cascades[0].f4LightSpaceScale.y,
+                                 (double)(sa.Cascades[0].f4LightSpaceScale.x > 0.0f ? 2.0f / sa.Cascades[0].f4LightSpaceScale.x / (f32)sa.f4ShadowMapDim.x : 0.0f),
+                                 (double)(sa.Cascades[0].f4LightSpaceScale.y > 0.0f ? 2.0f / sa.Cascades[0].f4LightSpaceScale.y / (f32)sa.f4ShadowMapDim.y : 0.0f),
+                                 (double)casterW2LP[0]._41,
+                                 (double)casterW2LP[0]._42,
+                                 pndcX,
+                                 pndcY,
+                                 pscreenX,
+                                 pscreenY);
+                    off = std::min(off + (n > 0 ? n : 0), (int)sizeof(line) - 1);
                 }
                 utils::info("%s", line);
             }
