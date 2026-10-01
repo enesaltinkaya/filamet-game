@@ -1971,6 +1971,21 @@ void taaStageDump(IDeviceContext* ctx) {
     }
 }
 
+// The stage dump's world file is the pre-composite scene color, so the AO the
+// player actually sees (applied after the TAA resolve) is not in it. This dumps
+// the composited color (the source the blit/CAS reads) under the same capture
+// window — the file to measure AO boiling and any other post-world change on.
+static void taaStageDumpComposited(IDeviceContext* ctx, ITextureView* view) {
+    const char* dir = taaStageDumpDir();
+    const CaptureWindow* w = captureWindow(CAPTURE_STAGE_DUMP);
+    if (!dir || !w || !captureWindowCoversFrame(w, frameIdx) || !view) {
+        return;
+    }
+    char path[600];
+    snprintf(path, sizeof(path), "%s/%u_composited.png", dir, frameIdx);
+    taaDumpTex16fPng(ctx, view->GetTexture(), path);
+}
+
 void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
     if (!sceneColorTex || !backRTV) {
         return;
@@ -2077,6 +2092,7 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
         if (ITextureView* c = aoCompositeApply(ctx, srcColorSRV, ssaoAOSRV())) {
             srcColorSRV = c;
         }
+        taaStageDumpComposited(ctx, srcColorSRV);
     }
 
     // SSR additive composite on top of the (AO'd) resolved color — same
