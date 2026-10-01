@@ -5,6 +5,11 @@ Index of hard-won debugging knowledge — one entry per incident, rule first. Fu
 New entries go into the dated file, kept lean: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident.
 
 
+## 2026-10-01 — [entries](lessons/2026-10-01.md)
+- A "spare" `ShadowMapAttribs` field is only spare if the RECEIVERS agree: `fVSMLightBleedingReduction` = `sVSMParams.y` feeds `chebyshevUpperBound`'s `saturate((p-y)/(1-y))`, so a value > 1 reports lit everywhere — the shadow is missing in VSM/EVSM while PCF draws it fine. `iMaxAnisotropy` is a safe carrier (FX's anisotropic sampler never runs here, stock value already 4), mirrored as a real `int`.
+- A world-space shadow filter footprint needs an atlas-texel cap on BOTH halves (the `ConvertToFilterable` pre-blur and the receiver taps): 0.12 m = 20 texels in the 6 m ring, which merges a 1.7 m caster's limbs into a blob. `ENGINE_SHADOW_FILTER_MAX_TEXELS` default 4 (parked crop gradient 5.58 → 5.86, dark px 20642 → 15620).
+- Union-multiplying the covering cascades hands a near caster the COARSE cascade's penumbra (the "wooden blob" player shadow). Lit-wins is the ring default now: full-frame 35832 px brighter vs 1941 darker, all on the shadow edge, temporal drift unchanged; `ENGINE_SHADOW_UNION=1` restores the multiply.
+
 ## 2026-09-30 — [entries](lessons/2026-09-30.md)
 - A `MAP_FLAG_DISCARD` cbuffer upload must write EVERY slot the shader reads (DISCARD = fresh dynamic-ring memory): unwritten cascade slots 8..31 of `cbPbrPropsShadow` left the player-detail-map gate `g_PropsCascades[12].w` garbage, so an unbound `g_ShadowDetail` printed period-2 full-frame shadow flips (consecutive-frame 7.15 gray vs N vs N+2 0.2; `vkUpdateDescriptorSets` validation error names the variable). Fix: memset the mirror + bind a 1x1 all-far D32 dummy SRV. Incident: "strong flicker on the white wall, gone when shadows are toggled"
 

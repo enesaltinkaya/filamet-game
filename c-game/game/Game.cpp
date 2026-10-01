@@ -37,7 +37,7 @@ namespace game {
         return on;
     }
 
-    static const f32 dollyDistance      = 2.0f;
+    static const f32 dollyDistance      = 5.0f;
     static const double dollyLegSeconds = [] {
         if (const char* e = getenv("ENGINE_CAMERA_DOLLY_LEG")) {
             const double v = atof(e);
