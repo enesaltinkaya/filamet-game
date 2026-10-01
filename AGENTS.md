@@ -80,7 +80,3 @@ We will be porting our old engine /home/enes/Projects/c/game-001-cpp to this new
 We are only using diligent engine.
 Sources are here with samples and docs;
 /home/enes/Projects/c/cpp-thirdparty/diligent
-
-### Lessons
-
-Index: `docs/lessons.md`; full entries in `docs/lessons/<date>.md` (active engine) and `docs/lessons-filament-archive.md` (Filament-era, backend removed 2026-09-05). After a multi-hour debugging session, add a rule-first entry to the dated file: rule + diagnostic fingerprint (VUID id, error string, measured signature) + one-line incident — no verification logs once the fix is proven. Read the index before fighting renderer/texture/buffer weirdness — known pitfalls (e.g. Diligent dynamic-buffer ring clobbering) are listed there.
