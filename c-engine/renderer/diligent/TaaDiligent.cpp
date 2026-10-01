@@ -25,6 +25,7 @@
 #include "PostProcess/TemporalAntiAliasing/interface/TemporalAntiAliasing.hpp"
 #include "Utils.h"
 #include "renderer/RenderBackend.h"
+#include "renderer/CaptureDump.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/ShaderCache.h"
 #include "renderer/diligent/SsaoDiligent.h"
@@ -85,7 +86,7 @@ static bool gateLogged = false;
 static HLSL::CameraAttribs camAttribs[2] = {};
 static float2 currJitter{0.0f, 0.0f};
 
-// ENGINE_MV_DUMP=path: one-shot motion-buffer dump (frame mvDumpFrame) —
+// ENGINE_MV_DUMP=path: one-shot motion-buffer dump (capture window, ENGINE_MV_DUMP_FRAME) —
 // RGB image of the world passes' TAA motion vectors (R = mv.x, G = mv.y in
 // F3NDC, B = |mv|; 1.0 == 0.5 NDC == half the screen).  Used to verify the
 // MVs actually written by the world passes against the expected camera
@@ -93,7 +94,6 @@ static float2 currJitter{0.0f, 0.0f};
 // alongside for the comparison.
 static const char* mvDumpPath = nullptr;
 static bool mvDumpDone = false;
-static u32 mvDumpFrame = 60;
 static f32 lastDEyeMag = 0.0f;
 
 // Last frame's world anchor (= the camera eye; f64, see diligentWorldAnchor).
@@ -1136,9 +1136,6 @@ void taaInit(void) {
         setenv("ENGINE_FX_SHADER_DEFINES", taaDefs, 1);
     }
     mvDumpPath = getenv("ENGINE_MV_DUMP");
-    if (const char* s = getenv("ENGINE_MV_DUMP_FRAME")) {
-        mvDumpFrame = (u32)atoi(s);
-    }
     PostFXContext::CreateInfo ci;
     ci.EnableAsyncCreation = false;
     ci.PackMatrixRowMajor = true;  // CameraAttribs filled raw (Tutorial27 style)
@@ -1928,28 +1925,8 @@ static void taaDumpDepthRawF32(IDeviceContext* ctx, ITexture* tex, const char* p
 
 void taaStageDump(IDeviceContext* ctx) {
     const char* dir = taaStageDumpDir();
-    if (!dir) {
-        return;
-    }
-    static u32 remaining = [] {
-        if (const char* e = getenv("ENGINE_SCREENSHOT_BURST")) return (u32)strtoul(e, nullptr, 10);
-        return (u32)8;
-    }();
-    static u32 stride = [] {
-        if (const char* e = getenv("ENGINE_SCREENSHOT_BURST_STRIDE")) {
-            const u32 v = (u32)strtoul(e, nullptr, 10);
-            return v ? v : (u32)1;
-        }
-        return (u32)8;
-    }();
-    static const u32 start = [] {
-        if (const char* e = getenv("ENGINE_SCREENSHOT_FRAME")) return (u32)strtoul(e, nullptr, 10);
-        return (u32)120;
-    }();
-    if (frameIdx < start || !remaining) {
-        return;
-    }
-    if ((frameIdx - start) % stride != 0) {
+    const CaptureWindow* w = captureWindow(CAPTURE_STAGE_DUMP);
+    if (!dir || !w || !captureWindowCoversFrame(w, frameIdx)) {
         return;
     }
     char path[600];
@@ -1992,7 +1969,6 @@ void taaStageDump(IDeviceContext* ctx) {
             taaDumpTex16fPng(ctx, accSRV ? accSRV->GetTexture() : nullptr, path);
         }
     }
-    remaining--;
 }
 
 void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
@@ -2144,8 +2120,11 @@ void taaWorldResolve(IDeviceContext* ctx, ITextureView* backRTV) {
 
     // One-shot motion-buffer dump, after the TAA + blit are done reading the
     // offscreen chain so the CPU map cannot disturb GPU state.
-    if (mvDumpPath && !mvDumpDone && frameIdx == mvDumpFrame) {
-        taaDumpMotionVectors(ctx);
+    if (mvDumpPath && !mvDumpDone) {
+        const CaptureWindow* w = captureWindow(CAPTURE_MV_DUMP);
+        if (w && frameIdx == w->startFrame) {
+            taaDumpMotionVectors(ctx);
+        }
     }
 }
 

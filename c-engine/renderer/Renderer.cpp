@@ -1,6 +1,7 @@
 #include "Renderer.h"
 
 #include "RenderBackend.h"
+#include "CaptureDump.h"
 #include "Engine.h"
 #include "RenderDoc.h"
 #include "Utils.h"
@@ -21,26 +22,16 @@ namespace engine::renderer {
 static RenderBackend* activeBackend = nullptr;
 static u32 viewportWidth = 0;
 static u32 viewportHeight = 0;
-static u32 screenshotStartFrame = 3;
 
 // ── screenshot (ENGINE_SCREENSHOT=path: capture one frame, quit) ────────────
 // ENGINE_SCREENSHOT_BURST=n: capture n frames to <path>_<index><ext> instead.
+// The frame window (start / count / stride) is shared with every other
+// automated dump source through CaptureDump.
 static const char* screenshotPath = nullptr;
 static bool screenshotDone = false;
+static bool screenshotBurst = false;
 static u32 screenshotFrame = 0;
-static u32 screenshotBurstTotal = 0;
-static u32 screenshotBurstRemaining = 0;
-static u32 screenshotBurstStride = 1;
 static char screenshotDeliverPath[512];
-
-static void selectScreenshotStartFrame(void) {
-    if (const char* env = getenv("ENGINE_SCREENSHOT_FRAME")) {
-        const unsigned long v = strtoul(env, nullptr, 10);
-        screenshotStartFrame = v ? (u32)v : 1;
-    } else if (screenshotPath) {
-        screenshotStartFrame = 100;
-    }
-}
 
 // ENGINE_RENDERDOC_CAPTURE=1 + LD_PRELOAD librenderdoc.so — capture one frame
 // for inspection (ENGINE_RENDERDOC_CAPTURE_FRAMES, default 30)
@@ -59,28 +50,24 @@ static void screenshotBuildBurstPath(u32 index) {
 }
 
 bool rendererScreenshotShouldCapture(void) {
-    if (!screenshotPath) {
+    const CaptureWindow* w = captureWindow(CAPTURE_SCREENSHOT);
+    if (!w || screenshotDone) {
         return false;
     }
-    if (screenshotDone) {
+    screenshotFrame++;
+    if (!captureWindowCoversFrame(w, screenshotFrame)) {
         return false;
     }
-    if (screenshotFrame++ < screenshotStartFrame) {
-        return false;  // let shaders/textures warm up first
-    }
-    if (screenshotBurstRemaining) {
-        const u32 elapsed = screenshotFrame - screenshotStartFrame - 1;
-        if (elapsed % screenshotBurstStride == 0) {
-            screenshotBuildBurstPath(elapsed / screenshotBurstStride);
-            if (--screenshotBurstRemaining == 0) {
-                screenshotDone = true;
-            }
-            return true;
+    const u32 index = (screenshotFrame - w->startFrame) / (w->stride ? w->stride : 1);
+    if (screenshotBurst) {
+        screenshotBuildBurstPath(index);
+        if (index + 1 >= w->count) {
+            screenshotDone = true;
         }
-        return false;
+    } else {
+        screenshotDone = true;
+        snprintf(screenshotDeliverPath, sizeof(screenshotDeliverPath), "%s", screenshotPath);
     }
-    screenshotDone = true;
-    snprintf(screenshotDeliverPath, sizeof(screenshotDeliverPath), "%s", screenshotPath);
     return true;
 }
 
@@ -100,9 +87,10 @@ void rendererScreenshotDeliver(u8* buffer) {
     }
     free(buffer);
 
-    if (!screenshotBurstTotal || screenshotDone) {
-        engineStop();
+    if (!screenshotDone) {
+        return;
     }
+    engineStop();
 }
 
 bool rendererInit(const char* title, u32 width, u32 height) {
@@ -128,13 +116,9 @@ bool rendererInit(const char* title, u32 width, u32 height) {
     if (screenshotEnv && screenshotEnv[0] != '\0') {
         screenshotPath = screenshotEnv;
     }
-    selectScreenshotStartFrame();
-    if (const char* burstEnv = getenv("ENGINE_SCREENSHOT_BURST")) {
-        screenshotBurstTotal = screenshotBurstRemaining = (u32)strtoul(burstEnv, nullptr, 10);
-        if (const char* strideEnv = getenv("ENGINE_SCREENSHOT_BURST_STRIDE")) {
-            const u32 stride = (u32)strtoul(strideEnv, nullptr, 10);
-            screenshotBurstStride = stride ? stride : 1;
-        }
+    captureWindowsInit();
+    if (const CaptureWindow* w = captureWindow(CAPTURE_SCREENSHOT)) {
+        screenshotBurst = w->count > 1;
     }
 
 #ifndef NDEBUG

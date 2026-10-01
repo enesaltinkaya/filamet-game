@@ -2,6 +2,7 @@
 
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
+#include "renderer/CaptureDump.h"
 #include "renderer/Renderer.h"
 #include "renderer/diligent/DiligentRenderer.h"
 #include "renderer/diligent/SplatTerrainDiligent.h"
@@ -155,34 +156,11 @@ namespace engine::renderer::diligent {
 
         void shadowAtlasDumpFrame(Diligent::IDeviceContext* ctx, Diligent::ShadowMapManager& manager, int cascades, int mode) {
             static const char* dir = getenv("ENGINE_SHADOW_ATLAS_DUMP");
-            if (!dir) {
-                return;
-            }
-            static const u32 start = [] {
-                if (const char* e = getenv("ENGINE_SCREENSHOT_FRAME")) {
-                    const u32 v = (u32)strtoul(e, nullptr, 10);
-                    return v ? v : (u32)120;
-                }
-                return (u32)120;
-            }();
-            static const u32 stride = [] {
-                if (const char* e = getenv("ENGINE_SCREENSHOT_BURST_STRIDE")) {
-                    const u32 v = (u32)strtoul(e, nullptr, 10);
-                    return v ? v : (u32)1;
-                }
-                return (u32)1;
-            }();
-            static u32 remaining = [] {
-                if (const char* e = getenv("ENGINE_SCREENSHOT_BURST")) {
-                    return (u32)strtoul(e, nullptr, 10);
-                }
-                return (u32)0;
-            }();
+            const CaptureWindow* w = captureWindow(CAPTURE_SHADOW_ATLAS_DUMP);
             const u32 frame = taaFrameIndex();
-            if (!remaining || frame < start || (frame - start) % stride != 0) {
+            if (!dir || !w || !captureWindowCoversFrame(w, frame)) {
                 return;
             }
-            remaining--;
             char path[600];
             for (int c = 0; c < cascades; c++) {
                 Diligent::ITextureView* dsv = manager.GetCascadeDSV((u32)c);

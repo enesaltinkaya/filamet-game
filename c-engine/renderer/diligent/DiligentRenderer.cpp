@@ -16,6 +16,7 @@
 #include "gui/rmlui/GuiManagerRmlUi.h"
 #include "logger/Logger.h"
 #include "renderer/RenderBackend.h"
+#include "renderer/CaptureDump.h"
 #include "renderer/Window.h"
 #include "renderer/diligent/IblDiligent.h"
 #include "renderer/diligent/ShadowDiligent.h"
@@ -691,6 +692,16 @@ namespace engine::renderer::diligent {
             // Diligent recreates the swapchain once when the value changes, so
             // toggling it in the video settings takes effect on the next frame.
             swapChain->Present(utils::settingsGetBool("vsync") ? 1 : 0);
+
+            // Automated runs: every dump source (screenshot burst, stage dump,
+            // shadow atlas dump, motion-vector dump) shares one frame window,
+            // so the run is over once the last of them has written its file —
+            // no ENGINE_LOG_TIMEOUT wait.
+            const u32 captureEnd = captureRunLastFrame();
+            if (captureEnd && taaFrameIndex() >= captureEnd) {
+                utils::info("renderer: automated capture complete at frame %u", taaFrameIndex());
+                engineStop();
+            }
 
             (void)uiDrew;  // the gui pass flushed + invalidated its own state
         }
