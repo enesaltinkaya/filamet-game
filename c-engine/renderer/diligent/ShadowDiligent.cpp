@@ -251,6 +251,27 @@ namespace engine::renderer::diligent {
             }
             return v;
         }();
+        // Filter radius cap in ATLAS TEXELS, applied to both halves of the
+        // moments filter: ShadowMapManager::ConvertToFilterable's pre-blur
+        // (SetMaxFilterRadiusTexels) and the receivers' tap radius. The world
+        // footprint alone cannot be sharp at cascade 0 and smooth at cascade 3:
+        // at the parked player it blurs 20 texels (12 cm) in the 6 m ring and 1.5
+        // texels in the 80 m one, and a 1.7 m caster's limbs merge into one blob
+        // (attenuation-map gradient 2.24 vs 2.55 at 3 cm, silhouette merged).
+        // Capping the radius at a few texels keeps every cascade's own texel grid
+        // hidden while the fine cascades keep their world resolution; the coarse
+        // cascades stay at the world footprint (their radius is already below the
+        // cap), so the cascade-boundary penumbra match survives.
+        // Integral texels: the value rides to the receivers in
+        // ShadowMapAttribs::iMaxAnisotropy, an int slot.
+        const int filterMaxTexels = [] {
+            int v = 4;
+            if (const char* env = getenv("ENGINE_SHADOW_FILTER_MAX_TEXELS")) {
+                const long parsed = strtol(env, nullptr, 10);
+                if (parsed >= 1 && parsed <= 24) v = (int)parsed;
+            }
+            return v;
+        }();
         float receiverFilterWorldSize(int mode) {
             return (mode == 1 && !filterWorldSizeSet) ? 0.0f : filterWorldSize;
         }
@@ -268,17 +289,17 @@ namespace engine::renderer::diligent {
             return v;
         }();
         // Cascade composition policy in the terrain receiver: 1 = multiply every
-        // covering cascade (default), 0 = lit-wins (the finest covering cascade is
-        // authoritative, the props receiver's policy). Rides in
+        // covering cascade, 0 = lit-wins (the finest covering cascade is
+        // authoritative, the props receiver's policy). Unset = pick per frame from
+        // the cascade layout (see the rings block). Rides in
         // ShadowMapAttribs.bVisualizeCascades (bit-copied float, no FX consumer),
         // mirrored as sNumCascades.z.
-        const float cascadeUnion = [] {
-            float v = 1.0f;
+        const int cascadeUnionEnv = [] {
             if (const char* env = getenv("ENGINE_SHADOW_UNION")) {
-                const float parsed = (float)atof(env);
-                if (parsed >= 0.0f && parsed <= 1.0f) v = parsed;
+                const long parsed = strtol(env, nullptr, 10);
+                if (parsed == 0 || parsed == 1) return (int)parsed;
             }
-            return v;
+            return -1;
         }();
         const bool focusBandOn = [] {
             const char* env = getenv("ENGINE_SHADOW_FOCUS_BAND");
@@ -334,6 +355,7 @@ namespace engine::renderer::diligent {
             info.pComparisonSampler          = cmpSampler;
             info.pFilterableShadowMapSampler = filterableSampler;
             mgr.Initialize(device, nullptr, info);
+            mgr.SetMaxFilterRadiusTexels(static_cast<float>(filterMaxTexels));
             return true;
         }
 
@@ -366,10 +388,14 @@ namespace engine::renderer::diligent {
                 if (!createShadowMap(mode, tier)) return;
                 passReady = true;
                 generation++;
-                char filterDesc[32];
+                char filterDesc[64];
                 const float fwSize = receiverFilterWorldSize(mode);
                 if (fwSize > 0.0f)
-                    snprintf(filterDesc, sizeof(filterDesc), "%.1f cm world", (double)fwSize * 100.0);
+                    snprintf(filterDesc,
+                             sizeof(filterDesc),
+                             "%.1f cm world cap %.0f texel",
+                             (double)fwSize * 100.0,
+                             (double)filterMaxTexels);
                 else
                     snprintf(filterDesc, sizeof(filterDesc), "%dx%d texel", tier.pcfFilterSize, tier.pcfFilterSize);
                 utils::info("shadow: mode %d quality %d (res %u, %u cascades, %.0f m, filter %s)",
@@ -400,13 +426,25 @@ namespace engine::renderer::diligent {
             sa.fFilterWorldSize           = fwSize;
             sa.fCascadeTransitionRegion     = transitionRegion;
             sa.fReceiverPlaneDepthBiasClamp = 16.0f;
-            sa.iMaxAnisotropy               = 4;
+            // iMaxAnisotropy carries the receivers' tap-radius cap in ATLAS
+            // TEXELS: the moments tap kernels and ConvertToFilterable's pre-blur
+            // share one cap, so no cascade filters more than this many of its own
+            // texels. FX's anisotropic PCF sampler (the field's stock job) is not
+            // called by any receiver on this path; the splat PS mirrors the slot as
+            // sFilterMaxTexels.
+            sa.iMaxAnisotropy               = filterMaxTexels;
             sa.fVSMBias                     = 1e-4f;
+            // fVSMLightBleedingReduction stays 0 (the memset): the moments
+            // receivers DO consume it — chebyshevUpperBound's
+            // saturate((p - y)/(1 - y)) remap — so a non-zero value there is a
+            // light-bleeding punch-through, not a spare slot.
+            sa.fVSMLightBleedingReduction   = 0.0f;
             sa.fEVSMPositiveExponent        = 40.0f;
             sa.fEVSMNegativeExponent        = 5.0f;
             sa.bIs32BitEVSM                 = 1;
             std::memcpy(&sa.bVisualizeShadowing, &blendDither, sizeof(blendDither));
-            std::memcpy(&sa.bVisualizeCascades, &cascadeUnion, sizeof(cascadeUnion));
+            // bVisualizeCascades (the union policy) is set after the cascade boxes
+            // exist: it depends on whether the ring layout is active.
             mgr.SetEVSMFarPadS(farPadS);
 
             // Distribute around the camera anchor: the view is rotation-only, so
@@ -709,6 +747,19 @@ namespace engine::renderer::diligent {
                     prevRadius = radius;
                 }
             }
+            // Union vs lit-wins, decided once the cascade boxes are known. With
+            // the player-anchored rings every cascade casts the FULL tier (the
+            // caster draws every chunk inside that cascade's own box), so the
+            // finest cascade whose z-range covers a pixel is the whole answer —
+            // lit-wins, the props receiver's policy. Union-multiplying the coarser
+            // cascades back in re-adds their coarse-texel blob on top of a shadow
+            // the fine cascade already resolved: at the parked player (cascade 0 =
+            // 6 m ring, 5.9 mm texels) the shadow mask's gradient dropped 2.55 →
+            // 2.24 and the limbs merged into one blob purely from the multiply.
+            // Without the rings the boxes are the stock frustum-derived ones, kept
+            // on the union path the 2026-09-12 sliced-caster fix describes.
+            const float cascadeUnion = cascadeUnionEnv >= 0 ? (float)cascadeUnionEnv : (ringsActive ? 0.0f : 1.0f);
+            std::memcpy(&sa.bVisualizeCascades, &cascadeUnion, sizeof(cascadeUnion));
 
             // ENGINE_SHADOW_ORACLE=frameN: one-shot CPU check that the caster
             // matrix (the raw GetCascadeTransform the depth pass renders with)

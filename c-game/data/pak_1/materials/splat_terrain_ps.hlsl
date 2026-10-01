@@ -119,7 +119,8 @@ cbuffer cbSplatFrame
     float4   f4CascadeCamSpaceZEnd[2];
     float4   f4ShadowMapDim;
     float4   sNumCascades;         // iNumCascades fNumCascades bVisualizeCascades bVisualizeShadowing
-    float4   sBiasParams;          // fReceiverPlaneDepthBiasClamp fFixedDepthBias fCascadeTransitionRegion iMaxAnisotropy
+    float3   sBiasXYZ;             // fReceiverPlaneDepthBiasClamp fFixedDepthBias fCascadeTransitionRegion
+    int      sFilterMaxTexels;     // iMaxAnisotropy: the moments tap-radius cap, in atlas texels
     float4   sVSMParams;           // fVSMBias fVSMLightBleedingReduction fEVSMPositiveExponent fEVSMNegativeExponent
     // sTail: the C++ ShadowMapAttribs tail is a mix of int/BOOL and float.
     // Declare each with its real type so the memcpy'd bit patterns read back
@@ -707,9 +708,9 @@ float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, fl
         return -1.0;
     float nz = abs(nLight.z) < 1e-6 ? (nLight.z < 0.0 ? -1e-6 : 1e-6) : nLight.z;
     float2 rcvBiasUV = float2(-2.0 * sc.z * nLight.x / (nz * sc.x), 2.0 * sc.z * nLight.y / (nz * sc.y));
-    float2 biasClampUV = abs(float2(sc.z / (sc.x * 0.5), sc.z / (sc.y * -0.5))) * sBiasParams.x;
+    float2 biasClampUV = abs(float2(sc.z / (sc.x * 0.5), sc.z / (sc.y * -0.5))) * sBiasXYZ.x;
     rcvBiasUV = clamp(rcvBiasUV, -biasClampUV, biasClampUV);
-    float slopeScale = sBiasParams.y;
+    float slopeScale = sBiasXYZ.y;
     float lightDepth = cascadeNdc.z;
     rcvBiasUV *= slopeScale;
     // World-space filter normalization (ENGINE_SHADOW_FILTER_WORLD): texel size in
@@ -727,7 +728,17 @@ float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, fl
         float4 fdims;
         g_ShadowMap.GetDimensions(fdims.x, fdims.y, fdims.z);
         texelWorld = 2.0 / (sc.x * fdims.x);
-        tapScale   = clamp(fFilterWorldSize / texelWorld, 0.1, 8.0);
+        // Tap-radius cap in ATLAS TEXELS (the iMaxAnisotropy carrier, sent by
+        // ShadowDiligent.cpp from ENGINE_SHADOW_FILTER_MAX_TEXELS) — the same
+        // cap ShadowMapManager::ConvertToFilterable puts on the pre-blur. A bare
+        // world-space footprint scales with the cascade: at the parked player the
+        // 12 cm disc is 20 texels wide in the 6 m ring and 1.5 in the 80 m one, and
+        // that 20-texel disc is what merges a 1.7 m caster's limbs into a blob. The
+        // cap keeps every cascade's own texel grid hidden while the fine cascades
+        // keep their world resolution; the coarse ones are already under the cap, so
+        // their world-size penumbra (and the boundary match) is unchanged.
+        float tapCap   = sFilterMaxTexels > 0 ? (float)sFilterMaxTexels : 8.0;
+        tapScale       = clamp(min(fFilterWorldSize / texelWorld, tapCap), 0.1, tapCap);
         varScale   = clamp(sc.z / cascadeAttribs[0].z, 0.01, 1.0);
     }
     if (shadowMode < 1.5)
@@ -736,8 +747,9 @@ float filterShadowCascade(int cascade, float shadowMode, float3 lightViewPos, fl
         // engine sends fFilterWorldSize 0 for PCF: a wide PCF disc needs ~4x the
         // taps it has — at the 0.12 m footprint the fine cascade's 20-texel disc
         // printed wide rings). ENGINE_SHADOW_FILTER_WORLD opts into the world
-        // footprint, uncapped as the moments modes are (their 8-texel cap is a
-        // cost choice on a pre-blurred atlas; capping here left the fine cascade
+        // footprint, uncapped as the moments modes are (the moments modes'
+        // ENGINE_SHADOW_FILTER_MAX_TEXELS cap is a cost choice on a pre-blurred
+        // atlas; capping here left the fine cascade
         // filtering a SMALLER world disc than the coarse one — 47 mm vs 120 mm —
         // and the box faces split two penumbra widths).
         float ts = texelWorld > 0.0 ? clamp(fFilterWorldSize / texelWorld, 1.0, 24.0) : 1.0;
@@ -944,7 +956,7 @@ PSOutput main(PSSplatIn In)
             {
                 float zstart = cascadeAttribs[cascade * 4 + 2].x;
                 float dist   = saturate((zend - viewZ) / max(zend - zstart, 1e-6));
-                float blend  = saturate(1.0 - min(dist, margin) / max(sBiasParams.z, 1e-6));
+                float blend  = saturate(1.0 - min(dist, margin) / max(sBiasXYZ.z, 1e-6));
                 blend = blend * blend * (3.0 - 2.0 * blend);
                 if (sNumCascades.w > 0.0)
                 {
