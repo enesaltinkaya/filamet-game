@@ -11,6 +11,10 @@
 #include "PostProcess/Common/interface/PostFXRenderTechnique.hpp"
 #include "PostProcess/ScreenSpaceAmbientOcclusion/interface/ScreenSpaceAmbientOcclusion.hpp"
 
+#include <cstdlib>
+#include <string>
+#include <vector>
+
 namespace Diligent {
     namespace HLSL {
 #include "Shaders/Common/public/ShaderDefinitions.fxh"
@@ -25,7 +29,10 @@ namespace engine::renderer::diligent {
     static std::unique_ptr<ScreenSpaceAmbientOcclusion> ssao;
     static HLSL::ScreenSpaceAmbientOcclusionAttribs ssaoAttribs{};
     static bool ssaoEnabled         = false;
+    static bool ssaoHalfRes         = true;
     static float ssaoIntensityValue = 1.0f;
+
+    static void ssaoApplyEnvAttribs(void);
 
     void ssaoInit(void) {
         if (!device) {
@@ -48,6 +55,39 @@ namespace engine::renderer::diligent {
         ssaoAttribs.EffectRadius      = radius;
         ssaoAttribs.Algorithm         = (uint)algorithm;
         ssaoAttribs.ResetAccumulation = false;
+        ssaoApplyEnvAttribs();
+    }
+
+    static void ssaoApplyEnvAttribs(void) {
+        static const auto table = [] {
+            struct Pair { std::string k, v; };
+            std::vector<Pair> out;
+            const char* env = getenv("ENGINE_SSAO_ATTRIBS");
+            for (const char* item = env; item != nullptr && *item != 0;) {
+                const char* end = item;
+                while (*end != 0 && *end != ';') end++;
+                const char* eq  = item;
+                while (eq < end && *eq != '=') eq++;
+                if (eq < end)
+                    out.push_back({std::string(item, eq), std::string(eq + 1, end)});
+                item = (*end == ';') ? end + 1 : end;
+            }
+            return out;
+        }();
+        for (const auto& kv : table) {
+            const float v = (float)atof(kv.v.c_str());
+            const std::string& n = kv.k;
+            if      (n == "EffectFalloffRange")        ssaoAttribs.EffectFalloffRange = v;
+            else if (n == "RadiusMultiplier")          ssaoAttribs.RadiusMultiplier = v;
+            else if (n == "DepthMIPSamplingOffset")    ssaoAttribs.DepthMIPSamplingOffset = v;
+            else if (n == "TemporalStabilityFactor")   ssaoAttribs.TemporalStabilityFactor = v;
+            else if (n == "SpatialReconstructionRadius") ssaoAttribs.SpatialReconstructionRadius = v;
+            else if (n == "AlphaInterpolation")        ssaoAttribs.AlphaInterpolation = v;
+            else if (n == "BitmaskThickness")          ssaoAttribs.BitmaskThickness = v;
+            else if (n == "HalfResolution")            ssaoHalfRes = (v >= 0.5f);
+            else
+                utils::warn("ssao: unknown ENGINE_SSAO_ATTRIBS key %s", n.c_str());
+        }
     }
 
     bool ssaoOn(void) {
@@ -73,7 +113,8 @@ namespace engine::renderer::diligent {
         ssao->PrepareResources(device,
                                ctx,
                                taaPostFXContext(),
-                               ScreenSpaceAmbientOcclusion::FEATURE_FLAG_HALF_RESOLUTION);
+                               ssaoHalfRes ? ScreenSpaceAmbientOcclusion::FEATURE_FLAG_HALF_RESOLUTION
+                                           : ScreenSpaceAmbientOcclusion::FEATURE_FLAG_NONE);
 
         // DiligentFX's AO history reprojects with the OBJECT motion vectors
         // only (PostFXContext closest-MV: zero for static terrain/props), so

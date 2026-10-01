@@ -74,6 +74,7 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 
 | Var                  | Value     | Effect                                                                                |
 | -------------------- | --------- | ------------------------------------------------------------------------------------- |
+| `ENGINE_SSAO_ATTRIBS`   | `k=v;k=v` | Override the DiligentFX AO attribs at apply time: `EffectFalloffRange`, `RadiusMultiplier`, `DepthMIPSamplingOffset`, `TemporalStabilityFactor`, `SpatialReconstructionRadius`, `AlphaInterpolation`, `BitmaskThickness`, and `HalfResolution` (0 = full-resolution AO). Library defaults: 0.615 / 1.457 / 3.3 / 0.9 / 4.0 / 1.0 / 0.5 / half-res on. |
 | `ENGINE_NO_GPU_TIME` | any value | Disable the per-frame GPU-time query (A/B the timing overhead).                       |
 | `ENGINE_DEBUG_CAM`   | any value | Log the camera eye/center/up + view matrix every frame.                               |
 | `ENGINE_RML_PROBE`   | any value | Verbose rmlui log: frame commands/bounding boxes, texture table, per-batch draw info. |
@@ -138,6 +139,7 @@ also exports `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and pins the radeon ICD).
 | Var            | Value | Effect                                                                                                              |
 | -------------- | ----- | ------------------------------------------------------------------------------------------------------------------- |
 | `ENGINE_DEBUG` | `1`   | `utils::isDebug()`: enables the rmlui debugger UI and debug signal-catcher behaviour. Exported by `scripts/run.sh`. |
+| `ENGINE_RSS_TRACE` | frames | Log `mem: frame N RSS x MB peak y MB` every N frames (Linux `/proc/self/status`). The probe for run-length memory growth — a 5 s headless run sits at ~1.2 GB, long headless runs do not (see lessons 2026-10-01). |
 
 ## Standard / external
 
