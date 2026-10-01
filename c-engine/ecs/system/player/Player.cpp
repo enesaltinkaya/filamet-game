@@ -98,6 +98,7 @@ static int autoJumpPeriod(void) {
 static char automatedRun(void) {
     return (getenv("ENGINE_SCREENSHOT") != nullptr) ||
            (getenv("ENGINE_CAMERA_DOLLY") != nullptr) ||
+           (getenv("ENGINE_CAMERA_ARC") != nullptr) ||
            (getenv("ENGINE_NO_PLAYER") != nullptr) ||
            (getenv("ENGINE_RENDERDOC_CAPTURE") != nullptr) ||
            (getenv("ENGINE_STAGE_DUMP") != nullptr) ||

@@ -37,6 +37,15 @@ namespace game {
         return on;
     }
 
+    static double cameraFrameDt(const char* name) {
+        const char* e  = getenv(name);
+        const double v = e != nullptr ? atof(e) : 0.0;
+        return v > 0.0 ? v : 0.0;
+    }
+
+    static void dollySet(char on);
+    static void arcSet(char on);
+
     static const f32 dollyDistance      = 5.0f;
     static const double dollyLegSeconds = [] {
         if (const char* e = getenv("ENGINE_CAMERA_DOLLY_LEG")) {
@@ -121,13 +130,7 @@ namespace game {
         // default leg). Wall-clock dt makes the pose lattice fps-dependent,
         // so screenshot runs of two builds never share a pose and the TAA
         // A/B floor (~3 gray) swamps the effect being measured.
-        static const double frameDt = [] {
-            if (const char* e = getenv("ENGINE_CAMERA_DOLLY_FRAME_DT")) {
-                const double v = atof(e);
-                return v > 0.0 ? v : 0.0;
-            }
-            return 0.0;
-        }();
+        static const double frameDt = cameraFrameDt("ENGINE_CAMERA_DOLLY_FRAME_DT");
         dollyTime += frameDt > 0.0 ? frameDt : (double)utils::timer.dt;
 
         const double cycle = 2.0 * dollyLegSeconds;
@@ -142,6 +145,134 @@ namespace game {
                                dollyEye[2] + dollyFacing[2] * 100.0f};
         const f32 up[3]     = {0.0f, 1.0f, 0.0f};
         engine::renderer::rendererCameraLookAt(dollyEye, target, up);
+    }
+
+    static const f32 arcRadius = [] {
+        if (const char* e = getenv("ENGINE_CAMERA_ARC_RADIUS")) {
+            const float v = (float)atof(e);
+            if (v > 0.0f) return v;
+        }
+        return 10.0f;
+    }();
+
+    static const f32 arcSweepDeg = [] {
+        if (const char* e = getenv("ENGINE_CAMERA_ARC_DEG")) {
+            const float v = (float)atof(e);
+            if (v > 0.0f) return v;
+        }
+        return 45.0f;
+    }();
+
+    static const double arcLegSeconds = [] {
+        if (const char* e = getenv("ENGINE_CAMERA_ARC_LEG")) {
+            const double v = atof(e);
+            if (v > 0.0) return v;
+        }
+        return 3.5;
+    }();
+
+    static double arcPivot[3]   = {};
+    static double arcBaseEye[3] = {};
+    static double arcBaseDir[3] = {};
+    static double arcLastEye[3] = {};
+    static double arcTime       = 0.0;
+    static bool arcAnchored     = false;
+
+    static char arcOn = [] {
+        const char* value = getenv("ENGINE_CAMERA_ARC");
+        return (value != nullptr && value[0] != 0 && value[0] != '0') ? 1 : 0;
+    }();
+    static char arcGaveUpPlayer = 0;
+
+    static void arcSet(char on) {
+        if (arcOn == on) return;
+        if (on) {
+            if (engine::flyingCameraFlying()) {
+                utils::info("game: camera arc: B ignored while flying (ESC ends the fly first)");
+                return;
+            }
+            if (dollyOn) dollySet(0);
+            arcOn           = 1;
+            arcGaveUpPlayer = engine::playerMode() ? 1 : 0;
+            if (arcGaveUpPlayer) engine::playerModeSet(0);
+            arcAnchored = false;
+            arcTime     = 0.0;
+            utils::info(
+                "game: camera arc ON — orbiting %.0f m ahead, %.0f° sweep, %.0f s per leg (B off, "
+                "C back to the player)",
+                arcRadius,
+                arcSweepDeg,
+                arcLegSeconds);
+            return;
+        }
+        const char restored = arcAnchored;
+        arcOn               = 0;
+        arcAnchored         = false;
+        arcTime             = 0.0;
+        if (restored) {
+            const double up[3] = {0.0, 1.0, 0.0};
+            engine::renderer::rendererCameraLookAt(arcBaseEye, arcPivot, up);
+        }
+        utils::info("game: camera arc OFF%s", restored ? " — camera back at the anchor" : "");
+        if (arcGaveUpPlayer) {
+            arcGaveUpPlayer = 0;
+            engine::playerModeSet(1);
+        }
+    }
+
+    static void updateCameraArc(void) {
+        if (!arcOn) return;
+        if (gameStateCurrent() != STATE_PLAYING) return;
+        if (engine::flyingCameraFlying() || engine::playerMode()) return;
+
+        f32 posF[3], facingF[3];
+        engine::renderer::rendererCameraGet(posF, facingF);
+        const double pos[3]    = {(double)posF[0], (double)posF[1], (double)posF[2]};
+        const double facing[3] = {(double)facingF[0], (double)facingF[1], (double)facingF[2]};
+        const double facingLength =
+            std::sqrt(facing[0] * facing[0] + facing[1] * facing[1] + facing[2] * facing[2]);
+        if (facingLength < 1e-6) return;
+
+        const double eyeDrift = std::fabs(pos[0] - arcLastEye[0]) +
+                                std::fabs(pos[1] - arcLastEye[1]) +
+                                std::fabs(pos[2] - arcLastEye[2]);
+        if (!arcAnchored || eyeDrift > 1e-2) {
+            const double inverse = 1.0 / facingLength;
+            for (int i = 0; i < 3; i++) {
+                arcBaseDir[i] = facing[i] * inverse;
+                arcBaseEye[i] = pos[i];
+                arcLastEye[i] = pos[i];
+            }
+            for (int i = 0; i < 3; i++) arcPivot[i] = pos[i] + arcBaseDir[i] * (double)arcRadius;
+            arcTime     = 0.0;
+            arcAnchored = true;
+            utils::info("game: camera arc %.0f° about (%.1f, %.1f, %.1f) at %.0f m, %.0f s per leg",
+                        arcSweepDeg,
+                        arcPivot[0],
+                        arcPivot[1],
+                        arcPivot[2],
+                        arcRadius,
+                        arcLegSeconds);
+        }
+        static const double frameDt = cameraFrameDt("ENGINE_CAMERA_ARC_FRAME_DT");
+        arcTime += frameDt > 0.0 ? frameDt : (double)utils::timer.dt;
+
+        const double cycle = 2.0 * arcLegSeconds;
+        const double phase = std::fmod(arcTime, cycle) / cycle;
+        const double angle =
+            (0.5 * (1.0 - std::cos(2.0 * M_PI * phase))) * (double)arcSweepDeg * (M_PI / 180.0);
+        const double cosA   = std::cos(angle);
+        const double sinA   = std::sin(angle);
+        const double dir[3] = {arcBaseDir[0] * cosA + arcBaseDir[2] * sinA,
+                               arcBaseDir[1],
+                               -arcBaseDir[0] * sinA + arcBaseDir[2] * cosA};
+        const double up[3]  = {0.0, 1.0, 0.0};
+        double eye[3];
+        for (int i = 0; i < 3; i++) {
+            eye[i]        = arcPivot[i] - dir[i] * (double)arcRadius;
+            arcLastEye[i] = eye[i];
+        }
+        engine::renderer::rendererCameraLookAt(eye, arcPivot, up);
     }
 
     GameSystem::GameSystem() : System("Game") {}
@@ -312,12 +443,22 @@ namespace game {
         if (gameStateCurrent() == STATE_PLAYING && engine::input.pressed == SDL_SCANCODE_V &&
             !pauseMenuGuiIsShowing() && !settingsGuiIsShowing())
             dollySet(!dollyOn);
+        if (gameStateCurrent() == STATE_PLAYING && engine::input.pressed == SDL_SCANCODE_B &&
+            !pauseMenuGuiIsShowing() && !settingsGuiIsShowing())
+            arcSet(!arcOn);
         if (dollyOn && engine::playerMode()) {
             dollyOn           = 0;
             dollyAnchored     = false;
             dollyTime         = 0.0;
             dollyGaveUpPlayer = 0;
             utils::info("game: camera dolly OFF — player mode owns the camera");
+        }
+        if (arcOn && engine::playerMode()) {
+            arcOn           = 0;
+            arcAnchored     = false;
+            arcTime         = 0.0;
+            arcGaveUpPlayer = 0;
+            utils::info("game: camera arc OFF — player mode owns the camera");
         }
 
         // In the world and not flying: ESC opens the in-game menu — a
@@ -375,6 +516,7 @@ namespace game {
 
     void GameSystem::update() {
         updateCameraDolly();
+        updateCameraArc();
         engine::gltf::gltfUpdate(utils::timer.dt);
     }
 
