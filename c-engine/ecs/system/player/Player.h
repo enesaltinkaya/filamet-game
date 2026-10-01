@@ -16,7 +16,8 @@ namespace engine {
 //          mode, C hands the view back (which ends the dolly), V off restores
 //          the anchor pose
 //   B      camera arc (game/Game.cpp): the rotational dolly — the eye orbits
-//          the point ahead of the anchor camera, same handoff rules as V
+//          the character's capsule centre on the live orbit radius, sweeping
+//          yaw + pitch (the LMB-drag axes), same handoff rules as V
 
 //   WASD   run (4 m/s; SHIFT walks at 2 m/s), camera-relative
 //   SPACE  jump (4 m/s impulse)

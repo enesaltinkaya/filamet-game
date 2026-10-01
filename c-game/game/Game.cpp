@@ -155,12 +155,22 @@ namespace game {
         return 10.0f;
     }();
 
-    static const f32 arcSweepDeg = [] {
-        if (const char* e = getenv("ENGINE_CAMERA_ARC_DEG")) {
+    static const f32 arcDistOverride = [] {
+        if (const char* e = getenv("ENGINE_CAMERA_ARC_DIST")) {
             const float v = (float)atof(e);
-            if (v > 0.0f) return v;
+            if (v > 0.0f) return v < 1.5f ? 1.5f : (v > 20.0f ? 20.0f : v);
         }
-        return 45.0f;
+        return 0.0f;
+    }();
+
+    static const f32 arcSweepDeg = [] {
+        if (const char* e = getenv("ENGINE_CAMERA_ARC_DEG")) return (float)atof(e);
+        return 0.0f;
+    }();
+
+    static const f32 arcPitchSweepDeg = [] {
+        if (const char* e = getenv("ENGINE_CAMERA_ARC_PITCH_DEG")) return (float)atof(e);
+        return 10.0f;
     }();
 
     static const double arcLegSeconds = [] {
@@ -168,13 +178,19 @@ namespace game {
             const double v = atof(e);
             if (v > 0.0) return v;
         }
-        return 3.5;
+        return 0.2;
     }();
+
+    static const double arcPivotRise = 0.70;
+    static const double arcPitchMin  = -20.0 * M_PI / 180.0;
+    static const double arcPitchMax  = 60.0 * M_PI / 180.0;
 
     static double arcPivot[3]   = {};
     static double arcBaseEye[3] = {};
-    static double arcBaseDir[3] = {};
     static double arcLastEye[3] = {};
+    static double arcBaseYaw    = 0.0;
+    static double arcBasePitch  = 0.0;
+    static double arcSpan       = 10.0;
     static double arcTime       = 0.0;
     static bool arcAnchored     = false;
 
@@ -198,10 +214,11 @@ namespace game {
             arcAnchored = false;
             arcTime     = 0.0;
             utils::info(
-                "game: camera arc ON — orbiting %.0f m ahead, %.0f° sweep, %.0f s per leg (B off, "
-                "C back to the player)",
-                arcRadius,
+                "game: camera arc ON — yaw %.0f° pitch %.0f° about the character, %.0f s per leg "
+                "(B "
+                "off, C back to the player)",
                 arcSweepDeg,
+                arcPitchSweepDeg,
                 arcLegSeconds);
             return;
         }
@@ -237,41 +254,60 @@ namespace game {
                                 std::fabs(pos[1] - arcLastEye[1]) +
                                 std::fabs(pos[2] - arcLastEye[2]);
         if (!arcAnchored || eyeDrift > 1e-2) {
-            const double inverse = 1.0 / facingLength;
+            double pivot[3];
+            double foot[3];
+            if (engine::playerGetFootPos(foot)) {
+                pivot[0] = foot[0];
+                pivot[1] = foot[1] + arcPivotRise;
+                pivot[2] = foot[2];
+            } else {
+                const double inverse = 1.0 / facingLength;
+                for (int i = 0; i < 3; i++)
+                    pivot[i] = pos[i] + facing[i] * inverse * (double)arcRadius;
+            }
+            double span = 0.0;
+            for (int i = 0; i < 3; i++) span += (pos[i] - pivot[i]) * (pos[i] - pivot[i]);
+            span = std::sqrt(span);
+            if (span < 0.05) return;
+            const double sinPitch = (pos[1] - pivot[1]) / span;
+            arcBasePitch = std::asin(sinPitch < -1.0 ? -1.0 : (sinPitch > 1.0 ? 1.0 : sinPitch));
+            arcBaseYaw   = std::atan2(pos[0] - pivot[0], pos[2] - pivot[2]);
             for (int i = 0; i < 3; i++) {
-                arcBaseDir[i] = facing[i] * inverse;
+                arcPivot[i]   = pivot[i];
                 arcBaseEye[i] = pos[i];
                 arcLastEye[i] = pos[i];
             }
-            for (int i = 0; i < 3; i++) arcPivot[i] = pos[i] + arcBaseDir[i] * (double)arcRadius;
+            arcSpan     = arcDistOverride > 0.0f ? (double)arcDistOverride : span;
             arcTime     = 0.0;
             arcAnchored = true;
-            utils::info("game: camera arc %.0f° about (%.1f, %.1f, %.1f) at %.0f m, %.0f s per leg",
-                        arcSweepDeg,
-                        arcPivot[0],
-                        arcPivot[1],
-                        arcPivot[2],
-                        arcRadius,
-                        arcLegSeconds);
+            utils::info(
+                "game: camera arc yaw %.1f° pitch %.1f° about (%.3f, %.3f, %.3f) at %.3f m, %.0f s "
+                "per leg",
+                arcBaseYaw * 180.0 / M_PI,
+                arcBasePitch * 180.0 / M_PI,
+                arcPivot[0],
+                arcPivot[1],
+                arcPivot[2],
+                arcSpan,
+                arcLegSeconds);
         }
         static const double frameDt = cameraFrameDt("ENGINE_CAMERA_ARC_FRAME_DT");
         arcTime += frameDt > 0.0 ? frameDt : (double)utils::timer.dt;
 
-        const double cycle = 2.0 * arcLegSeconds;
-        const double phase = std::fmod(arcTime, cycle) / cycle;
-        const double angle =
-            (0.5 * (1.0 - std::cos(2.0 * M_PI * phase))) * (double)arcSweepDeg * (M_PI / 180.0);
-        const double cosA   = std::cos(angle);
-        const double sinA   = std::sin(angle);
-        const double dir[3] = {arcBaseDir[0] * cosA + arcBaseDir[2] * sinA,
-                               arcBaseDir[1],
-                               -arcBaseDir[0] * sinA + arcBaseDir[2] * cosA};
-        const double up[3]  = {0.0, 1.0, 0.0};
+        const double cycle  = 2.0 * arcLegSeconds;
+        const double phase  = std::fmod(arcTime, cycle) / cycle;
+        const double travel = 0.5 * (1.0 - std::cos(2.0 * M_PI * phase));
+        const double yaw    = arcBaseYaw + travel * (double)arcSweepDeg * (M_PI / 180.0);
+        double pitch        = arcBasePitch + travel * (double)arcPitchSweepDeg * (M_PI / 180.0);
+        if (pitch < arcPitchMin) pitch = arcPitchMin;
+        if (pitch > arcPitchMax) pitch = arcPitchMax;
+        const double cosP  = std::cos(pitch);
+        const double up[3] = {0.0, 1.0, 0.0};
         double eye[3];
-        for (int i = 0; i < 3; i++) {
-            eye[i]        = arcPivot[i] - dir[i] * (double)arcRadius;
-            arcLastEye[i] = eye[i];
-        }
+        eye[0] = arcPivot[0] + arcSpan * cosP * std::sin(yaw);
+        eye[1] = arcPivot[1] + arcSpan * std::sin(pitch);
+        eye[2] = arcPivot[2] + arcSpan * cosP * std::cos(yaw);
+        for (int i = 0; i < 3; i++) arcLastEye[i] = eye[i];
         engine::renderer::rendererCameraLookAt(eye, arcPivot, up);
     }
 
